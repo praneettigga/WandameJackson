@@ -12,10 +12,14 @@ export type CaptureEnvelope = {
   image: null;
   source: { kind: CaptureKind };
   captureJobId: string | null;
+  meshJobId?: string | null;
+  meshManifestUrl?: string | null;
+  hasMesh?: boolean;
   inputManifestUrl: string | null;
 };
 export type CaptureInput = {
   schemaVersion: '1.0.0';
+  jobId?: string;
   projectId: string;
   frames: {
     id: string;
@@ -29,6 +33,24 @@ export type CaptureInput = {
   rejected: { sourceId: string; timestampSeconds: number | null; reason: string }[];
   warnings: string[];
 };
+export type MeshResult = {
+  schemaVersion: '1.0.0';
+  jobId: string;
+  inputJobId: string;
+  projectId: string;
+  meshUrl: string;
+  diagnosticUrl: string;
+  units: 'uncalibrated';
+  cameras: { frameId: string; worldToCamera: number[][]; cameraToWorld: number[][] }[];
+  statistics: {
+    vertices: number;
+    triangles: number;
+    executionSeconds: number;
+    endToEndSeconds: number | null;
+  };
+  warnings: string[];
+};
+export type WorkerCapabilities = { ready: boolean; code: string; message: string; device?: string };
 export type ScaleCalibration = Scene['source']['calibration'];
 export type ReconstructionRequest = {
   calibration?: { pointA: V2; pointB: V2; distanceMeters: number };
@@ -47,7 +69,8 @@ export type Job = {
   updatedAt: string;
   /** Set once a cancel was requested for a running job; it ends as failed/JOB_CANCELLED. */
   cancelRequested?: boolean;
-  kind?: 'capture-preparation';
+  kind?: 'capture-preparation' | 'mesh-reconstruction';
+  meshManifestUrl?: string | null;
   stage?: string;
   inputManifestUrl?: string | null;
 };
@@ -71,6 +94,9 @@ export interface RoomshiftApi {
   getCapture(id: string): Promise<CaptureEnvelope>;
   getCaptureInput(id: string): Promise<CaptureInput>;
   prepareCapture(id: string): Promise<{ job: Job }>;
+  reconstructionCapabilities(): Promise<WorkerCapabilities>;
+  reconstructMesh(id: string, maxViews?: number): Promise<{ job: Job }>;
+  getMesh(id: string): Promise<MeshResult>;
   getProject(id: string): Promise<ProjectEnvelope>;
   listProjects(): Promise<{ projects: ProjectEnvelope[] }>;
   cancelJob(id: string): Promise<{ job: Job }>;
@@ -170,6 +196,19 @@ export class HttpApi implements RoomshiftApi {
       method: 'POST',
     });
   }
+  reconstructionCapabilities() {
+    return this.request<WorkerCapabilities>('/api/reconstruction/capabilities', undefined, 40_000);
+  }
+  reconstructMesh(id: string, maxViews = 12) {
+    return this.request<{ job: Job }>(`/api/projects/${encodeURIComponent(id)}/reconstruct-mesh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxViews }),
+    });
+  }
+  getMesh(id: string) {
+    return this.request<MeshResult>(`/api/projects/${encodeURIComponent(id)}/mesh`);
+  }
   cancelJob(id: string) {
     return this.request<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',
@@ -262,6 +301,19 @@ export class MockApi implements RoomshiftApi {
   }
   async prepareCapture(_id: string): Promise<{ job: Job }> {
     throw new Error('No captures in mock mode.');
+  }
+  async reconstructionCapabilities(): Promise<WorkerCapabilities> {
+    return {
+      ready: false,
+      code: 'MOCK_MODE',
+      message: 'Connect the local API to reconstruct your room.',
+    };
+  }
+  async reconstructMesh(_id: string): Promise<{ job: Job }> {
+    throw new Error('Reconstruction requires the local API.');
+  }
+  async getMesh(_id: string): Promise<MeshResult> {
+    throw new Error('No reconstructed mesh in mock mode.');
   }
   async createProject(_file: File, _name?: string) {
     return this.getProject(fixture.id);
@@ -397,13 +449,19 @@ export async function pollJob(
         job.error?.details,
       );
     if (job.status === 'succeeded') {
-      if (job.kind === 'capture-preparation' ? !job.inputManifestUrl : !job.sceneUrl)
+      if (
+        job.kind === 'capture-preparation'
+          ? !job.inputManifestUrl
+          : job.kind === 'mesh-reconstruction'
+            ? !job.meshManifestUrl
+            : !job.sceneUrl
+      )
         throw new Error('The completed job has no persisted result URL.');
       return job;
     }
     if (Date.now() >= deadline)
       throw new Error(
-        'Reconstruction timed out. The server may still be working; reopen this project to retrieve its scene.',
+        'Reconstruction timed out. The server may still be working; reopen this project to retrieve its result.',
       );
     await new Promise<void>((resolve, reject) => {
       const abort = () => {

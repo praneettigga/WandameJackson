@@ -9,6 +9,7 @@ import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -23,6 +24,7 @@ from .calibration import compute_calibration
 from .config import SCHEMA_VERSION, Settings
 from .errors import ApiError, error_body
 from .images import inspect_image, load_gray
+from .mesh_worker import capability_report
 from .jobs import JobRunner, now_iso, public_job
 from .storage import Storage
 from .validation import validate_scene
@@ -45,6 +47,11 @@ class ReconstructIn(BaseModel):
     wallThickness: float | None = Field(default=None, gt=0, le=2)
 
 
+class MeshReconstructIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    maxViews: Literal[12, 20, 32, 40] = 12
+
+
 def project_envelope(p: dict) -> dict:
     return {
         "project": {"id": p["id"], "name": p["name"], "createdAt": p["createdAt"], "hasScene": p.get("hasScene", False)},
@@ -52,6 +59,9 @@ def project_envelope(p: dict) -> dict:
         "source": p.get("source", {"kind": "blueprint"}),
         "captureJobId": p.get("captureJobId"),
         "inputManifestUrl": p.get("inputManifestUrl"),
+        "meshManifestUrl": p.get("meshManifestUrl"),
+        "meshJobId": p.get("meshJobId"),
+        "hasMesh": p.get("hasMesh", False),
     }
 
 
@@ -120,7 +130,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def need_blueprint(p: dict):
         if p.get("source", {}).get("kind", "blueprint") != "blueprint":
-            raise ApiError(400, "INVALID_SOURCE", "This endpoint requires a blueprint. Photo/video mesh reconstruction is not available yet.")
+            raise ApiError(400, "INVALID_SOURCE", "This endpoint requires a blueprint. Use the capture mesh endpoint for photo/video reconstruction.")
 
     # --- routes ---------------------------------------------------------
     @app.get("/api/health")
@@ -199,6 +209,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise ApiError(400, "INVALID_SOURCE", "Preparation requires photos or a video.")
         return {"job": public_job(runner.submit_capture(p))}
 
+    @app.get("/api/reconstruction/capabilities")
+    async def mesh_capabilities():
+        return await run_in_threadpool(capability_report)
+
+    @app.post("/api/projects/{project_id}/reconstruct-mesh", status_code=202)
+    async def reconstruct_mesh(project_id: str, body: MeshReconstructIn | None = None):
+        p = need_project(project_id)
+        if p.get("source", {}).get("kind", "blueprint") == "blueprint":
+            raise ApiError(400, "INVALID_SOURCE", "Mesh reconstruction requires a photo or video capture.")
+        return {"job": public_job(runner.submit_mesh(p, (body or MeshReconstructIn()).maxViews))}
+
+    @app.get("/api/projects/{project_id}/mesh")
+    async def get_mesh(project_id: str):
+        p = need_project(project_id)
+        if not p.get("meshManifestPath"):
+            raise ApiError(404, "MESH_NOT_READY", "No successful mesh reconstruction exists yet.")
+        manifest = json.loads((storage.project_dir(project_id) / p["meshManifestPath"]).read_text())
+        prefix = f"/api/projects/{project_id}/mesh-artifacts/{manifest['jobId']}"
+        manifest["meshUrl"] = f"{prefix}/mesh.glb"
+        manifest["diagnosticUrl"] = f"{prefix}/diagnostic.ply"
+        return manifest
+
+    @app.get("/api/projects/{project_id}/mesh-artifacts/{job_id}/{filename}")
+    async def mesh_artifact(project_id: str, job_id: str, filename: str):
+        p = need_project(project_id)
+        if not p.get("meshManifestPath") or filename not in {"mesh.glb", "diagnostic.ply"}:
+            raise ApiError(404, "NOT_FOUND", "Mesh artifact does not exist.")
+        manifest = json.loads((storage.project_dir(project_id) / p["meshManifestPath"]).read_text())
+        if manifest["jobId"] != job_id:
+            raise ApiError(404, "NOT_FOUND", "Mesh artifact is not the published result.")
+        return FileResponse(storage.project_dir(project_id) / "reconstructions" / job_id / filename,
+                            media_type="model/gltf-binary" if filename == "mesh.glb" else "application/octet-stream",
+                            filename=f"{project_id}-{filename}")
+
     @app.get("/api/projects/{project_id}/capture-input")
     async def capture_input(project_id: str):
         p = need_project(project_id)
@@ -217,6 +261,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if p.get("inputManifestPath"):
             manifest = json.loads((root / p["inputManifestPath"]).read_text())
             allowed.update(f["path"] for f in manifest["frames"])
+        if p.get("meshManifestPath"):
+            mesh_manifest = json.loads((root / p["meshManifestPath"]).read_text())
+            allowed.update(f["path"] for f in mesh_manifest.get("inputFrames", []))
         if artifact_path not in allowed:
             raise ApiError(404, "NOT_FOUND", "Capture artifact does not exist.")
         return FileResponse(root / artifact_path)

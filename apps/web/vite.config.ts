@@ -15,6 +15,6 @@ export default defineConfig({
     setupFiles: ['./tests/setup.ts'],
     restoreMocks: true,
     // Browser tests run under Playwright (npm run e2e).
-    exclude: [...configDefaults.exclude, 'e2e/**'],
+    exclude: [...configDefaults.exclude, 'e2e/**', 'e2e-capture/**'],
   },
 });

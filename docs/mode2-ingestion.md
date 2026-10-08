@@ -10,7 +10,8 @@ The API needs `ffmpeg` and `ffprobe` on PATH for video; photo ingestion needs on
 the existing Python dependencies. Check with `ffmpeg -version` and `ffprobe -version`.
 No GPU/model dependencies are loaded. Preparation runs serially on the existing
 background job thread. This milestone ends at an accepted reconstruction input;
-it does not create a mesh or establish metric scale.
+it does not itself create a mesh or establish metric scale. The subsequent
+[Milestone 2 worker](../services/reconstruction/README.md) reconstructs accepted inputs.
 
 Limits: 512 MB total per capture, 20 MB per photo by default (the API's existing
 upload-size setting), 8000 px per photo side, 4096 px per video side. Both require
@@ -22,7 +23,8 @@ HEIC, playlists, panoramic images and multi-room captures are not supported.
 
 Originals retain their bytes, filename, upload order, size and SHA-256. JPEG EXIF
 orientation and video display rotation are baked into selected PNGs. Photos are
-resized to at most 1280 px; video is fitted into a 1280 px box. Video selection
+resized to at most 1280 px; video is fitted into the same box without upscaling
+(preparation configuration v1.0.1). Video selection
 samples existing frames at least 0.5 seconds apart, without interpolated frames.
 `timestampSeconds` is selected presentation time relative to the first frame;
 `sourceTimestampSeconds` adds the source video stream start time. Photos reference

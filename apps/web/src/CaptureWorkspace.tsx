@@ -6,9 +6,19 @@ import {
   type CaptureInput,
   type CaptureKind,
   type Job,
+  type MeshResult,
+  type WorkerCapabilities,
 } from './api';
+import { CaptureGuide } from './CaptureGuide';
+import { MeshViewport } from './MeshViewport';
 
 export function CaptureWorkspace() {
+  const [viewBudget, setViewBudget] = useState(12);
+  const [mesh, setMesh] = useState<MeshResult | null>(null);
+  const [capabilities, setCapabilities] = useState<WorkerCapabilities | null>(null);
+  const [view, setView] = useState<'source' | 'mesh'>('source');
+  const [selectedFrame, setSelectedFrame] = useState(0);
+  const picker = useRef<HTMLInputElement>(null);
   const [kind, setKind] = useState<CaptureKind>('video');
   const [files, setFiles] = useState<File[]>([]);
   const [captures, setCaptures] = useState<CaptureEnvelope[]>([]);
@@ -21,6 +31,16 @@ export function CaptureWorkspace() {
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
+    void api
+      .reconstructionCapabilities()
+      .then(setCapabilities)
+      .catch(() =>
+        setCapabilities({
+          ready: false,
+          code: 'UNAVAILABLE',
+          message: 'Worker status unavailable. Check the API connection.',
+        }),
+      );
     api
       .listCaptures()
       .then(setCaptures)
@@ -46,25 +66,50 @@ export function CaptureWorkspace() {
     polling.current = new AbortController();
     await pollJob(api, initial, setJob, { signal: polling.current.signal, timeoutMs: 300_000 });
     if (!mounted.current) return;
-    setInput(await api.getCaptureInput(initial.projectId));
+    if (initial.kind === 'mesh-reconstruction') {
+      setMesh(await api.getMesh(initial.projectId));
+      setView('mesh');
+    } else {
+      setInput(await api.getCaptureInput(initial.projectId));
+      setSelectedFrame(0);
+      setView('source');
+    }
     setProject(await api.getCapture(initial.projectId));
     setCaptures(await api.listCaptures());
   }
   async function openCapture(id: string) {
     polling.current?.abort();
     setInput(null);
+    setMesh(null);
+    setSelectedFrame(0);
+    setView('source');
     setJob(null);
     const p = await api.getCapture(id);
     setProject(p);
     if (p.inputManifestUrl) setInput(await api.getCaptureInput(id));
-    if (p.captureJobId) await follow((await api.getJob(p.captureJobId)).job);
+    if (p.meshManifestUrl) {
+      setMesh(await api.getMesh(id));
+      setView('mesh');
+    }
+    const jobs = await Promise.all(
+      [p.meshJobId, p.captureJobId].filter((v): v is string => !!v).map((v) => api.getJob(v)),
+    );
+    const active = jobs.find(({ job }) => ['running', 'queued'].includes(job.status));
+    const latest = active ?? jobs.sort((a, b) => b.job.createdAt.localeCompare(a.job.createdAt))[0];
+    if (latest) {
+      setJob(latest.job);
+      if (['running', 'queued', 'failed'].includes(latest.job.status)) await follow(latest.job);
+    }
   }
   return (
     <main className="capture-workspace">
       <aside className="panel capture-controls">
         <section>
-          <h2>Photos & video</h2>
-          <p>Prepare one static room for 3D reconstruction.</p>
+          <span className="capture-eyebrow">01 / SOURCE</span>
+          <h2>Your room, your capture.</h2>
+          <p className="hint">
+            Start with one static room. Capture guidance stays here while you work.
+          </p>
           <ul className="capture-guidance">
             <li>Walk slowly around the room in good, even light. Keep people and objects still.</li>
             <li>
@@ -88,6 +133,8 @@ export function CaptureWorkspace() {
           </label>
           <input
             key={kind}
+            ref={picker}
+            className="sr-only"
             type="file"
             aria-label="Choose capture files"
             disabled={busy || api.mock}
@@ -97,6 +144,23 @@ export function CaptureWorkspace() {
             }
             onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
           />
+          <button
+            className="capture-dropzone"
+            disabled={busy || api.mock}
+            onClick={() => picker.current?.click()}
+          >
+            <span className="capture-upload-icon">↥</span>
+            <strong>
+              {files.length
+                ? `${files.length} file${files.length === 1 ? '' : 's'} selected`
+                : 'Choose your capture'}
+            </strong>
+            <span>
+              {kind === 'video'
+                ? 'A slow walkthrough of one room'
+                : 'Overlapping photos in walking order'}
+            </span>
+          </button>
           <p className="hint">
             {kind === 'video'
               ? 'MP4 / MOV · up to 4K · 512 MB'
@@ -158,6 +222,9 @@ export function CaptureWorkspace() {
                 )
                   throw new Error('Capture exceeds the upload size limit.');
                 setInput(null);
+                setMesh(null);
+                setSelectedFrame(0);
+                setView('source');
                 setJob(null);
                 const result = await api.createCapture(kind, files);
                 if (!mounted.current) return;
@@ -167,7 +234,7 @@ export function CaptureWorkspace() {
               })
             }
           >
-            {busy ? 'Preparing capture…' : 'Upload & prepare views'}
+            {busy ? 'Working…' : 'Upload & prepare views'}
           </button>
           {api.mock && (
             <p className="hint">
@@ -205,22 +272,64 @@ export function CaptureWorkspace() {
         </section>
       </aside>
       <section className="capture-results">
-        <h2>
-          {input ? `${input.frames.length} views ready for reconstruction` : 'Capture review'}
-        </h2>
-        <p>This step selects and saves input views. 3D mesh reconstruction is not available yet.</p>
-        {project && <p>Project: {project.project.id}</p>}
+        <header className="capture-result-header">
+          <div>
+            <span className="capture-eyebrow">MODE 02 / ROOM RECONSTRUCTION</span>
+            <h1>{project ? project.project.name : 'A new perspective on your space.'}</h1>
+            <p>
+              {mesh
+                ? 'Supported surfaces, reconstructed from your imagery.'
+                : input
+                  ? `${input.frames.length} views ready for reconstruction`
+                  : 'Capture it. Reconstruct it. Explore it.'}
+            </p>
+          </div>
+          {mesh && (
+            <a className="capture-export" href={api.imageUrl(mesh.meshUrl)} download>
+              ↓ Export GLB
+            </a>
+          )}
+        </header>
+        <div className="capture-pipeline" aria-label="Reconstruction steps">
+          <div className={project ? 'complete' : 'current'}>
+            <b>01</b>
+            <span>
+              Capture<small>Video or photos</small>
+            </span>
+          </div>
+          <div className={input ? 'complete' : project ? 'current' : ''}>
+            <b>02</b>
+            <span>
+              Review<small>Sharp, connected views</small>
+            </span>
+          </div>
+          <div className={mesh ? 'complete' : input ? 'current' : ''}>
+            <b>03</b>
+            <span>
+              Reconstruct<small>Colored surface mesh</small>
+            </span>
+          </div>
+        </div>
+        {mesh && input?.jobId && mesh.inputJobId !== input.jobId && (
+          <p className="hint" role="status">
+            This mesh uses an earlier preparation. Reconstruct again to use the current selected
+            views.
+          </p>
+        )}
         {error && (
           <div role="alert" className="error-banner">
             {error}
           </div>
         )}
-        {job && (
-          <div role="status" className="job-progress">
+        {job && (busy || job.status === 'failed') && (
+          <div role="status" className="capture-job">
+            <div>
+              <strong>{job.stage?.replaceAll('_', ' ') ?? job.status}</strong>
+              <span>
+                {job.status} · {Math.round(job.progress * 100)}%
+              </span>
+            </div>
             <progress max={1} value={job.progress} />
-            <span>
-              {job.stage ?? job.status} · {job.status} · {Math.round(job.progress * 100)}%
-            </span>
             {['queued', 'running'].includes(job.status) && (
               <button
                 disabled={job.cancelRequested}
@@ -231,40 +340,169 @@ export function CaptureWorkspace() {
                     .catch((e) => setError(String(e)));
                 }}
               >
-                {job.cancelRequested ? 'Cancelling…' : 'Cancel preparation'}
+                {job.cancelRequested
+                  ? 'Cancelling…'
+                  : job.kind === 'mesh-reconstruction'
+                    ? 'Cancel reconstruction'
+                    : 'Cancel preparation'}
               </button>
             )}
           </div>
         )}
-        {input && (
-          <>
-            {input.warnings.map((w) => (
-              <p className="hint" key={w}>
-                {w}
-              </p>
-            ))}
-            <a
-              href={api.imageUrl(`/api/projects/${input.projectId}/capture-input`)}
-              target="_blank"
-              rel="noreferrer"
+        <div className="capture-stage">
+          {input && (
+            <div className="capture-stage-toolbar">
+              <div role="group" aria-label="Capture view">
+                <button aria-pressed={view === 'source'} onClick={() => setView('source')}>
+                  Source views <span>{input.frames.length}</span>
+                </button>
+                <button
+                  disabled={!mesh}
+                  aria-pressed={view === 'mesh'}
+                  onClick={() => setView('mesh')}
+                >
+                  3D mesh
+                </button>
+              </div>
+              <span>
+                {mesh && view === 'mesh' ? 'INFERRED · UNCALIBRATED' : 'ORIGINAL CAPTURE EVIDENCE'}
+              </span>
+            </div>
+          )}
+          {mesh && view === 'mesh' ? (
+            <MeshViewport key={mesh.jobId} url={api.imageUrl(mesh.meshUrl)} />
+          ) : input ? (
+            <div className="capture-source-preview">
+              <img
+                src={api.imageUrl(input.frames[selectedFrame]?.url ?? input.frames[0].url)}
+                alt={`Selected source view ${selectedFrame + 1}`}
+              />
+              <div className="source-preview-label">
+                VIEW {String(selectedFrame + 1).padStart(2, '0')} / {input.frames.length}
+                <span>Orientation normalized · Source retained</span>
+              </div>
+            </div>
+          ) : (
+            <CaptureGuide />
+          )}
+        </div>
+        <div className="capture-readiness">
+          <div>
+            <span className={`worker-dot ${capabilities?.ready ? 'ready' : ''}`} />
+            <div>
+              <strong>
+                {capabilities?.ready
+                  ? (capabilities.device ?? 'Reconstruction ready')
+                  : 'Reconstruction setup'}
+              </strong>
+              <p>{capabilities?.message ?? 'Checking local reconstruction worker…'}</p>
+            </div>
+          </div>
+          <div className="capture-ready-actions">
+            <label className="view-budget">
+              View budget
+              <select
+                aria-label="Reconstruction view budget"
+                value={viewBudget}
+                disabled={busy}
+                onChange={(e) => setViewBudget(Number(e.target.value))}
+              >
+                <option value={12}>12 · lower VRAM</option>
+                <option value={20}>20 views</option>
+                <option value={32}>32 views</option>
+                <option value={40}>All selected views</option>
+              </select>
+            </label>
+            <button
+              className="text-button"
+              disabled={busy}
+              onClick={() =>
+                void action(async () => setCapabilities(await api.reconstructionCapabilities()))
+              }
             >
-              Open input manifest (JSON)
-            </a>
-            <div className="capture-frames">
-              {input.frames.map((f) => (
-                <figure key={f.id}>
+              Refresh status
+            </button>
+            <button
+              className="primary"
+              disabled={!input || busy || !capabilities?.ready || api.mock}
+              onClick={() =>
+                void action(async () => {
+                  if (project)
+                    await follow((await api.reconstructMesh(project.project.id, viewBudget)).job);
+                })
+              }
+            >
+              {mesh ? 'Reconstruct again' : 'Reconstruct mesh →'}
+            </button>
+          </div>
+        </div>
+        {mesh && (
+          <div className="mesh-summary">
+            <span>
+              <b>{mesh.statistics.triangles.toLocaleString()}</b> triangles
+            </span>
+            <span>
+              <b>{mesh.cameras.length}</b> cameras
+            </span>
+            <span>
+              <b>{Math.round(mesh.statistics.executionSeconds)}s</b> reconstruction
+            </span>
+            <span>Scale: uncalibrated</span>
+          </div>
+        )}
+        {input ? (
+          <>
+            <div className="capture-filmstrip" aria-label="Selected views">
+              {input.frames.map((f, i) => (
+                <button
+                  key={f.id}
+                  className={i === selectedFrame ? 'selected' : ''}
+                  onClick={() => {
+                    setSelectedFrame(i);
+                    setView('source');
+                  }}
+                >
                   <img loading="lazy" src={api.imageUrl(f.url)} alt={`Selected view ${f.id}`} />
-                  <figcaption>
+                  <span>
+                    {String(i + 1).padStart(2, '0')} ·{' '}
+                    {f.timestampSeconds !== null ? `${f.timestampSeconds.toFixed(1)}s` : 'PHOTO'}
+                  </span>
+                  <small>
                     {input.originals.find((o) => o.id === f.sourceId)?.filename}
                     {f.timestampSeconds !== null ? ` · ${f.timestampSeconds.toFixed(1)}s` : ''}
-                    <br />
-                    {f.width} × {f.height}
-                  </figcaption>
-                </figure>
+                  </small>
+                </button>
               ))}
             </div>
-            <details>
-              <summary>{input.rejected.length} omitted views</summary>
+            <details className="capture-evidence">
+              <summary>Capture evidence & quality · {input.rejected.length} omitted views</summary>
+              {(mesh?.warnings ?? input.warnings).map((w) => (
+                <p key={w}>{w}</p>
+              ))}
+              <a
+                href={api.imageUrl(`/api/projects/${input.projectId}/capture-input`)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open input manifest (JSON)
+              </a>
+              {mesh && (
+                <>
+                  {' '}
+                  ·{' '}
+                  <a
+                    href={api.imageUrl(`/api/projects/${mesh.projectId}/mesh`)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Reconstruction manifest
+                  </a>{' '}
+                  ·{' '}
+                  <a href={api.imageUrl(mesh.diagnosticUrl)} download>
+                    Diagnostic PLY
+                  </a>
+                </>
+              )}
               <ul>
                 {input.rejected.map((r, i) => (
                   <li key={i}>
@@ -276,6 +514,24 @@ export function CaptureWorkspace() {
               </ul>
             </details>
           </>
+        ) : (
+          <div className="capture-benefits">
+            <article>
+              <span>01 / INPUT</span>
+              <h3>Keep the details.</h3>
+              <p>Originals stay intact. Every selected view traces back to your photo or video.</p>
+            </article>
+            <article>
+              <span>02 / GEOMETRY</span>
+              <h3>Build what’s supported.</h3>
+              <p>Overlapping views support the surfaces. Unseen areas remain open.</p>
+            </article>
+            <article>
+              <span>03 / OUTPUT</span>
+              <h3>Make it portable.</h3>
+              <p>Orbit the colored mesh and download a GLB. Set metric scale in a later step.</p>
+            </article>
+          </div>
         )}
       </section>
     </main>

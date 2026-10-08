@@ -117,6 +117,7 @@ def test_video_success_and_timestamps(client, tmp_path):
     assert job['status'] == 'succeeded', job
     manifest = client.get(job['inputManifestUrl']).json()
     assert 12 <= len(manifest['frames']) <= 40
+    assert all((f['width'], f['height']) == (320, 240) for f in manifest['frames']), 'Do not upscale video frames'
     times = [f['timestampSeconds'] for f in manifest['frames']]
     assert times == sorted(times)
     assert times[0] < 2 and times[-1] > 28

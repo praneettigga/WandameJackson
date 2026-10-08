@@ -7,6 +7,7 @@ import math
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import cv2
@@ -16,7 +17,7 @@ from .errors import ApiError
 from .images import inspect_image
 from .storage import atomic_write_json
 
-CONFIG = {"version": "1.0.0", "maxSide": 1280, "sampleFps": 2,
+CONFIG = {"version": "1.0.1", "maxSide": 1280, "sampleFps": 2,
           "maxViews": 40, "minViews": 12, "minSharpness": 35.0,
           "duplicateMeanDifference": 3.0, "minOverlapInliers": 15}
 
@@ -59,6 +60,7 @@ def overlap(a, b):
 
 def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
     """Write into a job-private directory. Caller publishes only the completed manifest."""
+    started = time.monotonic()
     output = root / "captures" / job_id
     output.mkdir(parents=True, exist_ok=False)
     candidates = output / "candidates"
@@ -95,7 +97,7 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
             # selected frame's exact presentation timestamp on the normalized timeline.
             log = media_command(["ffmpeg", "-nostdin", "-v", "info", "-protocol_whitelist", "file,pipe",
                            "-f", "mov", "-i", str(path), "-map", "0:v:0", "-an", "-t", "60.5",
-                           "-vf", "setpts=PTS-STARTPTS,select='isnan(prev_selected_t)+gte(t-prev_selected_t,0.5)',scale=1280:1280:force_original_aspect_ratio=decrease,showinfo",
+                           "-vf", "setpts=PTS-STARTPTS,select='isnan(prev_selected_t)+gte(t-prev_selected_t,0.5)',scale=w='min(1280,iw)':h='min(1280,ih)':force_original_aspect_ratio=decrease,showinfo",
                            "-fps_mode", "vfr", "-frames:v", "121", str(candidates / "%04d.png")], 90, stderr=True)
             times = [float(t) for t in re.findall(rb"\bpts_time:([-+0-9.eE]+)", log)]
             paths = sorted(candidates.glob("*.png"))
@@ -189,7 +191,7 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
         manifest = {"schemaVersion": "1.0.0", "kind": "reconstruction-input", "projectId": project["id"],
                     "jobId": job_id, "sourceKind": source["kind"], "originals": originals,
                     "frames": frames, "rejected": rejected, "overlapEdges": edges,
-                    "processing": {**CONFIG, "opencvVersion": cv2.__version__, "orientation": "display-oriented",
+                    "processing": {**CONFIG, "elapsedSeconds": time.monotonic() - started, "opencvVersion": cv2.__version__, "orientation": "display-oriented",
                                    "order": "upload order", "timestampBasis": "selected presentation time relative to first video frame; sourceTimestampSeconds includes stream start time",
                                    "ffmpegVersion": media_command(["ffmpeg", "-version"]).decode().splitlines()[0] if source["kind"] == "video" else None},
                     "warnings": ["Quality checks are heuristics; acceptance does not establish full room coverage or reconstruction accuracy."]}

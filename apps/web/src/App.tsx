@@ -481,7 +481,7 @@ export default function App() {
   }
   return (
     <div
-      className="app-shell"
+      className={`app-shell ${inputMode === 'capture' ? 'capture-mode' : ''}`}
       style={
         { '--left-panel': `${leftWidth}px`, '--right-panel': `${rightWidth}px` } as CSSProperties
       }

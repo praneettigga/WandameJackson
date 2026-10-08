@@ -2,13 +2,14 @@
 
 Upload a floor-plan PNG/JPEG, automatically read printed dimensions or estimate scale, reconstruct a metric room, add and edit furniture, save/reload, and export Scene JSON or GLB.
 
+Mode 2 accepts a 30–60 second room video or 20–40 overlapping photos, prepares
+traceable frames, and runs a separate local VGGT/CUDA worker to export a colored
+triangle mesh. See [worker setup and validation status](services/reconstruction/README.md).
+
 ## Run locally
 
-Use Python 3.12+ and Node 22.12+. The current checkout directory contains `:`
-(`National-Round:Hacknex`), which Python and Vitest/Vite treat as a path/URL
-separator. Move or clone this repository into a directory without `:` before
-running it (for example, `~/Projects/WandameJackson`). From the repository
-root, start the backend:
+Use Python 3.12+ and Node 22.12+. Keep the checkout in a directory without `:`
+(for example, `~/Projects/WandameJackson`). From the repository root, start the backend:
 
 ```bash
 cd services/api
@@ -28,6 +29,20 @@ VITE_USE_MOCK_API=false VITE_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 Open http://127.0.0.1:5173. On Windows use `.venv\Scripts\python` and set environment variables with PowerShell. API data persists in `services/api/data/`; use one API worker for this local prototype.
 
 For an offline demo use `VITE_USE_MOCK_API=true npm run dev`. It loads the synthetic fixture and simulates reconstruction. Explicit environment variables override any local `.env.local` settings.
+
+## Photos and video
+
+Install FFmpeg/ffprobe and the [isolated reconstruction worker](services/reconstruction/README.md),
+then run the real API and frontend above. Choose **Mode 2 · Photos & video**,
+upload a capture with **Upload & prepare views**. Review the selected views, then
+choose **Reconstruct mesh**. The result opens in an orbit viewer with GLB export.
+Saved captures and meshes can be reopened from the sidebar. Cancellation and
+failed reruns preserve any previously completed mesh.
+
+Use one static room, good lighting, and substantial overlap. Photos must be in
+walking order. The mesh has uncalibrated scale and may contain missing surfaces;
+metric calibration and object editing are later milestones. Mock mode does not
+run the photo/video pipeline.
 
 ## First demo
 
@@ -98,6 +113,6 @@ Results and their caveats are in [docs/eval/RESULTS.md](docs/eval/RESULTS.md). C
 
 ## Scope and limits
 
-The CPU parser targets clean line drawings. It handles solid or double-line walls, straight diagonal walls, and slightly rotated scans, which it straightens and maps back. It detects doors (with swing direction when an arc is drawn) and windows on horizontal/vertical walls. It does not extract furniture; users add furniture from the library. Door/window detection is heuristic, heights and ceilings are assumptions, and unsuccessful parsing never falls back to a fake room. Arbitrary architectural drawings, video, multi-floor plans, and benchmark superiority are not claimed.
+The Mode 1 CPU parser targets clean line drawings. It handles solid or double-line walls, straight diagonal walls, and slightly rotated scans, which it straightens and maps back. It detects doors (with swing direction when an arc is drawn) and windows on horizontal/vertical walls. It does not extract furniture; users add furniture from the library. Door/window detection is heuristic, heights and ceilings are assumptions, and unsuccessful parsing never falls back to a fake room. Arbitrary architectural drawings, multi-floor plans, and benchmark superiority are not claimed. Mode 2 uses the separate experimental imagery reconstruction pipeline described above.
 
 See [prototype scope](docs/architecture/prototype-scope.md), [workflow](docs/workflow/end-to-end-workflow.md), and the authoritative [API contract](contracts/api-contract.md) / [Scene schema](contracts/scene.schema.json). Schema version is `0.1.0`; older docs under `docs/contracts/` are superseded.

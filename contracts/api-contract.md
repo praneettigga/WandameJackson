@@ -189,6 +189,33 @@ Errors include `INSUFFICIENT_VIEWS`, `LOW_OVERLAP`, `INVALID_DURATION`,
 `INVALID_VIDEO`, `INVALID_PHOTO`, `SOURCE_CHANGED`, `MEDIA_TOOLS_MISSING`,
 `MEDIA_TIMEOUT`, and `JOB_CANCELLED`, with actionable messages. Blueprint,
 scale and blueprint-reconstruct endpoints reject capture sources with 400
-`INVALID_SOURCE`. No GPU reconstruction endpoint is implemented by this milestone.
+`INVALID_SOURCE`. Prepared captures feed the mesh reconstruction endpoint below.
 
 See [ingestion behavior and limits](../docs/mode2-ingestion.md).
+
+## Mode 2 mesh reconstruction (Milestone 2)
+
+- `GET /api/reconstruction/capabilities`: `{ready, code, message, device?}` from
+  an isolated worker probe. Missing environment/checkpoint/CUDA returns `ready:false`.
+- `POST /api/projects/{id}/reconstruct-mesh`: optional JSON
+  `{ "maxViews": 12 }` (12, 20, 32, or 40; defaults to 12). Requires accepted
+  capture input. Returns 202 `{job}`; active same-project jobs return 409.
+- `GET /api/projects/{id}/mesh`: latest successful reconstruction manifest, or
+  404 `MESH_NOT_READY`. Adds `meshUrl` and `diagnosticUrl` to manifest v1.0.0.
+- `GET /api/projects/{id}/mesh-artifacts/{jobId}/{filename}`: only `mesh.glb` and
+  `diagnostic.ply` for the currently published job. No request/log paths are served.
+
+Envelopes add `hasMesh`, `meshJobId`, and `meshManifestUrl`. `hasScene` continues to
+mean the Mode 1 editable Scene; a capture mesh never masquerades as editable walls.
+Mesh jobs have `kind: mesh-reconstruction`, `maxViews`, `meshManifestUrl`, and
+`stage`. `sceneUrl` remains null. Stages include loading input/model, camera/depth
+estimation, filtering, fusion, extraction, export, validation, and ready.
+
+The mesh manifest includes input job/frame hashes, both camera transform
+directions, intrinsics/content bounds, `units: uncalibrated`, `calibration: null`,
+model/checkpoint provenance, processing settings, statistics and warnings.
+`statistics.endToEndSeconds` is null for legacy inputs without preparation timing.
+Errors include `WORKER_NOT_CONFIGURED`, `GPU_UNAVAILABLE`, `CHECKPOINT_MISSING`,
+`CHECKPOINT_LICENSE_REQUIRED`, `GPU_OUT_OF_MEMORY`, `RECONSTRUCTION_TIMEOUT`,
+`WORKER_EXITED`, `INVALID_MESH`, and `JOB_CANCELLED`. Failed/cancelled reruns retain
+the previous published mesh. See [worker setup and validation boundaries](../services/reconstruction/README.md).

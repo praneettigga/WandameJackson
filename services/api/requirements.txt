@@ -1,0 +1,13 @@
+# Tested on Python 3.12.10 (Windows, CPU only)
+fastapi==0.142.4
+starlette==1.7.0
+pydantic==2.13.5
+uvicorn==0.54.0
+python-multipart==0.0.32
+opencv-python-headless==5.0.0.93
+numpy==2.5.3
+shapely==2.2.0
+jsonschema==4.26.0
+# test
+pytest==9.1.1
+httpx==0.28.1

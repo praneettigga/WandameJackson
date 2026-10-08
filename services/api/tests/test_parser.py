@@ -135,7 +135,7 @@ def test_outline_walls_are_filled():
 
 def test_ablation_options_cover_every_stage():
     names = set(ParserOptions.ablations())
-    assert names == {"full", "no_deskew", "no_outline_walls", "no_diagonal_walls", "no_endpoint_snap",
+    assert names == {"full", "no_normalize", "no_hatch_walls", "no_thin_walls", "no_clutter_filter", "no_deskew", "no_outline_walls", "no_diagonal_walls", "no_endpoint_snap",
                      "no_opening_detection", "no_thin_line_removal", "no_pier_split", "no_soft_gap_ink"}
     r = parse_blueprint(load_gray(CONTRACTS / "fixtures" / "room.png"), 0.02,
                         options=ParserOptions(opening_detection=False))

@@ -21,7 +21,7 @@ import cv2
 import numpy as np
 
 from .calibration import compute_calibration
-from .parser import estimate_thickness_px
+from .parser import estimate_thickness_px, normalize_drawing
 
 NUMBER = r"\d+(?:\.\d+)?"
 UNITS = {"mm": .001, "cm": .01, "m": 1., "ft": .3048, "in": .0254}
@@ -217,6 +217,7 @@ def _dimension_span(ink: np.ndarray, label: Label) -> tuple[list[float], list[fl
 
 
 def estimate_scale(gray: np.ndarray) -> dict:
+    gray = normalize_drawing(gray)[0]  # blueprints, dark prints and uneven scans read like dark-on-white
     original_h, original_w = gray.shape
     # Bound OCR and morphology costs while retaining original pixel coordinates.
     ratio = min(2., 2200 / max(gray.shape))

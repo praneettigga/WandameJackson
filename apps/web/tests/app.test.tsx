@@ -129,12 +129,17 @@ describe('application integration without WebGL', () => {
     render(<App />);
     await screen.findByRole('button', { name: 'Select Table' });
     fireEvent.click(screen.getByRole('button', { name: 'Reconstruct' }));
-    fireEvent.change(screen.getByLabelText('Known distance (metres)'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Known distance'), { target: { value: '3' } });
     fireEvent.change(screen.getByLabelText('Scale method'), { target: { value: 'auto' } });
     await screen.findByText('Using a printed measurement');
     expect(screen.getByText('0.050000')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Scale method'), { target: { value: 'manual' } });
-    expect(screen.getByLabelText('Known distance (metres)')).toHaveValue(3);
+    expect(screen.getByLabelText('Known distance')).toHaveValue(3);
+    // Switching units keeps the same physical reference length.
+    fireEvent.change(screen.getByLabelText('Known distance unit'), { target: { value: 'cm' } });
+    expect(screen.getByLabelText('Known distance')).toHaveValue(300);
+    expect(useEditor.getState().lengthUnit).toBe('cm');
+    fireEvent.change(screen.getByLabelText('Known distance unit'), { target: { value: 'm' } });
     expect(screen.getByText('0.030000')).toBeInTheDocument();
   });
   it('can reconstruct automatically even if scale preview fails', async () => {

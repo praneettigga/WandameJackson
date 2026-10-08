@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { GeometryCache, buildSceneGeometry, collides, disposeGeometry, pointInRoom } from './geometry';
 import { useEditor } from './store';
 import { useLibrary } from './library';
+import { formatLength } from './units';
 import { SNAP_PX, gridStepFor, snapToWalls, worldPerPixel } from './snapping';
 import { WallTools } from './WallTools';
 import { danglingEnds } from './wallGraph';
@@ -44,6 +45,7 @@ function MeasurePoint({
   );
 }
 function MeasureOverlay({ points, hover }: { points: V3[]; hover: V3 | null }) {
+  const lengthUnit = useEditor((s) => s.lengthUnit);
   const ends: V3[] = points.length === 1 && hover ? [points[0], hover] : points;
   const a = ends[0] && new THREE.Vector3(...ends[0]),
     b = ends[1] && new THREE.Vector3(...ends[1]);
@@ -71,7 +73,7 @@ function MeasureOverlay({ points, hover }: { points: V3[]; hover: V3 | null }) {
             zIndexRange={[20, 0]}
             style={{ pointerEvents: 'none' }}
           >
-            <div className="measure-label">{a.distanceTo(b).toFixed(3)} m</div>
+            <div className="measure-label">{formatLength(a.distanceTo(b), lengthUnit)}</div>
           </Html>
         </>
       )}

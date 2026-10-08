@@ -27,6 +27,7 @@ import { ConfidenceChip, Inspector } from './Inspector';
 import { Viewport } from './Viewport';
 import { ComponentLibrary } from './ComponentLibrary';
 import { loadLibrary } from './library';
+import { formatLength, fromMeters, lengthUnits, toMeters, type LengthUnit } from './units';
 
 class ViewportBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -58,6 +59,28 @@ export function ErrorBanner() {
         ×
       </button>
     </div>
+  );
+}
+
+function UnitSelect({ label, onChange }: { label: string; onChange?: (from: LengthUnit, to: LengthUnit) => void }) {
+  const unit = useEditor((s) => s.lengthUnit);
+  return (
+    <select
+      className="unit-select"
+      aria-label={label}
+      value={unit}
+      onChange={(e) => {
+        const next = e.target.value as LengthUnit;
+        onChange?.(unit, next);
+        useEditor.getState().setLengthUnit(next);
+      }}
+    >
+      {(Object.keys(lengthUnits) as LengthUnit[]).map((u) => (
+        <option key={u} value={u}>
+          {u}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -104,6 +127,7 @@ function Calibration({
   points,
   setPoints,
   distance,
+  unit,
   manual,
   disabled,
 }: {
@@ -111,6 +135,7 @@ function Calibration({
   points: V2[];
   setPoints: (p: V2[]) => void;
   distance: string;
+  unit: LengthUnit;
   manual: boolean;
   disabled: boolean;
 }) {
@@ -180,7 +205,7 @@ function Calibration({
                 paintOrder="stroke"
               >
                 {Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]).toFixed(1)} px
-                {!ghost && distance && Number(distance) > 0 ? ` = ${Number(distance)} m` : ''}
+                {!ghost && distance && Number(distance) > 0 ? ` = ${formatLength(toMeters(Number(distance), unit), unit)}` : ''}
               </text>
             </>
           )}
@@ -330,7 +355,7 @@ export default function App() {
     localStorage.setItem('roomshift.lastProject', id);
     setPoints(scene ? [scene.source.calibration.pointA, scene.source.calibration.pointB] : []);
     if (scene) {
-      setDistance(String(scene.source.calibration.distanceMeters));
+      setDistance(String(fromMeters(scene.source.calibration.distanceMeters, useEditor.getState().lengthUnit)));
       useEditor.setState({ workspace: 'Edit' });
     }
     setNotice(
@@ -418,7 +443,7 @@ export default function App() {
   let scale: number | null = null;
   try {
     if (scaleMode === 'auto') scale = automaticScale?.metersPerPixel ?? null;
-    else if (points.length === 2) scale = metersPerPixel(points[0], points[1], Number(distance));
+    else if (points.length === 2) scale = metersPerPixel(points[0], points[1], toMeters(Number(distance), state.lengthUnit));
   } catch {
     /* Inline readiness below. */
   }
@@ -457,7 +482,7 @@ export default function App() {
               calibration: {
                 pointA: points[0],
                 pointB: points[1],
-                distanceMeters: Number(distance),
+                distanceMeters: toMeters(Number(distance), state.lengthUnit),
               },
             }
           : {}),
@@ -606,7 +631,7 @@ export default function App() {
                       setProjectId(next.project.id);
                       localStorage.setItem('roomshift.lastProject', next.project.id);
                       setPoints([]);
-                      setDistance('2');
+                      setDistance(String(fromMeters(2, state.lengthUnit)));
                       setScaleMode('auto');
                       setAutomaticScale(null);
                       setJob(null);
@@ -719,14 +744,24 @@ export default function App() {
                       ))}
                     </div>
                     <label className="field">
-                      Known distance (metres)
-                      <input
-                        type="number"
-                        min="0.001"
-                        step="0.1"
-                        value={distance}
-                        onChange={(e) => setDistance(e.target.value)}
-                      />
+                      Known distance
+                      <span className="unit-input">
+                        <input
+                          aria-label="Known distance"
+                          type="number"
+                          min="0.001"
+                          step={{ m: 0.1, cm: 1, mm: 10, ft: 0.5, in: 1 }[state.lengthUnit]}
+                          value={distance}
+                          onChange={(e) => setDistance(e.target.value)}
+                        />
+                        <UnitSelect
+                          label="Known distance unit"
+                          onChange={(from, to) => {
+                            if (distance !== '' && Number.isFinite(Number(distance)))
+                              setDistance(String(fromMeters(toMeters(Number(distance), from), to)));
+                          }}
+                        />
+                      </span>
                     </label>
                     <button
                       className="text-button"
@@ -939,6 +974,7 @@ export default function App() {
               >
                 ⌁<span>Measure</span>
               </button>
+              <UnitSelect label="Measurement unit" />
             </div>
             <div className="tool-group" aria-label="Architecture tools">
               {(
@@ -1036,6 +1072,7 @@ export default function App() {
                 }
                 setPoints={setPoints}
                 distance={distance}
+                unit={state.lengthUnit}
                 manual={scaleMode === 'manual'}
                 disabled={disabled}
               />

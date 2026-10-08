@@ -46,6 +46,10 @@ class ParseError(Exception):
 class ParserOptions:
     """Pipeline stages that can be switched off for ablation studies. Production uses the defaults."""
 
+    normalize: bool = True  # even out background: dark/blueprint polarity, uneven lighting, faded contrast, speckle
+    hatch_walls: bool = True  # fill architectural hatching (poché) into solid wall regions
+    thin_walls: bool = True  # second pass for partitions thinner than the dominant wall stroke
+    clutter_filter: bool = True  # drop titles, symbols and drawing frames that are not part of the building
     deskew: bool = True  # straighten slightly rotated drawings, then map results back
     outline_walls: bool = True  # fill double-line (outline) walls drawn as two thin parallel strokes
     diagonal_walls: bool = True  # straight walls at any angle, from residual thick ink
@@ -289,6 +293,58 @@ def _fill_outline_walls(ink: np.ndarray, mpp: float) -> np.ndarray:
     return cv2.bitwise_or(ink, cv2.bitwise_or(fill_h, fill_v))
 
 
+def _hatch_fill(gray: np.ndarray, ink: np.ndarray, mpp: float) -> np.ndarray | None:
+    """Solid wall regions from architectural hatching (poché): 45° hatch lines, often too light for the ink
+    threshold, between a wall's two boundary lines. Space between parallel strokes is filled only where it
+    contains hatching, so furniture outlines, stair treads and text stay open. Returns ink plus the filled
+    bands, or None when the drawing has no hatching."""
+    soft = ((gray < 235) * 255).astype(np.uint8)
+    # Grain or sensor noise scatters isolated light-grey pixels everywhere; hatching is connected lines.
+    s = (soft > 0).astype(np.uint8)
+    lonely = (s == 1) & (cv2.boxFilter(s, cv2.CV_16S, (3, 3), normalize=False) <= 1)
+    if lonely.sum() > 0.05 * max(1, int(s.sum())):
+        return None
+    n = 7
+    diag = cv2.bitwise_or(cv2.morphologyEx(soft, cv2.MORPH_OPEN, np.eye(n, dtype=np.uint8)),
+                          cv2.morphologyEx(soft, cv2.MORPH_OPEN, np.fliplr(np.eye(n, dtype=np.uint8)).copy()))
+    # Solid strokes contain diagonal runs too; hatch lines are the diagonal pixels a 3x3 square cannot cover.
+    solid = cv2.morphologyEx(soft, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    hatch = cv2.bitwise_and(diag, cv2.bitwise_not(solid))
+    if int((hatch > 0).sum()) < 0.03 * max(1, int((ink > 0).sum())):
+        return None
+    # Noise also forms short diagonal runs; real hatch lines span a wall band (longer runs).
+    long_diag = cv2.bitwise_or(cv2.morphologyEx(soft, cv2.MORPH_OPEN, np.eye(11, dtype=np.uint8)),
+                               cv2.morphologyEx(soft, cv2.MORPH_OPEN, np.fliplr(np.eye(11, dtype=np.uint8)).copy()))
+    if int((cv2.bitwise_and(long_diag, cv2.bitwise_not(solid)) > 0).sum()) < 0.01 * max(1, int((ink > 0).sum())):
+        return None
+    base = cv2.bitwise_or(ink, hatch)
+    # Close across walls (up to 0.35 m between boundary lines) and keep what runs along a wall. Unlike the
+    # outline fill, the along-wall check includes the strokes, since hatch lines chop the gaps into short runs.
+    gap = max(3, int(round(0.35 / mpp))) | 1
+    long_k = max(3, int(round(0.15 / mpp)))
+    band_h = cv2.morphologyEx(cv2.morphologyEx(base, cv2.MORPH_CLOSE, np.ones((gap, 1), np.uint8)),
+                              cv2.MORPH_OPEN, np.ones((1, long_k), np.uint8))
+    band_v = cv2.morphologyEx(cv2.morphologyEx(base, cv2.MORPH_CLOSE, np.ones((1, gap), np.uint8)),
+                              cv2.MORPH_OPEN, np.ones((long_k, 1), np.uint8))
+    added = cv2.bitwise_and(cv2.bitwise_or(band_h, band_v), cv2.bitwise_not(base))
+    # Only next to hatching: glazing between hatched wall ends and furniture against a wall stay open.
+    near = max(5, int(0.25 / mpp)) | 1
+    added = cv2.bitwise_and(added, cv2.dilate(hatch, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (near, near))))
+    n_c, labels, stats, _ = cv2.connectedComponentsWithStats(cv2.bitwise_or(added, hatch), connectivity=8)
+    if n_c <= 1:
+        return None
+    hatch_count = np.bincount(labels[hatch > 0], minlength=n_c)
+    # Walls are bands; anything more than ~0.6 m across is a hatched floor area or symbol, not a wall.
+    half_width = cv2.distanceTransform((labels > 0).astype(np.uint8), cv2.DIST_L2, 3)
+    widest = np.zeros(n_c)
+    np.maximum.at(widest, labels.ravel(), half_width.ravel())
+    keep = (hatch_count >= 0.04 * stats[:, cv2.CC_STAT_AREA]) & (2 * widest * mpp <= 0.6)
+    keep[0] = False
+    if not keep.any():
+        return None
+    return cv2.bitwise_or(ink, ((keep[labels]) * 255).astype(np.uint8))
+
+
 NOISY_SIGMA = 8.0
 
 
@@ -296,6 +352,56 @@ def noise_sigma(gray: np.ndarray) -> float:
     """Robust pixel-noise estimate: MAD of the residual after a 3x3 median filter (0 for clean drawings)."""
     resid = gray.astype(np.float32) - cv2.medianBlur(gray, 3).astype(np.float32)
     return float(1.4826 * np.median(np.abs(resid - np.median(resid))))
+
+
+def normalize_drawing(gray: np.ndarray) -> tuple[np.ndarray, list[str]]:
+    """Map a drawing to dark linework on an even white background, returning (image, notes).
+
+    Handles light-on-dark prints (blueprints, white-on-black), uneven lighting from photos and scans,
+    grey paper or faded low-contrast scans, and isolated speckle. Each step runs only when its condition
+    is measured in the image, so clean drawings pass through unchanged."""
+    notes: list[str] = []
+    f = min(1.0, 512 / max(gray.shape))
+    small = cv2.resize(gray, None, fx=f, fy=f, interpolation=cv2.INTER_AREA) if f < 1 else gray
+    lo, med, hi = np.percentile(small, [1, 50, 99])
+    if hi - lo < 20:
+        return gray, notes  # flat image; the parser reports that no drawing was found
+    g = gray
+    # The background is the majority of the sheet: if the median sits nearer the dark end, the lines are light.
+    if med - lo < hi - med:
+        g = 255 - g
+        small = 255 - small
+        notes.append("The drawing has light lines on a dark background (for example a blueprint); it was "
+                     "inverted before parsing.")
+    # Background: a closing wider than any wall stroke paints the linework over with the surrounding paper.
+    k = max(5, int(round(min(small.shape) / 20))) | 1
+    bg_small = cv2.GaussianBlur(cv2.morphologyEx(small, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8)), (0, 0), k / 2)
+    b_lo, b_med, b_hi = np.percentile(bg_small, [2, 50, 98])
+    work = g.astype(np.float32)
+    if b_hi - b_lo > 25:
+        bg = cv2.resize(bg_small, (g.shape[1], g.shape[0]), interpolation=cv2.INTER_LINEAR).astype(np.float32)
+        work = work / np.maximum(bg, 1.0) * 255.0
+        notes.append("Uneven lighting or a tinted background was evened out before parsing.")
+    elif b_med < 235:
+        work = work / max(float(b_med), 1.0) * 255.0
+        notes.append("The background is not white; it was brightened to white before parsing.")
+    work = np.clip(work, 0, 255)
+    dark = work < 200
+    if dark.mean() > 0.001:
+        ink_level = float(np.percentile(work[dark], 10))
+        if ink_level > 40:
+            work = np.clip((work - ink_level) / (255.0 - ink_level) * 255.0, 0, 255)
+            notes.append("Low-contrast linework was strengthened before parsing.")
+    out = work.astype(np.uint8)
+    # Speckle: isolated pixels opposite to all but one of their neighbours (dust, photocopy noise).
+    d = (out < 128).astype(np.uint8)
+    n_dark = cv2.boxFilter(d, cv2.CV_16S, (3, 3), normalize=False, borderType=cv2.BORDER_REPLICATE) - d
+    impulse = ((d == 1) & (n_dark <= 1)) | ((d == 0) & (n_dark >= 7))
+    if impulse.mean() > 0.002:
+        out = out.copy()
+        out[impulse] = cv2.medianBlur(out, 3)[impulse]
+        notes.append("Isolated speckle (dust or scanner noise) was removed before parsing.")
+    return out, notes
 
 
 def skew_angle(gray: np.ndarray) -> float | None:
@@ -345,10 +451,84 @@ def _map_result(result: dict, Minv: np.ndarray, mpp: float) -> None:
         r["polygon"] = [f(p) for p in r["polygon"]]
 
 
+def _coverage(mask: np.ndarray, p0, p1, samples: int = 50) -> float:
+    h, w = mask.shape
+    return float(np.mean([mask[min(h - 1, max(0, int(p0[1] + f * (p1[1] - p0[1])))),
+                                min(w - 1, max(0, int(p0[0] + f * (p1[0] - p0[0]))))] > 0
+                          for f in np.linspace(0, 1, samples)]))
+
+
+def _prune_clutter(lines: list[WallLine], diagonals: list[dict], T: float, mpp: float, shape,
+                   warnings: list[str]) -> tuple[list[WallLine], list[dict]]:
+    """Keep the connected wall structure. Drop a drawing frame (a closed loop hugging the sheet edges that
+    encloses everything else, well clear of it, with no openings) and isolated groups of short strokes
+    (titles, symbols, dimension ticks) that never touch the building."""
+    import shapely
+    from shapely.geometry import LineString
+
+    segs = [(((ln.a0, ln.pos), (ln.a1, ln.pos)) if ln.orient == "h" else ((ln.pos, ln.a0), (ln.pos, ln.a1)), ln)
+            for ln in lines] + [((dg["p0"], dg["p1"]), dg) for dg in diagonals]
+    n = len(segs)
+    if n < 2:
+        return lines, diagonals
+    geoms = np.array([LineString(s) for s, _ in segs])
+    near = shapely.distance(geoms[:, None], geoms[None, :]) <= 1.5 * T + 2
+    parent = list(range(n))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i, j in zip(*np.nonzero(np.triu(near, 1))):
+        parent[root(i)] = root(j)
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(root(i), []).append(i)
+    clusters = list(groups.values())
+    length = lambda i: math.dist(*segs[i][0]) * mpp  # noqa: E731
+
+    def bbox(idx):
+        pts = np.array([p for i in idx for p in segs[i][0]])
+        return (*pts.min(axis=0), *pts.max(axis=0))
+
+    h, w = shape
+    drop: set[int] = set()
+    frames = clutter = 0
+    for c in clusters:
+        rest = [i for i in range(n) if i not in c]
+        if not rest:
+            continue
+        x0, y0, x1, y1 = bbox(c)
+        r0, s0, r1, s1 = bbox(rest)
+        hugs_sheet = x0 <= 0.08 * w and y0 <= 0.08 * h and x1 >= 0.92 * w and y1 >= 0.92 * h
+        clear = 0.5 / mpp
+        encloses = x0 < r0 - clear and y0 < s0 - clear and x1 > r1 + clear and y1 > s1 + clear
+        if hugs_sheet and encloses and not any(getattr(segs[i][1], "openings", None) for i in c):
+            drop.update(c)
+            frames += 1
+    kept = [c for c in clusters if not drop.intersection(c)]
+    if kept:
+        main = max(kept, key=lambda c: sum(length(i) for i in c))
+        for c in kept:
+            if c is not main and max(length(i) for i in c) < 1.2:
+                drop.update(c)
+                clutter += len(c)
+    if frames:
+        warnings.append("A drawing frame around the plan was ignored (it is not a wall).")
+    if clutter:
+        warnings.append(f"{clutter} short stroke(s) not connected to the building (titles, symbols or "
+                        "furniture) were ignored.")
+    return ([ln for i, (_, ln) in enumerate(segs[:len(lines)]) if i not in drop],
+            [dg for i, (_, dg) in enumerate(segs[len(lines):], len(lines)) if i not in drop])
+
+
 def _diagonal_segments(thick: np.ndarray, horiz: np.ndarray, vert: np.ndarray, lines: list[WallLine],
-                       T: float, mpp: float) -> list[dict]:
+                       T: float, mpp: float, min_coverage: float = 0.0) -> list[dict]:
     """Straight walls at non-axis angles: Hough segments on thick ink not explained by H/V walls,
-    clustered into centerlines and extended to meet the nearest wall."""
+    clustered into centerlines and extended to meet the nearest wall. Clusters whose fitted centerline
+    is not mostly on solid ink (Hough chains through lettering, hatching or symbols) are rejected."""
     k = int(2 * T) | 1
     covered = cv2.dilate(cv2.bitwise_or(horiz, vert), np.ones((k, k), np.uint8))
     resid = cv2.bitwise_and(thick, cv2.bitwise_not(covered))
@@ -384,6 +564,9 @@ def _diagonal_segments(thick: np.ndarray, horiz: np.ndarray, vert: np.ndarray, l
         if (t1 - t0) < min_len:
             continue
         base = (n[0] * c, n[1] * c)
+        if min_coverage and _coverage(thick, (base[0] + d[0] * t0, base[1] + d[1] * t0),
+                                      (base[0] + d[0] * t1, base[1] + d[1] * t1)) < min_coverage:
+            continue
         joined = 0
         for which in (0, 1):
             t = t0 if which == 0 else t1
@@ -414,10 +597,7 @@ def _diagonal_segments(thick: np.ndarray, horiz: np.ndarray, vert: np.ndarray, l
                     t1 = best
         p0 = (base[0] + d[0] * t0, base[1] + d[1] * t0)
         p1 = (base[0] + d[0] * t1, base[1] + d[1] * t1)
-        hits = [thick[min(thick.shape[0] - 1, max(0, int(p0[1] + f * (p1[1] - p0[1])))),
-                      min(thick.shape[1] - 1, max(0, int(p0[0] + f * (p1[0] - p0[0]))))] > 0
-                for f in np.linspace(0, 1, 50)]
-        out.append({"p0": p0, "p1": p1, "coverage": float(np.mean(hits)), "joined": joined})
+        out.append({"p0": p0, "p1": p1, "coverage": _coverage(thick, p0, p1), "joined": joined})
     return out
 
 
@@ -596,17 +776,23 @@ def parse_blueprint(
 ) -> dict:
     """Return {rooms, walls, openings, objects, warnings, defaults}. Raises ParseError."""
     opts = options or ParserOptions()
+    notes: list[str] = []
+    if opts.normalize:
+        gray, notes = normalize_drawing(gray)
     if opts.deskew:
         angle = skew_angle(gray)
         if angle is not None:
             rotated, Minv = _rotate(gray, angle)
             result = _parse(rotated, meters_per_pixel, wall_height, wall_thickness, progress, opts)
             _map_result(result, Minv, meters_per_pixel)
+            result["warnings"][:0] = notes
             result["warnings"].append(
                 f"The drawing is rotated by about {angle:.1f}°. It was straightened before parsing and the walls "
                 "were mapped back to the original image.")
             return result
-    return _parse(gray, meters_per_pixel, wall_height, wall_thickness, progress, opts)
+    result = _parse(gray, meters_per_pixel, wall_height, wall_thickness, progress, opts)
+    result["warnings"][:0] = notes
+    return result
 
 
 def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None, wall_thickness: float | None,
@@ -629,12 +815,24 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     if frac < 0.0005:
         raise ParseError("No drawing was found in the image (it is almost blank).")
     if frac > 0.45:
-        raise ParseError("The image is too dark or noisy to separate walls from background. Use a clean, high-contrast line drawing on a light background (not a photo or a filled/coloured plan).")
+        raise ParseError("The image is too noisy or too uniformly dark to separate the drawing from its background. "
+                         "Use a sharper scan or photo of the plan, cropped to the drawing (filled or photographic "
+                         "plans are not supported).")
     progress(0.2)
 
     T = estimate_thickness_px(ink)
     wall_ink = ink
-    if opts.outline_walls and math.isfinite(0.35 / mpp) and 0.35 / mpp < max(h_img, w_img) / 4:
+    hatched = None
+    if opts.hatch_walls and noise_sigma(gray) < NOISY_SIGMA:
+        hatched = _hatch_fill(gray, ink, mpp)
+        if hatched is not None and estimate_thickness_px(hatched) > T:
+            wall_ink = hatched
+            T = estimate_thickness_px(wall_ink)
+            warnings.append("Walls are drawn with hatching; the hatched bands were filled to find wall centerlines.")
+        else:
+            hatched = None
+    if (hatched is None and opts.outline_walls and math.isfinite(0.35 / mpp)
+            and 0.35 / mpp < max(h_img, w_img) / 4):
         # Accept the fill only when it clearly changes the drawing: much more ink and much thicker strokes.
         # Solid-wall plans gain little (only window glazing bands), so they are left untouched.
         filled = _fill_outline_walls(ink, mpp)
@@ -655,16 +853,36 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     L = max(int(3 * T) + 1, int(min_wall_px)) | 1
     horiz = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((1, L), np.uint8))
     vert = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((L, 1), np.uint8))
+    min_band = k
+    if opts.thin_walls and opts.thin_line_removal:
+        # Partitions are often much thinner than outer walls, and the opening above (sized from the dominant
+        # stroke) erases them. A second pass with a kernel just above line weight (no wall is thinner than
+        # ~5 cm) keeps long straight thin strokes that the first pass did not already explain.
+        k2 = max(3, int(0.05 / mpp)) | 1
+        if k2 < k:
+            # Drawn ink only: filled outline gaps (window glazing) must not come back as thin walls.
+            thin = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k2, k2)))
+            thin = cv2.bitwise_and(thin, cv2.bitwise_not(cv2.dilate(thick, np.ones((3, 3), np.uint8))))
+            L2 = max(L, int(0.6 / mpp)) | 1
+            h2 = cv2.morphologyEx(thin, cv2.MORPH_OPEN, np.ones((1, L2), np.uint8))
+            v2 = cv2.morphologyEx(thin, cv2.MORPH_OPEN, np.ones((L2, 1), np.uint8))
+            if h2.any() or v2.any():
+                horiz, vert = cv2.bitwise_or(horiz, h2), cv2.bitwise_or(vert, v2)
+                thick = cv2.bitwise_or(thick, cv2.bitwise_or(h2, v2))
+                min_band = k2
     progress(0.4)
 
     pier = thick if opts.pier_split else None
-    h_lines = _merge_lines(_bands(horiz, "h", k), soft_ink, T, mpp, warnings, opts.opening_detection, pier)
-    v_lines = _merge_lines(_bands(vert, "v", k), soft_ink, T, mpp, warnings, opts.opening_detection, pier)
+    h_lines = _merge_lines(_bands(horiz, "h", min_band), soft_ink, T, mpp, warnings, opts.opening_detection, pier)
+    v_lines = _merge_lines(_bands(vert, "v", min_band), soft_ink, T, mpp, warnings, opts.opening_detection, pier)
     if opts.endpoint_snap:
         _snap(h_lines, v_lines, T)
         _snap(v_lines, h_lines, T)
     lines = [ln for ln in h_lines + v_lines if (ln.a1 - ln.a0) * mpp >= MIN_WALL_M]
-    diagonals = _diagonal_segments(thick, horiz, vert, lines, T, mpp) if opts.diagonal_walls else []
+    diagonals = (_diagonal_segments(thick, horiz, vert, lines, T, mpp, 0.8 if opts.clutter_filter else 0.0)
+                 if opts.diagonal_walls else [])
+    if opts.clutter_filter:
+        lines, diagonals = _prune_clutter(lines, diagonals, T, mpp, (h_img, w_img), warnings)
 
     thick_px = int((thick > 0).sum())
     explained = cv2.bitwise_or(horiz, vert)

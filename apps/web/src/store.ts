@@ -15,6 +15,7 @@ import {
 } from './scene';
 import { defaultSnapSettings, type SnapSettings } from './snapping';
 import { deleteWall, recomputeRooms } from './wallGraph';
+import { rememberUnit, storedUnit, type LengthUnit } from './units';
 
 type Workspace = 'Reconstruct' | 'Edit' | 'Inspect' | 'Explore';
 type Mode = 'translate' | 'rotate' | 'scale';
@@ -48,6 +49,9 @@ type EditorState = {
   measure: boolean;
   measures: V3[];
   frame: number;
+  /** Unit for the scale reference and measurements (UI only; the scene stays in metres). */
+  lengthUnit: LengthUnit;
+  setLengthUnit: (unit: LengthUnit) => void;
   load: (scene: Scene | null) => void;
   select: (id: string | null) => void;
   commit: (mutate: (scene: Scene) => void) => boolean;
@@ -86,6 +90,11 @@ export const useEditor = create<EditorState>((set, get) => ({
   measure: false,
   measures: [],
   frame: 0,
+  lengthUnit: storedUnit(),
+  setLengthUnit: (unit) => {
+    rememberUnit(unit);
+    set({ lengthUnit: unit });
+  },
   load: (scene) =>
     set({
       scene: scene ? sceneSchema.parse(scene) : null,

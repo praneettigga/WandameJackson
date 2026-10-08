@@ -31,11 +31,15 @@ HEADLINE = ["wall_iou", "layout_iou", "room_f1", "room_mean_iou", "corner_f1", "
 
 
 def synthetic_cases(n: int, augmentations: list[str]):
+    """Each name is a style, an augmentation, or 'style+augmentation' (e.g. sheet+blueprint)."""
     for seed in range(n):
         base = generate(seed)
         for name in augmentations:
-            plan = generate(seed, **STYLES[name]) if name in STYLES else AUGMENTATIONS[name](base)
-            yield f"syn{seed:03d}", name, plan
+            style, _, aug = name.partition("+") if "+" in name else (None, "", name)
+            if style is None and name in STYLES:
+                style, aug = name, "clean"
+            plan = generate(seed, **STYLES[style]) if style else base
+            yield f"syn{seed:03d}", name, AUGMENTATIONS[aug](plan)
 
 
 def real_cases(folder: Path):

@@ -117,7 +117,7 @@ describe('HTTP edge cases and polling', () => {
     const api = new HttpApi(undefined, vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     await expect(api.health()).rejects.toMatchObject({
       code: 'NETWORK_ERROR',
-      message: expect.stringContaining('CORS'),
+      message: expect.stringContaining('npm run dev'),
     });
   });
   it('reports non-JSON server failures', async () => {

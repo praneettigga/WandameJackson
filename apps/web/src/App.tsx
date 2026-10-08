@@ -226,6 +226,25 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const error = (e: unknown) =>
     useEditor.setState({ error: e instanceof Error ? e.message : String(e) });
+  async function refreshApiHealth() {
+    const result = await api.health();
+    if (result.status !== 'ok' || result.schemaVersion !== '0.1.0') {
+      setHealth('API version mismatch');
+      throw new Error('The API version does not match this web app.');
+    }
+    setHealth('API connected');
+  }
+  async function ensureApiReady() {
+    try {
+      await refreshApiHealth();
+    } catch (cause) {
+      setHealth('API offline');
+      const detail = cause instanceof Error ? ` ${cause.message}` : '';
+      throw new Error(
+        `The API is unavailable. From the repository root, run \"npm run dev\", wait for the API to connect, then retry.${detail}`,
+      );
+    }
+  }
   const guarded = async (action: () => Promise<void>) => {
     if (useEditor.getState().busy) return;
     setWorking(true);
@@ -288,16 +307,7 @@ export default function App() {
     );
   }
   useEffect(() => {
-    api
-      .health()
-      .then((result) =>
-        setHealth(
-          result.status === 'ok' && result.schemaVersion === '0.1.0'
-            ? 'API connected'
-            : 'API version mismatch',
-        ),
-      )
-      .catch(() => setHealth('API offline'));
+    void refreshApiHealth().catch(() => setHealth('API offline'));
     if (api.mock) void guarded(() => loadProject('demo-room'));
     return () => polling.current?.abort();
     // Startup only; subsequent loads are explicit to protect local edits.
@@ -1259,6 +1269,7 @@ export default function App() {
           files={pendingFiles}
           existing={state.assembly}
           previous={addFiles.current && !state.assembly ? project : null}
+          ensureApiReady={ensureApiReady}
           onCancel={() => {
             setPendingFiles(null);
             useEditor.setState({ busy: false });

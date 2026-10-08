@@ -82,7 +82,7 @@ export class HttpApi implements RoomshiftApi {
       throw new ApiError(
         0,
         'NETWORK_ERROR',
-        `Cannot reach the API at ${this.baseUrl}. Check the server and CORS configuration. ${error instanceof Error ? error.message : ''}`,
+        `Cannot reach the API at ${this.baseUrl}. For local development, run \"npm run dev\" from the repository root. Otherwise check VITE_API_BASE_URL and CORS configuration. ${error instanceof Error ? error.message : ''}`,
       );
     }
     const body = await response.json().catch(() => null);

@@ -230,7 +230,10 @@ describe('application integration without WebGL', () => {
         ),
       },
     });
-    fireEvent.click(await screen.findByRole('button', { name: 'Different buildings' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Multiple buildings & floors' }));
+    expect(
+      screen.getByText(/Use its Building menu to group multiple blueprints as floors/),
+    ).toBeInTheDocument();
     const assignments = screen.getAllByLabelText('Building');
     fireEvent.change(assignments[1], {
       target: { value: (assignments[0] as HTMLSelectElement).value },
@@ -238,6 +241,25 @@ describe('application integration without WebGL', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create grouped project' }));
     await waitFor(() => expect(useEditor.getState().assembly?.buildings).toHaveLength(2));
     expect(useEditor.getState().assembly!.buildings.map((b) => b.floors.length)).toEqual([2, 1]);
+  });
+  it('blocks grouped creation until the API health check succeeds', async () => {
+    vi.spyOn(api, 'health').mockRejectedValue(new Error('Load failed'));
+    const createProject = vi.spyOn(api, 'createProject');
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reconstruct' }));
+    fireEvent.change(screen.getByLabelText('Upload blueprint'), {
+      target: {
+        files: [
+          new File(['image'], 'Ground.png', { type: 'image/png' }),
+          new File(['image'], 'First.png', { type: 'image/png' }),
+        ],
+      },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Floors of the same building' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create grouped project' }));
+    await screen.findByText(/From the repository root, run \"npm run dev\"/);
+    expect(createProject).not.toHaveBeenCalled();
   });
   it('performs two-point visual calibration and mock job polling, then opens the fixture', async () => {
     const reconstruct = vi.spyOn(api, 'reconstruct');

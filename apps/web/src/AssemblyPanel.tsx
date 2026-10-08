@@ -17,12 +17,14 @@ export function BlueprintWizard({
   files,
   existing,
   previous,
+  ensureApiReady,
   onComplete,
   onCancel,
 }: {
   files: File[];
   existing: Assembly | null;
   previous: ProjectEnvelope | null;
+  ensureApiReady: () => Promise<void>;
   onComplete: (result: AssemblyEnvelope) => void;
   onCancel: () => void;
 }) {
@@ -88,6 +90,7 @@ export function BlueprintWizard({
         )
       )
         throw new Error('Set building assignments, floor names, and valid floor heights.');
+      await ensureApiReady();
       for (const [index, row] of rows.entries()) {
         if (complete[index]) continue;
         setMessage(`Uploading ${index + 1} of ${rows.length}: ${row.file.name}`);
@@ -164,7 +167,7 @@ export function BlueprintWizard({
             className={mode === 'buildings' ? 'active' : ''}
             onClick={() => choose('buildings')}
           >
-            Different buildings
+            Multiple buildings & floors
           </button>
         </div>
         {mode && (
@@ -190,6 +193,12 @@ export function BlueprintWizard({
                 </label>
               ))}
             </div>
+            {mode === 'buildings' && (
+              <p className="hint">
+                Each blueprint starts in its own building. Use its Building menu to group multiple
+                blueprints as floors in the same building.
+              </p>
+            )}
             <div className="blueprint-rows">
               {rows.map((row, i) => (
                 <div className="blueprint-row" key={row.file.name + i}>

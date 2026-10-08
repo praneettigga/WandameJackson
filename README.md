@@ -4,7 +4,11 @@ Upload a floor-plan PNG/JPEG, mark a known measurement, reconstruct a metric roo
 
 ## Run locally
 
-Use Python 3.12+ and Node 22.12+. From the repository root, start the backend:
+Use Python 3.12+ and Node 22.12+. The current checkout directory contains `:`
+(`National-Round:Hacknex`), which Python and Vitest/Vite treat as a path/URL
+separator. Move or clone this repository into a directory without `:` before
+running it (for example, `~/Projects/WandameJackson`). From the repository
+root, start the backend:
 
 ```bash
 cd services/api

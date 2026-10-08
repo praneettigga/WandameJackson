@@ -1,0 +1,52 @@
+{
+  "synthetic": true,
+  "generator": "built-in image_gen",
+  "purpose": "Unlabelled floor-plan inputs for exploratory ROOMSHIFT testing",
+  "notes": [
+    "Prompts describe intended layouts, not verified ground truth.",
+    "No metric scale or geometry annotations are supplied. Choose an explicit assumed measurement when calibrating in the app.",
+    "Parser compatibility has not been tested. Image 10 includes an additional entry corridor and a window at a partition junction."
+  ],
+  "images": [
+    {
+      "file": "synthetic-01-single-room.png",
+      "prompt": "Use case: scientific-educational\nAsset type: synthetic floor-plan PNG dataset input for ROOMSHIFT room reconstruction.\nPrimary request: A single empty rectangular room, wider than tall, with one entrance door in the lower wall and one window in the upper wall.\nStyle: clean flat black-and-white architectural raster drawing on pure white, strictly top-down orthographic 2D, thick solid black straight horizontal and vertical walls, fine door swing arcs and thin parallel window lines in wall gaps. Square canvas with generous white margins; entire plan visible. Walls must connect cleanly at right angles; no diagonal walls. Empty white interiors. No furniture, text, dimension labels, grid, title, scale bars, colors, shading, perspective, watermarks, or page borders. One floor plan only, not a collage."
+    },
+    {
+      "file": "synthetic-02-square-room.png",
+      "prompt": "Use case: scientific-educational\nAsset type: synthetic floor-plan PNG dataset input for ROOMSHIFT room reconstruction.\nPrimary request: A single empty square room with a door in the left wall and two windows on opposite walls.\nStyle: clean flat black-and-white architectural raster drawing on pure white, strictly top-down orthographic 2D, thick solid black straight horizontal and vertical walls, fine door swing arcs and thin parallel window lines in wall gaps. Square canvas with generous white margins; entire plan visible. Walls must connect cleanly at right angles; no diagonal walls. Empty white interiors. No furniture, text, dimension labels, grid, title, scale bars, colors, shading, perspective, watermarks, or page borders. One floor plan only, not a collage."
+    },
+    {
+      "file": "synthetic-03-long-room.png",
+      "prompt": "Use case: scientific-educational\nAsset type: synthetic floor-plan PNG dataset input for ROOMSHIFT room reconstruction.\nPrimary request: A single long narrow rectangular room, horizontal, with an entrance on a short wall and two windows on the upper long wall.\nStyle: clean flat black-and-white architectural raster drawing on pure white, strictly top-down orthographic 2D, thick solid black straight horizontal and vertical walls, fine door swing arcs and thin parallel window lines in wall gaps. Square canvas with generous white margins; entire plan visible. Walls must connect cleanly at right angles; no diagonal walls. Empty white interiors. No furniture, text, dimension labels, grid, title, scale bars, colors, shading, perspective, watermarks, or page borders. One floor plan only, not a collage."
+    },
+    {
+      "file": "synthetic-04-two-rooms.png",
+      "prompt": "Use case: scientific-educational\nAsset type: synthetic floor-plan PNG dataset input for ROOMSHIFT room reconstruction.\nPrimary request: Two empty rectangular rooms side by side inside one rectangular perimeter, a shared vertical partition with one connecting door, an exterior entrance and one window per room.\nStyle: clean flat black-and-white architectural raster drawing on pure white, strictly top-down orthographic 2D, thick solid black straight horizontal and vertical walls, fine door swing arcs and thin parallel window lines in wall gaps. Square canvas with generous white margins; entire plan visible. Walls must connect cleanly at right angles; no diagonal walls. Empty white interiors. No furniture, text, dimension labels, grid, title, scale bars, colors, shading, perspective, watermarks, or page borders. One floor plan only, not a collage."
+    },
+    {
+      "file": "synthetic-05-three-rooms.png",
+      "prompt": "Use case: scientific-educational\nAsset type: synthetic floor-plan PNG dataset input for ROOMSHIFT room reconstruction.\nPrimary request: Three empty rooms: one large room on the left and two smaller stacked rooms on the right, inside a rectangular perimeter. Two doors in the vertical partition connect the large room to each small room, with one exterior entrance and exterior windows.\nStyle: clean flat black-and-white architectural raster drawing on pure white, strictly top-down orthographic 2D, thick solid black straight horizontal and vertical walls, fine door swing arcs and thin parallel window lines in wall gaps. Square canvas with generous white margins; entire plan visible. Walls must connect cleanly at right angles; no diagonal walls. Empty white interiors. No furniture, text, dimension labels, grid, title, scale bars, colors, shading, perspective, watermarks, or page borders. One floor plan only, not a collage."
+    },
+    {
+      "file": "synthetic-06-four-rooms.png",
+      "prompt": "Use case: scientific-educational\nAsset type: synthetic floor-plan PNG dataset input for ROOMSHIFT room reconstruction.\nPrimary request: Four empty rectangular rooms in a two by two layout inside a rectangular perimeter, with connected internal door openings, one exterior entrance and exterior windows.\nStyle: clean flat black-and-white architectural raster drawing on pure white, strictly top-down orthographic 2D, thick solid black straight horizontal and vertical walls, fine door swing arcs and thin parallel window lines in wall gaps. Square canvas with generous white margins; entire plan visible. Walls must connect cleanly at right angles; no diagonal walls. Empty white interiors. No furniture, text, dimension labels, grid, title, scale bars, colors, shading, perspective, watermarks, or page borders. One floor plan only, not a collage."
+    },
+    {
+      "file": "synthetic-07-l-shaped-room.png",
+      "prompt": "Use case: scientific-educational\nAsset type: synthetic floor-plan PNG dataset input for ROOMSHIFT room reconstruction.\nPrimary request: One empty L-shaped room with a six-corner orthogonal exterior boundary, one entrance door and two exterior windows. No internal partitions.\nStyle: clean flat black-and-white architectural raster drawing on pure white, strictly top-down orthographic 2D, thick solid black straight horizontal and vertical walls, fine door swing arcs and thin parallel window lines in wall gaps. Square canvas with generous white margins; entire plan visible. Walls must connect cleanly at right angles; no diagonal walls. Empty white interiors. No furniture, text, dimension labels, grid, title, scale bars, colors, shading, perspective, watermarks, or page borders. One floor plan only, not a collage."
+    },
+    {
+      "file": "synthetic-08-hallway-layout.png",
+      "prompt": "Use case: scientific-educational\nAsset type: synthetic floor-plan PNG dataset input for ROOMSHIFT room reconstruction.\nPrimary request: A small empty apartment plan with a central horizontal corridor, two rooms above and one large room below, rectangular exterior perimeter. Each room has a door to the corridor and an exterior window; one entrance at the corridor end.\nStyle: clean flat black-and-white architectural raster drawing on pure white, strictly top-down orthographic 2D, thick solid black straight horizontal and vertical walls, fine door swing arcs and thin parallel window lines in wall gaps. Square canvas with generous white margins; entire plan visible. Walls must connect cleanly at right angles; no diagonal walls. Empty white interiors. No furniture, text, dimension labels, grid, title, scale bars, colors, shading, perspective, watermarks, or page borders. One floor plan only, not a collage."
+    },
+    {
+      "file": "synthetic-09-studio-layout.png",
+      "prompt": "Use case: scientific-educational\nAsset type: synthetic floor-plan PNG dataset input for ROOMSHIFT room reconstruction.\nPrimary request: An empty rectangular studio floor plan with one small enclosed bathroom rectangle in the upper right corner, a door into the bathroom, one external entrance, and two exterior windows. No sanitary fixtures or furniture.\nStyle: clean flat black-and-white architectural raster drawing on pure white, strictly top-down orthographic 2D, thick solid black straight horizontal and vertical walls, fine door swing arcs and thin parallel window lines in wall gaps. Square canvas with generous white margins; entire plan visible. Walls must connect cleanly at right angles; no diagonal walls. Empty white interiors. No furniture, text, dimension labels, grid, title, scale bars, colors, shading, perspective, watermarks, or page borders. One floor plan only, not a collage."
+    },
+    {
+      "file": "synthetic-10-offset-partitions.png",
+      "prompt": "Use case: scientific-educational\nAsset type: synthetic floor-plan PNG dataset input for ROOMSHIFT room reconstruction.\nPrimary request: An empty rectangular apartment plan with three rooms divided by a vertical partition and an offset horizontal partition on the left. Door openings connect all rooms, with an exterior entrance and three exterior windows.\nStyle: clean flat black-and-white architectural raster drawing on pure white, strictly top-down orthographic 2D, thick solid black straight horizontal and vertical walls, fine door swing arcs and thin parallel window lines in wall gaps. Square canvas with generous white margins; entire plan visible. Walls must connect cleanly at right angles; no diagonal walls. Empty white interiors. No furniture, text, dimension labels, grid, title, scale bars, colors, shading, perspective, watermarks, or page borders. One floor plan only, not a collage."
+    }
+  ]
+}

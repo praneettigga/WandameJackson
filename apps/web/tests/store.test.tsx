@@ -131,3 +131,31 @@ describe('semantic editor state', () => {
     expect(height).toHaveTextContent('inferred');
   });
 });
+describe('wall topology edits', () => {
+  it('commits a drawn wall and the rebuilt rooms as one undo step', async () => {
+    const { addWall } = await import('../src/wallGraph');
+    expect(useEditor.getState().wallEdit((s) => void addWall(s, [4.5, 1], [4.5, 4]))).toBe(true);
+    expect(useEditor.getState().scene!.rooms).toHaveLength(2);
+    expect(useEditor.getState().notice).toContain('New room');
+    useEditor.getState().undo();
+    expect(useEditor.getState().scene!.rooms).toHaveLength(1);
+    expect(useEditor.getState().scene!.walls).toHaveLength(4);
+  });
+  it('deletes walls with their openings and openings on their own', () => {
+    useEditor.getState().select('window-1');
+    useEditor.getState().remove();
+    expect(useEditor.getState().scene!.openings.map((o) => o.id)).toEqual(['door-1']);
+    useEditor.getState().select('wall-s');
+    window.confirm = () => true;
+    useEditor.getState().remove();
+    expect(useEditor.getState().scene!.walls).toHaveLength(3);
+    expect(useEditor.getState().scene!.openings).toHaveLength(0);
+    expect(useEditor.getState().scene!.rooms).toHaveLength(0);
+  });
+  it('rejects a wall edit that breaks an opening and leaves history unchanged', async () => {
+    const { moveNode } = await import('../src/wallGraph');
+    expect(useEditor.getState().wallEdit((s) => moveNode(s, [5, 1], [2, 1]))).toBe(false);
+    expect(useEditor.getState().error).toMatch(/off its wall/);
+    expect(useEditor.getState().past).toHaveLength(0);
+  });
+});

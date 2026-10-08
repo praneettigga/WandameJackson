@@ -47,9 +47,9 @@ function reanchor(scene: Scene, before: Wall, after: Wall) {
     if (o.wallId !== before.id) return o;
     const centre = at(before, o.offset + o.width / 2);
     const offset = r4(along(after, centre) - o.width / 2);
-    if (Math.abs(offset - o.offset) < 1e-6) return o;
     if (offset < -1e-6 || offset + o.width > wallLength(after) + 1e-6)
       throw new Error(`The edit would push ${o.type} ${o.id} off its wall.`);
+    if (Math.abs(offset - o.offset) < 1e-6) return o;
     return editEntity(o, { offset: Math.max(0, offset) });
   });
 }

@@ -8,9 +8,11 @@ import {
   wallLength,
   type Entity,
   type Origin,
+  type V2,
   type V3,
 } from './scene';
 import { useEditor } from './store';
+import { moveNode, splitWall } from './wallGraph';
 import { confidenceColors, originColors, originDescriptions, originLabels } from './geometry';
 
 export function OriginTag({ origin }: { origin: Origin }) {
@@ -291,8 +293,58 @@ export function Inspector() {
                   step={0.01}
                   onCommit={(n) => patch('thickness', n)}
                 />
+                <div className="field-label">
+                  Centerline <OriginTag origin={fieldOrigin(entity, 'start')} />
+                </div>
+                {(['start', 'end'] as const).map((end) => (
+                  <div className="vector-fields" key={end}>
+                    {['X', 'Z'].map((axis, i) => (
+                      <NumberField
+                        key={axis}
+                        label={`${end === 'start' ? 'Start' : 'End'} ${axis}`}
+                        value={entity[end][i]}
+                        step={state.gridStep}
+                        onCommit={(n) => {
+                          const to: V2 = [...entity[end]];
+                          to[i] = n;
+                          state.wallEdit((scene) => moveNode(scene, entity[end], to));
+                        }}
+                      />
+                    ))}
+                  </div>
+                ))}
+                <NumberField
+                  label="Length"
+                  value={wallLength(entity)}
+                  step={state.gridStep}
+                  onCommit={(n) => {
+                    const l = wallLength(entity);
+                    if (n <= 0) return useEditor.setState({ error: 'Length must be positive.' });
+                    const to: V2 = [
+                      entity.start[0] + ((entity.end[0] - entity.start[0]) / l) * n,
+                      entity.start[1] + ((entity.end[1] - entity.start[1]) / l) * n,
+                    ];
+                    state.wallEdit((scene) => moveNode(scene, entity.end, to));
+                  }}
+                />
+                <div className="button-row">
+                  <button
+                    onClick={() =>
+                      state.wallEdit((scene) => {
+                        splitWall(scene, entity.id, [
+                          (entity.start[0] + entity.end[0]) / 2,
+                          (entity.start[1] + entity.end[1]) / 2,
+                        ]);
+                      })
+                    }
+                  >
+                    Split
+                  </button>
+                  <button onClick={state.remove}>Delete</button>
+                </div>
                 <p className="hint">
-                  Centerline topology is fixed. Changes must preserve opening fit.
+                  Drag the amber end handles or the cyan middle handle in the viewport. Rooms are
+                  rebuilt from the walls; doors and windows keep their position.
                 </p>
               </>
             )}
@@ -312,8 +364,12 @@ export function Inspector() {
                   />
                 ))}
                 <p className="hint">
-                  Offset starts at wall.start. Doors must have a bottom of 0 m.
+                  Offset starts at wall.start. Doors must have a bottom of 0 m. Drag the handle in
+                  the viewport to slide it along the wall.
                 </p>
+                <button className="wide" onClick={state.remove}>
+                  Delete opening
+                </button>
               </>
             )}
             {'polygon' in entity && (

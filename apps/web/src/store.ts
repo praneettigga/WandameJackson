@@ -12,9 +12,11 @@ import {
   type V3,
 } from './scene';
 import { defaultSnapSettings, type SnapSettings } from './snapping';
+import { deleteWall, recomputeRooms } from './wallGraph';
 
 type Workspace = 'Reconstruct' | 'Edit' | 'Inspect' | 'Explore';
 type Mode = 'translate' | 'rotate' | 'scale';
+export type Tool = 'select' | 'wall' | 'door' | 'window';
 type EditorState = {
   scene: Scene | null;
   selectedId: string | null;
@@ -31,6 +33,11 @@ type EditorState = {
   snapSettings: SnapSettings;
   /** Current zoom-adaptive grid step in metres. */
   gridStep: number;
+  tool: Tool;
+  /** Furniture turns its back to a wall when snapped flush. */
+  wallAlign: boolean;
+  /** Last informational message from a wall edit (rooms created/removed). */
+  notice: string | null;
   xray: boolean;
   confidenceMap: boolean;
   ceilings: boolean;
@@ -42,6 +49,8 @@ type EditorState = {
   load: (scene: Scene | null) => void;
   select: (id: string | null) => void;
   commit: (mutate: (scene: Scene) => void) => boolean;
+  /** Topology edit: applies `mutate`, rebuilds rooms from walls, and commits as one undo step. */
+  wallEdit: (mutate: (scene: Scene) => void) => boolean;
   patch: (id: string, patch: Record<string, unknown>) => void;
   add: (componentId: string) => void;
   duplicate: () => void;
@@ -64,6 +73,9 @@ export const useEditor = create<EditorState>((set, get) => ({
   snap: true,
   snapSettings: defaultSnapSettings,
   gridStep: 0.1,
+  tool: 'select',
+  wallAlign: true,
+  notice: null,
   xray: false,
   confidenceMap: false,
   ceilings: false,
@@ -85,6 +97,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       compare: false,
       measure: false,
       measures: [],
+      tool: 'select',
+      notice: null,
       workspace: scene ? 'Edit' : 'Reconstruct',
       frame: get().frame + 1,
     }),
@@ -103,6 +117,15 @@ export const useEditor = create<EditorState>((set, get) => ({
       set({ error: e instanceof Error ? e.message : String(e) });
       return false;
     }
+  },
+  wallEdit: (mutate) => {
+    let notes: string[] = [];
+    const ok = get().commit((scene) => {
+      mutate(scene);
+      notes = recomputeRooms(scene);
+    });
+    if (ok) set({ notice: notes.length ? notes.join(' ') : null });
+    return ok;
   },
   patch: (id, patch) =>
     get().commit((scene) => {
@@ -158,14 +181,25 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
   remove: () => {
     const id = get().selectedId;
-    // Architectural topology is intentionally read-only. Delete is for furniture.
-    if (!get().scene?.objects.some((o) => o.id === id)) return;
-    if (
-      get().commit((scene) => {
-        scene.objects = scene.objects.filter((o) => o.id !== id);
-      })
-    )
-      set({ selectedId: null });
+    const scene = get().scene;
+    if (!scene || !id) return;
+    let ok = false;
+    if (scene.objects.some((o) => o.id === id))
+      ok = get().commit((s) => {
+        s.objects = s.objects.filter((o) => o.id !== id);
+      });
+    else if (scene.openings.some((o) => o.id === id))
+      ok = get().commit((s) => {
+        s.openings = s.openings.filter((o) => o.id !== id);
+      });
+    else if (scene.walls.some((w) => w.id === id)) {
+      const hosted = scene.openings.filter((o) => o.wallId === id).length;
+      if (hosted && typeof window !== 'undefined' && !window.confirm(`Delete this wall and its ${hosted} door/window opening(s)?`))
+        return;
+      ok = get().wallEdit((s) => deleteWall(s, id));
+    }
+    // Rooms are derived from walls and are never deleted directly.
+    if (ok) set({ selectedId: null });
   },
   undo: () => {
     const s = get();

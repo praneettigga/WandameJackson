@@ -1157,3 +1157,42 @@ body:has(.explore-overlay) canvas {
     right: 10px;
   }
 }
+
+.snap-glyph {
+  font: 600 10px/1.2 ui-monospace, monospace;
+  color: #11181b;
+  background: #f3bd63;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  transform: translateY(-18px);
+}
+.snap-glyph.snap-endpoint,
+.snap-glyph.snap-intersection,
+.snap-glyph.snap-midpoint,
+.snap-glyph.snap-perpendicular,
+.snap-glyph.snap-guide {
+  background: #66d9e8;
+}
+.wall-notice {
+  position: absolute;
+  top: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #2b3438;
+  border: 1px solid #66d9e8;
+  color: #dce7ea;
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  max-width: 70%;
+}
+.wall-notice button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}

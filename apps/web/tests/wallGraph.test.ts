@@ -42,7 +42,7 @@ describe('wall graph', () => {
     expect(scene.openings.find((o) => o.id === 'window-1')!.offset).toBeCloseTo(window.offset + 0.5);
     recomputeRooms(scene);
     expect(scene.rooms[0].id).toBe('room-1');
-    expect(area(scene.rooms[0].polygon)).toBeCloseTo(13.5);
+    expect(area(scene.rooms[0].polygon)).toBeCloseTo(12.75);
     expect(() => validateScene(scene)).not.toThrow();
   });
   it('moves a whole wall along its normal and stretches neighbours', () => {
@@ -56,14 +56,17 @@ describe('wall graph', () => {
     const scene = demoScene();
     expect(() => moveNode(scene, [5, 1], [2, 1])).toThrow(/off its wall/);
   });
+  it('refuses to split a wall through an opening', () => {
+    expect(() => addWall(demoScene(), [3.5, 1], [3.5, 4])).toThrow(/door or window/);
+  });
   it('drawing a wall across the room splits it into two rooms', () => {
     const scene = demoScene();
-    const added = addWall(scene, [3.5, 1], [3.5, 4]);
+    const added = addWall(scene, [4.5, 1], [4.5, 4]);
     expect(added).toHaveLength(1);
     expect(scene.walls).toHaveLength(7); // n and s were split
     const notes = recomputeRooms(scene);
     expect(scene.rooms).toHaveLength(2);
-    expect(scene.rooms.map((r) => area(r.polygon)).sort()).toEqual([4.5, 7.5]);
+    expect(scene.rooms.map((r) => area(r.polygon)).sort()).toEqual([1.5, 10.5]);
     expect(scene.rooms.some((r) => r.id === 'room-1')).toBe(true);
     expect(notes.some((n) => n.includes('New room'))).toBe(true);
     expect(() => validateScene(scene)).not.toThrow();

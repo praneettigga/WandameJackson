@@ -42,6 +42,24 @@ class ParseError(Exception):
     """No usable geometry; message is user-actionable."""
 
 
+@dataclass(frozen=True)
+class ParserOptions:
+    """Pipeline stages that can be switched off for ablation studies. Production uses the defaults."""
+
+    deskew: bool = True  # straighten slightly rotated drawings, then map results back
+    outline_walls: bool = True  # fill double-line (outline) walls drawn as two thin parallel strokes
+    diagonal_walls: bool = True  # straight walls at any angle, from residual thick ink
+    endpoint_snap: bool = True  # snap wall ends to perpendicular centerlines
+    opening_detection: bool = True  # classify wall gaps as doors/windows (otherwise gaps split walls)
+    thin_line_removal: bool = True  # morphological opening that drops text, arcs and glazing lines
+
+    @classmethod
+    def ablations(cls) -> dict[str, "ParserOptions"]:
+        """Full pipeline plus each stage disabled on its own."""
+        names = [f for f in cls.__dataclass_fields__]
+        return {"full": cls(), **{f"no_{n}": cls(**{n: False}) for n in names}}
+
+
 @dataclass
 class Band:
     orient: str  # "h" (runs along x, fixed y) or "v" (runs along y, fixed x)
@@ -106,7 +124,8 @@ def _bands(mask: np.ndarray, orient: str, min_thick: int) -> list[Band]:
     return out
 
 
-def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warnings: list[str]) -> list[WallLine]:
+def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warnings: list[str],
+                 detect_openings: bool = True) -> list[WallLine]:
     lines: list[WallLine] = []
     bands = sorted(bands, key=lambda b: b.pos)
     clusters: list[list[Band]] = []
@@ -132,6 +151,10 @@ def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warni
             filled = float(band.any(axis=0).mean()) if band.size else 0.0
             if gap_m < 0.1:
                 kind = None
+            elif not detect_openings:
+                lines.append(cur)
+                cur = WallLine(b.orient, pos, b.a0, b.a1, thick)
+                continue
             elif filled >= 0.8 and gap_m >= MIN_WINDOW_M:
                 kind = "window"
             elif filled <= 0.2 and DOOR_RANGE_M[0] <= gap_m <= DOOR_RANGE_M[1]:
@@ -163,9 +186,13 @@ def _snap(lines: list[WallLine], perpendicular: list[WallLine], T: float) -> Non
                 ln.joined += 1
 
 
-def _rooms(lines: list[WallLine], shape, T: float, mpp: float) -> list[list[list[float]]]:
+def _rooms(lines: list[WallLine], shape, T: float, mpp: float,
+           extra: list[tuple[tuple[float, float], tuple[float, float]]] = ()) -> list[list[list[float]]]:
     h, w = shape
     closure = np.zeros((h, w), np.uint8)
+    for p0, p1 in extra:
+        cv2.line(closure, (int(round(p0[0])), int(round(p0[1]))), (int(round(p1[0])), int(round(p1[1]))), 255,
+                 max(1, int(math.ceil(T))) + 1)
     for ln in lines:
         lo, hi = ln.pos - T / 2, ln.pos + T / 2
         a0, a1 = min(ln.a0, ln.a1) - T / 2, max(ln.a0, ln.a1) + T / 2
@@ -195,6 +222,146 @@ def _rooms(lines: list[WallLine], shape, T: float, mpp: float) -> list[list[list
         coords = list(poly.exterior.coords)[:-1]
         polys.append(([[round(px * mpp, 4), round(py * mpp, 4)] for px, py in coords], coords))
     return polys
+
+
+# --- robustness stages (each can be disabled via ParserOptions) ----------------
+
+def _fill_outline_walls(ink: np.ndarray, mpp: float) -> np.ndarray:
+    """Fill the space between two thin parallel strokes up to ~0.35 m apart (outline-style walls).
+
+    Directional closings only bridge across a wall, so door gaps along the wall stay open."""
+    gap = max(3, int(round(0.35 / mpp))) | 1
+    across_h = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((gap, 1), np.uint8))  # between horizontal strokes
+    across_v = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((1, gap), np.uint8))  # between vertical strokes
+    # Keep only fills that run along a wall: they must survive an opening along the wall direction.
+    long_k = max(3, int(round(0.5 / mpp)))
+    fill_h = cv2.morphologyEx(cv2.bitwise_and(across_h, cv2.bitwise_not(ink)), cv2.MORPH_OPEN, np.ones((1, long_k), np.uint8))
+    fill_v = cv2.morphologyEx(cv2.bitwise_and(across_v, cv2.bitwise_not(ink)), cv2.MORPH_OPEN, np.ones((long_k, 1), np.uint8))
+    return cv2.bitwise_or(ink, cv2.bitwise_or(fill_h, fill_v))
+
+
+def _looks_outlined(ink: np.ndarray, T: float) -> bool:
+    """Thin strokes dominate and the thick-wall mask keeps little of the drawing."""
+    if T < 2:
+        return True
+    k = max(3, int(round(T * 0.6))) | 1
+    thick = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+    return float((thick > 0).sum()) < 0.25 * float((ink > 0).sum())
+
+
+def skew_angle(gray: np.ndarray) -> float | None:
+    """Dominant drawing angle in degrees (image coordinates, in [-45, 45)) when the plan is rotated."""
+    _, ink = cv2.threshold(cv2.GaussianBlur(gray, (3, 3), 0), 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    T = estimate_thickness_px(ink)
+    k = max(3, int(round(max(T, 2) * 0.6))) | 1
+    thick = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+    min_len = int(0.08 * min(gray.shape))
+    segs = cv2.HoughLinesP(thick, 1, np.pi / 720, threshold=max(20, min_len // 2),
+                           minLineLength=max(10, min_len), maxLineGap=max(2, int(T)))
+    if segs is None:
+        return None
+    angles, weights = [], []
+    for x0, y0, x1, y1 in segs[:, 0]:
+        a = math.degrees(math.atan2(float(y1 - y0), float(x1 - x0)))
+        angles.append((a + 45) % 90 - 45)
+        weights.append(math.hypot(float(x1 - x0), float(y1 - y0)))
+    order = np.argsort(angles)
+    cum = np.cumsum(np.array(weights)[order])
+    median = float(np.array(angles)[order][np.searchsorted(cum, cum[-1] / 2)])
+    return median if 0.4 <= abs(median) <= 20 else None
+
+
+def _rotate(gray: np.ndarray, angle: float) -> tuple[np.ndarray, np.ndarray]:
+    """Rotate so lines at `angle` (image degrees) become axis-aligned, on an expanded white canvas.
+    Returns (image, inverse 2x3 affine mapping rotated pixels back to original pixels)."""
+    h, w = gray.shape
+    # getRotationMatrix2D uses a counter-clockwise angle in a y-down image, i.e. it removes `angle`.
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+    cos, sin = abs(M[0, 0]), abs(M[0, 1])
+    nw, nh = int(math.ceil(h * sin + w * cos)), int(math.ceil(h * cos + w * sin))
+    M[0, 2] += nw / 2 - w / 2
+    M[1, 2] += nh / 2 - h / 2
+    out = cv2.warpAffine(gray, M, (nw, nh), flags=cv2.INTER_LINEAR, borderValue=255)
+    return out, cv2.invertAffineTransform(M)
+
+
+def _map_result(result: dict, Minv: np.ndarray, mpp: float) -> None:
+    def f(p):
+        x, y = p[0] / mpp, p[1] / mpp
+        return [round(float(Minv[0, 0] * x + Minv[0, 1] * y + Minv[0, 2]) * mpp, 4),
+                round(float(Minv[1, 0] * x + Minv[1, 1] * y + Minv[1, 2]) * mpp, 4)]
+    for w in result["walls"]:
+        w["start"], w["end"] = f(w["start"]), f(w["end"])
+    for r in result["rooms"]:
+        r["polygon"] = [f(p) for p in r["polygon"]]
+
+
+def _diagonal_segments(thick: np.ndarray, horiz: np.ndarray, vert: np.ndarray, lines: list[WallLine],
+                       T: float, mpp: float) -> list[dict]:
+    """Straight walls at non-axis angles: Hough segments on thick ink not explained by H/V walls,
+    clustered into centerlines and extended to meet the nearest wall."""
+    k = int(2 * T) | 1
+    covered = cv2.dilate(cv2.bitwise_or(horiz, vert), np.ones((k, k), np.uint8))
+    resid = cv2.bitwise_and(thick, cv2.bitwise_not(covered))
+    min_len = max(3 * T, MIN_WALL_M / mpp)
+    segs = cv2.HoughLinesP(resid, 1, np.pi / 360, threshold=max(10, int(min_len / 2)),
+                           minLineLength=int(min_len), maxLineGap=max(2, int(T)))
+    if segs is None:
+        return []
+    clusters: list[dict] = []
+    for x0, y0, x1, y1 in segs[:, 0].astype(float):
+        theta = math.atan2(y1 - y0, x1 - x0) % math.pi
+        deg = math.degrees(theta) % 90
+        if deg < 5 or deg > 85:
+            continue
+        d = (math.cos(theta), math.sin(theta))
+        n = (-d[1], d[0])
+        c = n[0] * x0 + n[1] * y0
+        for cl in clusters:
+            dt = abs(theta - cl["theta"])
+            if min(dt, math.pi - dt) < math.radians(3) and abs(c - cl["c"]) <= T:
+                cl["pts"] += [(x0, y0), (x1, y1)]
+                break
+        else:
+            clusters.append({"theta": theta, "d": d, "n": n, "c": c, "pts": [(x0, y0), (x1, y1)]})
+    targets = [((ln.a0, ln.pos), (ln.a1, ln.pos)) if ln.orient == "h" else ((ln.pos, ln.a0), (ln.pos, ln.a1))
+               for ln in lines]
+    out = []
+    for cl in clusters:
+        d, n = cl["d"], cl["n"]
+        c = float(np.mean([n[0] * x + n[1] * y for x, y in cl["pts"]]))
+        ts = [d[0] * x + d[1] * y for x, y in cl["pts"]]
+        t0, t1 = min(ts), max(ts)
+        if (t1 - t0) < min_len:
+            continue
+        base = (n[0] * c, n[1] * c)
+        joined = 0
+        for which in (0, 1):
+            t = t0 if which == 0 else t1
+            best = None
+            for (ax, ay), (bx, by) in targets:
+                ex, ey = bx - ax, by - ay
+                den = d[0] * ey - d[1] * ex
+                if abs(den) < 1e-9:
+                    continue
+                s_ = ((ax - base[0]) * ey - (ay - base[1]) * ex) / den
+                u = ((ax - base[0]) * d[1] - (ay - base[1]) * d[0]) / den
+                L = math.hypot(ex, ey) or 1
+                if -T / L <= u <= 1 + T / L and abs(s_ - t) <= 3 * T and (best is None or abs(s_ - t) < abs(best - t)):
+                    best = s_
+            if best is not None:
+                joined += 1
+                if which == 0:
+                    t0 = best
+                else:
+                    t1 = best
+        p0 = (base[0] + d[0] * t0, base[1] + d[1] * t0)
+        p1 = (base[0] + d[0] * t1, base[1] + d[1] * t1)
+        hits = [thick[min(thick.shape[0] - 1, max(0, int(p0[1] + f * (p1[1] - p0[1])))),
+                      min(thick.shape[1] - 1, max(0, int(p0[0] + f * (p1[0] - p0[0]))))] > 0
+                for f in np.linspace(0, 1, 50)]
+        out.append({"p0": p0, "p1": p1, "coverage": float(np.mean(hits)), "joined": joined})
+    return out
 
 
 # --- confidence -------------------------------------------------------------
@@ -302,13 +469,30 @@ def parse_blueprint(
     wall_height: float | None = None,
     wall_thickness: float | None = None,
     progress: Callable[[float], None] = lambda p: None,
+    options: ParserOptions | None = None,
 ) -> dict:
     """Return {rooms, walls, openings, objects, warnings, defaults}. Raises ParseError."""
+    opts = options or ParserOptions()
+    if opts.deskew:
+        angle = skew_angle(gray)
+        if angle is not None:
+            rotated, Minv = _rotate(gray, angle)
+            result = _parse(rotated, meters_per_pixel, wall_height, wall_thickness, progress, opts)
+            _map_result(result, Minv, meters_per_pixel)
+            result["warnings"].append(
+                f"The drawing is rotated by about {angle:.1f}°. It was straightened before parsing and the walls "
+                "were mapped back to the original image.")
+            return result
+    return _parse(gray, meters_per_pixel, wall_height, wall_thickness, progress, opts)
+
+
+def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None, wall_thickness: float | None,
+           progress: Callable[[float], None], opts: ParserOptions) -> dict:
     mpp = meters_per_pixel
     h_img, w_img = gray.shape
     warnings: list[str] = [
         "Assumes an orthographic, uniformly scaled top-down drawing; perspective or non-uniform scale is not detected or corrected.",
-        "Only straight horizontal/vertical walls are reconstructed; diagonal and curved walls are ignored.",
+        "Only straight walls are reconstructed; curved walls are ignored and openings are only detected on horizontal/vertical walls.",
     ]
 
     blur = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -321,10 +505,18 @@ def parse_blueprint(
     progress(0.2)
 
     T = estimate_thickness_px(ink)
+    wall_ink = ink
+    if opts.outline_walls and _looks_outlined(ink, T):
+        filled = _fill_outline_walls(ink, mpp)
+        if float((filled > 0).sum()) > 1.2 * float((ink > 0).sum()):
+            wall_ink = filled
+            T = estimate_thickness_px(wall_ink)
+            warnings.append("Walls appear to be drawn as double outlines; the space between parallel strokes was "
+                            "filled to find wall centerlines.")
     if T < 2:
         raise ParseError("Could not find solid wall strokes (lines are at most 1 px thick). Use a drawing where walls are drawn as thick solid lines.")
-    k = max(3, int(round(T * 0.6))) | 1  # odd kernels avoid a 1 px anchor shift
-    thick = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+    k = (max(3, int(round(T * 0.6))) | 1) if opts.thin_line_removal else 1  # odd kernels avoid a 1 px anchor shift
+    thick = cv2.morphologyEx(wall_ink, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
     min_wall_px = MIN_WALL_M / mpp
     if not math.isfinite(min_wall_px) or min_wall_px > max(h_img, w_img):
         raise ParseError("The calibrated image is smaller than the minimum 0.3 m wall length. Check the calibration distance.")
@@ -333,17 +525,24 @@ def parse_blueprint(
     vert = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((L, 1), np.uint8))
     progress(0.4)
 
-    thick_px = int((thick > 0).sum())
-    covered = cv2.dilate(cv2.bitwise_or(horiz, vert), np.ones((3, 3), np.uint8))
-    if thick_px and float(((thick > 0) & (covered == 0)).sum()) / thick_px > 0.15:
-        warnings.append("A significant part of the thick linework is not horizontal/vertical (diagonal/curved walls or symbols) and was ignored.")
-
-    h_lines = _merge_lines(_bands(horiz, "h", k), ink, T, mpp, warnings)
-    v_lines = _merge_lines(_bands(vert, "v", k), ink, T, mpp, warnings)
-    _snap(h_lines, v_lines, T)
-    _snap(v_lines, h_lines, T)
+    h_lines = _merge_lines(_bands(horiz, "h", k), ink, T, mpp, warnings, opts.opening_detection)
+    v_lines = _merge_lines(_bands(vert, "v", k), ink, T, mpp, warnings, opts.opening_detection)
+    if opts.endpoint_snap:
+        _snap(h_lines, v_lines, T)
+        _snap(v_lines, h_lines, T)
     lines = [ln for ln in h_lines + v_lines if (ln.a1 - ln.a0) * mpp >= MIN_WALL_M]
-    if not lines:
+    diagonals = _diagonal_segments(thick, horiz, vert, lines, T, mpp) if opts.diagonal_walls else []
+
+    thick_px = int((thick > 0).sum())
+    explained = cv2.bitwise_or(horiz, vert)
+    for dg in diagonals:
+        cv2.line(explained, tuple(int(round(v)) for v in dg["p0"]), tuple(int(round(v)) for v in dg["p1"]), 255,
+                 max(1, int(math.ceil(T))) + 2)
+    covered = cv2.dilate(explained, np.ones((3, 3), np.uint8))
+    if thick_px and float(((thick > 0) & (covered == 0)).sum()) / thick_px > 0.15:
+        warnings.append("A significant part of the thick linework does not form straight walls (curved walls or "
+                        "symbols) and was ignored.")
+    if not lines and not diagonals:
         raise ParseError("No straight horizontal/vertical walls were found. Use a clean, high-contrast, mainly rectilinear floor plan with walls drawn as solid thick lines, and check the calibration distance.")
     progress(0.6)
 
@@ -408,10 +607,32 @@ def parse_blueprint(
                 "provenance": prov("inferred", fo, notes,
                                    _opening_factors(kind, ln, g0, g1, filled, ink, thick, T, mpp)),
             })
+    for dg in diagonals:
+        wid = f"wall-{len(walls) + 1}"
+        t_m = wall_thickness if wall_thickness is not None else (
+            T * mpp if 0.03 <= T * mpp <= 1.0 else DEFAULT_WALL_THICKNESS)
+        joined = {0: (0.4, "Neither end meets another wall."), 1: (0.7, "One end meets an adjoining wall."),
+                  2: (1.0, "Both ends meet adjoining walls.")}[min(dg["joined"], 2)]
+        walls.append({
+            "id": wid,
+            "start": [round(dg["p0"][0] * mpp, 4), round(dg["p0"][1] * mpp, 4)],
+            "end": [round(dg["p1"][0] * mpp, 4), round(dg["p1"][1] * mpp, 4)],
+            "height": height,
+            "thickness": round(t_m, 4),
+            "provenance": prov("evidence",
+                               {"height": height_origin, "thickness": "user" if wall_thickness is not None else "inferred"},
+                               ["Diagonal centerline fitted to thick strokes; thickness taken from the dominant wall stroke.",
+                                "Openings are not detected on diagonal walls.",
+                                f"Height {'supplied by the user' if wall_height is not None else 'assumed from the default'}: {height} m."],
+                               [_factor("Stroke coverage", dg["coverage"],
+                                        f"{dg['coverage']:.0%} of the fitted centerline lies on a solid wall stroke."),
+                                _factor("Junctions", joined[0], joined[1])]),
+        })
     progress(0.8)
 
     rooms = []
-    for j, (poly, outline_px) in enumerate(_rooms(lines, (h_img, w_img), T, mpp), 1):
+    extra = [(dg["p0"], dg["p1"]) for dg in diagonals]
+    for j, (poly, outline_px) in enumerate(_rooms(lines, (h_img, w_img), T, mpp, extra), 1):
         rooms.append({
             "id": f"room-{j}", "name": f"Room {j}", "polygon": poly, "height": height,
             "provenance": prov("inferred", {"height": height_origin},

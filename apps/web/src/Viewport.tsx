@@ -11,7 +11,8 @@ import {
 import * as THREE from 'three';
 import { buildSceneGeometry, collides, disposeGeometry, pointInRoom } from './geometry';
 import { useEditor } from './store';
-import { gridStepFor, worldPerPixel } from './snapping';
+import { SNAP_PX, gridStepFor, snapToWalls, worldPerPixel } from './snapping';
+import { WallTools } from './WallTools';
 import { resizedObject, type Scene, type V3 } from './scene';
 
 function MeasurePoint({
@@ -222,6 +223,8 @@ function World() {
     },
     [ghost],
   );
+  const camera = useThree((s) => s.camera),
+    height = useThree((s) => s.size.height);
   const selected = state.scene?.objects.find((o) => o.id === state.selectedId);
   const target = selected ? root.getObjectByName(selected.id) : undefined;
   const dragging = useRef(false);
@@ -236,7 +239,7 @@ function World() {
   }
   function click(event: ThreeEvent<MouseEvent>) {
     event.stopPropagation();
-    if (dragging.current || state.workspace === 'Explore') return;
+    if (dragging.current || state.workspace === 'Explore' || state.tool !== 'select') return;
     if (state.measure) {
       const p = event.point;
       useEditor.setState({
@@ -286,9 +289,34 @@ function World() {
               onMouseDown={() => {
                 dragging.current = true;
               }}
+              onObjectChange={() => {
+                // Live flush-to-wall snapping while moving furniture.
+                if (state.mode !== 'translate' || !state.snap || !state.scene || !dragging.current) return;
+                if (!(camera instanceof THREE.PerspectiveCamera)) return;
+                const wpp = worldPerPixel(camera.position.distanceTo(target.position), camera.fov, height);
+                const hit = snapToWalls(
+                  [target.position.x, target.position.z],
+                  target.rotation.y,
+                  [selected.dimensions[0], selected.dimensions[2]],
+                  state.scene.walls,
+                  SNAP_PX * wpp,
+                  state.wallAlign,
+                );
+                if (hit) {
+                  target.position.x = hit.position[0];
+                  target.position.z = hit.position[1];
+                  target.rotation.y = hit.rotationY;
+                }
+              }}
               onMouseUp={() => {
-                if (state.mode === 'translate')
-                  state.patch(selected.id, { position: target.position.toArray() });
+                if (state.mode === 'translate') {
+                  const position = target.position.toArray();
+                  const rotationY = target.rotation.y;
+                  state.patch(
+                    selected.id,
+                    Math.abs(rotationY - selected.rotationY) > 1e-6 ? { position, rotationY } : { position },
+                  );
+                }
                 else if (state.mode === 'rotate') {
                   const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(target.quaternion);
                   state.patch(selected.id, { rotationY: Math.atan2(forward.x, forward.z) });
@@ -305,6 +333,7 @@ function World() {
           )}
           <FrameCamera root={root} />
           <SnapScale />
+          {state.scene && !state.measure && <WallTools scene={state.scene} />}
         </>
       )}
       {state.workspace === 'Explore' && state.scene && <FirstPerson scene={state.scene} />}
@@ -334,14 +363,17 @@ export function Viewport() {
   const measure = useEditor((s) => s.measure),
     compare = useEditor((s) => s.compare),
     snap = useEditor((s) => s.snap),
-    gridStep = useEditor((s) => s.gridStep);
+    gridStep = useEditor((s) => s.gridStep),
+    tool = useEditor((s) => s.tool),
+    notice = useEditor((s) => s.notice);
   return (
     <div className="viewport">
       <Canvas
         camera={{ position: [8, 7, 9], fov: 48, near: 0.02, far: 500 }}
         dpr={[1, 2]}
         onPointerMissed={() => {
-          if (!useEditor.getState().measure) useEditor.getState().select(null);
+          const s = useEditor.getState();
+          if (!s.measure && s.tool === 'select') s.select(null);
         }}
       >
         <Suspense fallback={null}>
@@ -362,6 +394,14 @@ export function Viewport() {
           </span>
         </div>
       )}
+      {notice && (
+        <div className="wall-notice" role="status">
+          {notice}
+          <button aria-label="Dismiss" onClick={() => useEditor.setState({ notice: null })}>
+            ×
+          </button>
+        </div>
+      )}
       {compare && <div className="compare-label">CYAN WIREFRAME · ORIGINAL RECONSTRUCTION</div>}
       {workspace === 'Explore' && (
         <div className="explore-overlay" style={{ visibility: locked ? 'hidden' : 'visible' }}>
@@ -380,7 +420,11 @@ export function Viewport() {
               ? measures.length === 1
                 ? 'MEASURE · Click to place point B · Esc to exit'
                 : 'MEASURE · Click a surface to place point A · Esc to exit'
-              : 'LMB select · Drag to orbit · RMB pan · Scroll zoom'}
+              : tool === 'wall'
+                ? 'WALL · Click to place points · Type a length + Enter · Shift = 90° · Alt = no snap · Esc to finish'
+                : tool === 'door' || tool === 'window'
+                  ? `${tool.toUpperCase()} · Click a wall to place · Alt = no snap · Esc to exit`
+                  : 'LMB select · Drag to orbit · RMB pan · Scroll zoom · Drag handles to edit walls'}
         </span>
         {workspace !== 'Explore' && (
           <span className="snap-readout" title="Grid and snap step adapt to zoom">

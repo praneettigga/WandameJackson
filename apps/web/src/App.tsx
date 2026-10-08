@@ -338,6 +338,7 @@ export default function App() {
           workspace: s.workspace === 'Explore' ? 'Edit' : s.workspace,
           selectedId: null,
           measure: false,
+          tool: 'select',
         });
         return;
       }
@@ -352,6 +353,12 @@ export default function App() {
       if (e.key.toLowerCase() === 'g') useEditor.setState({ mode: 'translate', measure: false });
       if (e.key.toLowerCase() === 'r') useEditor.setState({ mode: 'rotate', measure: false });
       if (e.key.toLowerCase() === 's') useEditor.setState({ mode: 'scale', measure: false });
+      const tools = { w: 'wall', d: 'door', n: 'window' } as const;
+      const tool = tools[e.key.toLowerCase() as keyof typeof tools];
+      if (tool && s.scene) {
+        useEditor.setState({ tool: s.tool === tool ? 'select' : tool, measure: false });
+        return;
+      }
       if (e.key.toLowerCase() === 'f') {
         e.preventDefault();
         useEditor.setState({ frame: s.frame + 1 });
@@ -835,9 +842,46 @@ export default function App() {
                 title="Measure two surface points"
                 className={state.measure ? 'active' : ''}
                 disabled={!state.scene || state.workspace === 'Explore'}
-                onClick={() => useEditor.setState({ measure: !state.measure, measures: [] })}
+                onClick={() =>
+                  useEditor.setState({ measure: !state.measure, measures: [], tool: 'select' })
+                }
               >
                 ⌁<span>Measure</span>
+              </button>
+            </div>
+            <div className="tool-group" aria-label="Architecture tools">
+              {(
+                [
+                  ['wall', '▭', 'Wall', 'W'],
+                  ['door', '◫', 'Door', 'D'],
+                  ['window', '▤', 'Window', 'N'],
+                ] as const
+              ).map(([tool, icon, label, key]) => (
+                <button
+                  key={tool}
+                  title={`${label} tool (${key}) · snaps to walls; snap distance adapts to zoom`}
+                  aria-label={`${label} tool`}
+                  disabled={!state.scene || state.workspace === 'Explore'}
+                  className={state.tool === tool ? 'active' : ''}
+                  onClick={() =>
+                    useEditor.setState({
+                      tool: state.tool === tool ? 'select' : tool,
+                      measure: false,
+                      workspace: 'Edit',
+                    })
+                  }
+                >
+                  {icon}
+                  <span>{label}</span>
+                </button>
+              ))}
+              <button
+                title="Furniture turns its back to a wall when it snaps flush"
+                className={state.wallAlign ? 'active' : ''}
+                disabled={!state.scene}
+                onClick={() => useEditor.setState({ wallAlign: !state.wallAlign })}
+              >
+                ⊥<span>Align</span>
               </button>
             </div>
             <div className="tool-group">
@@ -862,7 +906,7 @@ export default function App() {
                 onClick={() => useEditor.setState({ snap: !state.snap })}
                 title="Zoom-adaptive translation grid (see SNAP readout); 15° rotation; 0.1 scale steps"
               >
-                ⌗<span>0.1 m</span>
+                ⌗<span>Snap</span>
               </button>
             </div>
           </div>

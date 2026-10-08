@@ -33,14 +33,28 @@ export type CaptureInput = {
   rejected: { sourceId: string; timestampSeconds: number | null; reason: string }[];
   warnings: string[];
 };
+export type MeshPoint = [number, number, number];
+export type MeshCalibration = {
+  reference: { pointA: MeshPoint; pointB: MeshPoint; distanceMeters: number } | null;
+  floor: { points: [MeshPoint, MeshPoint, MeshPoint]; flipNormal: boolean } | null;
+  rotationDegrees: MeshPoint;
+};
+export type MeshCalibrationRequest = MeshCalibration & {
+  jobId: string;
+  expectedRevision: string | null;
+};
 export type MeshResult = {
-  schemaVersion: '1.0.0';
+  schemaVersion: '1.0.0' | '1.1.0';
   jobId: string;
   inputJobId: string;
   projectId: string;
   meshUrl: string;
   diagnosticUrl: string;
-  units: 'uncalibrated';
+  units: 'uncalibrated' | 'meters';
+  calibration?: MeshCalibration | null;
+  calibrationRevision?: string | null;
+  reconstructionToWorld?: number[][];
+  manifestUrl?: string;
   cameras: { frameId: string; worldToCamera: number[][]; cameraToWorld: number[][] }[];
   statistics: {
     vertices: number;
@@ -97,6 +111,7 @@ export interface RoomshiftApi {
   reconstructionCapabilities(): Promise<WorkerCapabilities>;
   reconstructMesh(id: string, maxViews?: number): Promise<{ job: Job }>;
   getMesh(id: string): Promise<MeshResult>;
+  calibrateMesh(id: string, input: MeshCalibrationRequest): Promise<MeshResult>;
   getProject(id: string): Promise<ProjectEnvelope>;
   listProjects(): Promise<{ projects: ProjectEnvelope[] }>;
   cancelJob(id: string): Promise<{ job: Job }>;
@@ -209,6 +224,17 @@ export class HttpApi implements RoomshiftApi {
   getMesh(id: string) {
     return this.request<MeshResult>(`/api/projects/${encodeURIComponent(id)}/mesh`);
   }
+  calibrateMesh(id: string, input: MeshCalibrationRequest) {
+    return this.request<MeshResult>(
+      `/api/projects/${encodeURIComponent(id)}/mesh/calibration`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+      60_000,
+    );
+  }
   cancelJob(id: string) {
     return this.request<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',
@@ -314,6 +340,9 @@ export class MockApi implements RoomshiftApi {
   }
   async getMesh(_id: string): Promise<MeshResult> {
     throw new Error('No reconstructed mesh in mock mode.');
+  }
+  async calibrateMesh(_id: string, _input: MeshCalibrationRequest): Promise<MeshResult> {
+    throw new Error('Mesh calibration requires the local API.');
   }
   async createProject(_file: File, _name?: string) {
     return this.getProject(fixture.id);

@@ -1363,6 +1363,17 @@ body:has(.explore-overlay) canvas {
 .view-budget { font-size: 9px; color: #9bafaa; display: flex; flex-direction: column; gap: 4px; }
 .view-budget select { background: #1b272c; border: 1px solid #485956; border-radius: 4px; padding: 7px; color: #d5dfd6; font-size: 10px; }
 .capture-mode { min-width: 0; }
+.mesh-calibration { padding: 18px 22px; border-top: 1px solid #405156; background: #1e2a2f; }
+.mesh-calibration-heading, .mesh-calibration-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mesh-calibration-heading { justify-content: space-between; }
+.mesh-calibration p { font-size: 12px; }
+.mesh-calibration a { color: #e5bb7d; font-size: 12px; }
+.mesh-calibration label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; }
+.mesh-calibration input { width: 135px; padding: 7px; color: #e6eee9; background: #172025; border: 1px solid #526368; border-radius: 4px; }
+.mesh-calibration details { margin: 14px 0; }
+.mesh-calibration details > div { margin-top: 12px; }
+.mesh-point-label { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 50%; background: #ffc978; color: #182023; border: 2px solid white; font-size: 12px; font-weight: 700; }
+.mesh-viewport[data-picking="true"] canvas { cursor: crosshair; }
 .capture-mode .header-actions { display: none; }
 .mesh-render-loading { position: absolute; inset: 0; background: #171f22; pointer-events: none; }
 @media (max-width: 800px) {

@@ -40,9 +40,12 @@ Saved captures and meshes can be reopened from the sidebar. Cancellation and
 failed reruns preserve any previously completed mesh.
 
 Use one static room, good lighting, and substantial overlap. Photos must be in
-walking order. The mesh has uncalibrated scale and may contain missing surfaces;
-metric calibration and object editing are later milestones. Mock mode does not
-run the photo/video pipeline.
+walking order. Meshes begin with uncalibrated scale and may contain missing surfaces.
+Under the viewer, use **Set scale · 2 points** with a known distance, **Align floor ·
+3 points**, and the manual orientation controls. Applied changes save automatically;
+GLB and JSON exports preserve the saved scale/orientation. Use **Measure · 2 points**
+to check another known distance. Object editing remains a later milestone.
+Mock mode does not run the photo/video pipeline.
 
 ## First demo
 

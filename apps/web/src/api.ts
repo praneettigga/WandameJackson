@@ -6,8 +6,9 @@ export type ProjectEnvelope = {
   project: { id: string; name: string; createdAt: string; hasScene: boolean };
   image: { url: string; width: number; height: number; mimeType: 'image/png' | 'image/jpeg' };
 };
+export type ScaleCalibration = Scene['source']['calibration'];
 export type ReconstructionRequest = {
-  calibration: { pointA: V2; pointB: V2; distanceMeters: number };
+  calibration?: { pointA: V2; pointB: V2; distanceMeters: number };
   wallHeight?: number;
   wallThickness?: number | null;
 };
@@ -38,6 +39,7 @@ export interface RoomshiftApi {
   health(): Promise<{ status: 'ok'; schemaVersion: '0.1.0' }>;
   createProject(file: File, name?: string): Promise<ProjectEnvelope>;
   getProject(id: string): Promise<ProjectEnvelope>;
+  getScale(id: string): Promise<{ calibration: ScaleCalibration }>;
   reconstruct(id: string, input: ReconstructionRequest): Promise<{ job: Job }>;
   getJob(id: string): Promise<{ job: Job }>;
   getScene(id: string): Promise<Scene>;
@@ -54,12 +56,12 @@ export class HttpApi implements RoomshiftApi {
   imageUrl(path: string) {
     return new URL(path, this.baseUrl).href;
   }
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<T> {
     let response: Response;
     try {
       response = await this.transport(new URL(path, this.baseUrl), {
         ...init,
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
       throw new ApiError(
@@ -95,6 +97,13 @@ export class HttpApi implements RoomshiftApi {
   }
   getProject(id: string) {
     return this.request<ProjectEnvelope>(`/api/projects/${encodeURIComponent(id)}`);
+  }
+  getScale(id: string) {
+    return this.request<{ calibration: ScaleCalibration }>(
+      `/api/projects/${encodeURIComponent(id)}/scale`,
+      undefined,
+      60_000,
+    );
   }
   reconstruct(id: string, input: ReconstructionRequest) {
     return this.request<{ job: Job }>(`/api/projects/${encodeURIComponent(id)}/reconstruct`, {
@@ -170,6 +179,15 @@ export class MockApi implements RoomshiftApi {
         height: fixture.source.imageHeight,
         mimeType: 'image/png',
       },
+    };
+  }
+  async getScale(id: string) {
+    this.project(id);
+    return {
+      calibration: {
+        ...fixture.source.calibration,
+        notes: ['Synthetic fixture scale; no image analysis was performed.'],
+      } as ScaleCalibration,
     };
   }
   async reconstruct(id: string, _input: ReconstructionRequest) {

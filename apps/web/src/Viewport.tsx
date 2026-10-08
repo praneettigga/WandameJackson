@@ -356,7 +356,7 @@ export function Viewport() {
         <div className="empty-viewport">
           <div className="room-symbol">⌑</div>
           <h2>A plan becomes a place.</h2>
-          <p>Upload a blueprint and set its scale to begin.</p>
+          <p>Upload a blueprint to assign its scale automatically.</p>
           <span>
             01 UPLOAD <b>→</b> 02 CALIBRATE <b>→</b> 03 RECONSTRUCT
           </span>

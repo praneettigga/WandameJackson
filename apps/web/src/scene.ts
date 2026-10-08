@@ -78,6 +78,8 @@ export const sceneSchema = z.strictObject({
       pointB: pixel,
       distanceMeters: positive,
       metersPerPixel: positive,
+      method: z.enum(['printed-dimension', 'wall-thickness', 'image-extent']).optional(),
+      notes: z.array(z.string()).optional(),
     }),
   }),
   reconstruction: z.strictObject({

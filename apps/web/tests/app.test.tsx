@@ -94,6 +94,58 @@ describe('application integration without WebGL', () => {
     fireEvent.click(screen.getByRole('button', { name: /Compare Original/ }));
     await waitFor(() => expect(useEditor.getState().compare).toBe(false));
   });
+  it('assigns automatic scale on upload and reconstructs without reference clicks', async () => {
+    const reconstruct = vi.spyOn(api, 'reconstruct');
+    const getScale = vi.spyOn(api, 'getScale');
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reconstruct' }));
+    fireEvent.change(screen.getByLabelText('Upload blueprint'), {
+      target: { files: [new File(['image'], 'plan.png', { type: 'image/png' })] },
+    });
+    await waitFor(() => expect(getScale).toHaveBeenCalledWith('demo-room'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Load synthetic reconstruction →' })).toBeEnabled(),
+    );
+    expect(screen.getByLabelText('Scale method')).toHaveValue('auto');
+    expect(screen.queryByLabelText('Known distance (metres)')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Load synthetic reconstruction →' }));
+    await waitFor(() => expect(useEditor.getState().workspace).toBe('Edit'), { timeout: 4000 });
+    expect(reconstruct.mock.calls.at(-1)![1]).not.toHaveProperty('calibration');
+  });
+  it('shows printed measurement evidence and preserves manual input when switching modes', async () => {
+    vi.spyOn(api, 'getScale').mockResolvedValueOnce({
+      calibration: {
+        pointA: [50, 50],
+        pointB: [150, 50],
+        distanceMeters: 5,
+        metersPerPixel: 0.05,
+        method: 'printed-dimension',
+        notes: ['Read 5.0 m from the blueprint.'],
+      },
+    });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reconstruct' }));
+    fireEvent.change(screen.getByLabelText('Known distance (metres)'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Scale method'), { target: { value: 'auto' } });
+    await screen.findByText('Using a printed measurement');
+    expect(screen.getByText('0.050000')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Scale method'), { target: { value: 'manual' } });
+    expect(screen.getByLabelText('Known distance (metres)')).toHaveValue(3);
+    expect(screen.getByText('0.030000')).toBeInTheDocument();
+  });
+  it('allows manual calibration when automatic scale lookup fails', async () => {
+    vi.spyOn(api, 'getScale').mockRejectedValueOnce(new Error('Scale lookup unavailable'));
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reconstruct' }));
+    fireEvent.change(screen.getByLabelText('Scale method'), { target: { value: 'auto' } });
+    await screen.findByRole('button', { name: 'Retry automatic scale' });
+    await waitFor(() => expect(screen.getByLabelText('Scale method')).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Scale method'), { target: { value: 'manual' } });
+    expect(screen.getByRole('button', { name: 'Load synthetic reconstruction →' })).toBeEnabled();
+  });
   it('performs two-point visual calibration and mock job polling, then opens the fixture', async () => {
     const reconstruct = vi.spyOn(api, 'reconstruct');
     render(<App />);

@@ -5,7 +5,7 @@ This is the prototype's definition of done. The work is complete only when this 
 ## User journey
 
 1. The user uploads a blueprint image.
-2. The user marks a known line and enters its length in metres.
+2. The app assigns scale automatically, preferring printed dimensions paired with dimension lines. If no reliable measurement is available it labels an assumed scale as estimated. The user may select Manual reference, mark a known line, and enter its length in metres.
 3. The backend creates a scene using that scale and returns the scene JSON.
 4. The editor opens the scene and shows the room shell, furniture, dimensions, and all assumptions.
 5. The user selects a furniture object.

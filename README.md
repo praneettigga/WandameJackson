@@ -1,6 +1,6 @@
 # ROOMSHIFT prototype
 
-Upload a floor-plan PNG/JPEG, mark a known measurement, reconstruct a metric room, add and edit furniture, save/reload, and export Scene JSON or GLB.
+Upload a floor-plan PNG/JPEG, automatically read printed dimensions or estimate scale, reconstruct a metric room, add and edit furniture, save/reload, and export Scene JSON or GLB.
 
 ## Run locally
 
@@ -31,7 +31,9 @@ For an offline demo use `VITE_USE_MOCK_API=true npm run dev`. It loads the synth
 
 ## First demo
 
-Upload `contracts/fixtures/room.png` as a normal image. Mark points 100 pixels apart and enter 2 m (the supplied fixture uses [50,50] and [150,50]). Leave wall height blank to use the labelled 2.7 m assumption. The real parser should return a 4 × 3 m room, four walls, a door, and a window.
+Upload a blueprint to assign its scale automatically. The app prefers readable printed dimensions paired with dimension lines and otherwise labels its scale as estimated. Select **Manual reference** to supply a known measurement. See [OCR setup and supported annotations](services/api/README.md#automatic-scale--ocr).
+
+For the exact fixture demonstration, upload `contracts/fixtures/room.png` as a normal image, choose **Manual reference**, and mark points 100 pixels apart and enter 2 m (the supplied fixture uses [50,50] and [150,50]). Leave wall height blank to use the labelled 2.7 m assumption. The real parser should return a 4 × 3 m room, four walls, a door, and a window.
 
 Add a sofa or table from the component library, move/rotate/resize it, then snap it to the floor. Inspect provenance, save, reload, and export JSON and GLB. Enable **Ceilings** to include the ceiling in the GLB. Keep the displayed project ID to reopen after a refresh.
 

@@ -390,6 +390,16 @@ export function Inspector() {
             <span>Scale</span>
             <b>{state.scene.source.calibration.metersPerPixel.toFixed(5)} m/px</b>
           </div>
+          <div className="kv">
+            <span>Scale source</span>
+            <b>
+              {state.scene.source.calibration.method === 'printed-dimension'
+                ? 'Printed measurement'
+                : state.scene.source.calibration.method
+                  ? 'Estimated scale'
+                  : 'Manual reference'}
+            </b>
+          </div>
         </section>
       )}
     </aside>

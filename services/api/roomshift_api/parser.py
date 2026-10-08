@@ -51,6 +51,8 @@ class ParserOptions:
     diagonal_walls: bool = True  # straight walls at any angle, from residual thick ink
     endpoint_snap: bool = True  # snap wall ends to perpendicular centerlines
     opening_detection: bool = True  # classify wall gaps as doors/windows (otherwise gaps split walls)
+    pier_split: bool = True  # short solid wall piers inside a gap separate adjacent doors/windows
+    soft_gap_ink: bool = True  # read faint glazing lines in gaps with a softer threshold than Otsu
     thin_line_removal: bool = True  # morphological opening that drops text, arcs and glazing lines
 
     @classmethod
@@ -124,8 +126,53 @@ def _bands(mask: np.ndarray, orient: str, min_thick: int) -> list[Band]:
     return out
 
 
+def _classify_gap(gap_m: float, filled: float) -> str | None:
+    """'window', 'door', 'tiny' or None (ambiguous)."""
+    if gap_m < 0.1:
+        return "tiny"
+    if filled >= 0.8 and gap_m >= MIN_WINDOW_M:
+        return "window"
+    if filled <= 0.2 and DOOR_RANGE_M[0] <= gap_m <= DOOR_RANGE_M[1]:
+        return "door"
+    return None
+
+
+def _pier_split(band_ink: np.ndarray, band_thick: np.ndarray, start: float, T: float, mpp: float):
+    """Split a gap at short solid wall piers (thick ink across the band) and classify each part.
+    Returns [(kind, g0, g1, filled)] in absolute px, or None if any part is ambiguous or no pier exists."""
+    solid = band_thick.any(axis=0) if band_thick.size else np.zeros(0, bool)
+    min_pier = max(2, int(T / 2))
+    runs, i = [], 0
+    while i < solid.size:
+        j = i
+        while j < solid.size and solid[j] == solid[i]:
+            j += 1
+        runs.append((bool(solid[i]), i, j))
+        i = j
+    if not any(is_solid and j - i >= min_pier for is_solid, i, j in runs):
+        return None
+    parts, cur0 = [], None
+    for is_solid, i, j in runs + [(True, solid.size, solid.size + min_pier)]:
+        if is_solid and j - i >= min_pier:
+            if cur0 is not None and i > cur0:
+                parts.append((cur0, i))
+            cur0 = None
+        elif cur0 is None:
+            cur0 = i
+    out = []
+    for i, j in parts:
+        sub = band_ink[:, i:j] > 0
+        filled = float(sub.any(axis=0).mean()) if sub.size else 0.0
+        kind = _classify_gap((j - i) * mpp, filled)
+        if kind is None:
+            return None
+        if kind != "tiny":
+            out.append((kind, start + i, start + j, filled))
+    return out
+
+
 def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warnings: list[str],
-                 detect_openings: bool = True) -> list[WallLine]:
+                 detect_openings: bool = True, thick_mask: np.ndarray | None = None) -> list[WallLine]:
     lines: list[WallLine] = []
     bands = sorted(bands, key=lambda b: b.pos)
     clusters: list[list[Band]] = []
@@ -135,6 +182,7 @@ def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warni
         else:
             clusters.append([b])
     ink_t = ink if bands and bands[0].orient == "h" else ink.T
+    thick_t = None if thick_mask is None else (thick_mask if bands and bands[0].orient == "h" else thick_mask.T)
     for cl in clusters:
         cl.sort(key=lambda b: b.a0)
         pos = float(np.average([b.pos for b in cl], weights=[b.a1 - b.a0 for b in cl]))
@@ -149,23 +197,24 @@ def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warni
             r0, r1 = int(max(0, math.floor(pos - T / 2))), int(math.ceil(pos + T / 2))
             band = ink_t[r0:r1, int(cur.a1):int(b.a0)] > 0
             filled = float(band.any(axis=0).mean()) if band.size else 0.0
-            if gap_m < 0.1:
-                kind = None
-            elif not detect_openings:
+            if gap_m >= 0.1 and not detect_openings:
                 lines.append(cur)
                 cur = WallLine(b.orient, pos, b.a0, b.a1, thick)
                 continue
-            elif filled >= 0.8 and gap_m >= MIN_WINDOW_M:
-                kind = "window"
-            elif filled <= 0.2 and DOOR_RANGE_M[0] <= gap_m <= DOOR_RANGE_M[1]:
-                kind = "door"
-            else:
+            kind = _classify_gap(gap_m, filled)
+            if kind is None and thick_t is not None:
+                parts = _pier_split(band, thick_t[r0:r1, int(cur.a1):int(b.a0)] > 0, int(cur.a1), T, mpp)
+                if parts is not None:
+                    cur.openings.extend(parts)
+                    cur.a1 = b.a1
+                    continue
+            if kind is None:
                 if 0.2 < filled < 0.8:
                     warnings.append(f"Ambiguous {gap_m:.2f} m gap in a wall line was left open (not classified as a door or window).")
                 lines.append(cur)
                 cur = WallLine(b.orient, pos, b.a0, b.a1, thick)
                 continue
-            if kind:
+            if kind != "tiny":
                 cur.openings.append((kind, cur.a1, b.a0, filled))
             cur.a1 = b.a1
         lines.append(cur)
@@ -240,15 +289,6 @@ def _fill_outline_walls(ink: np.ndarray, mpp: float) -> np.ndarray:
     return cv2.bitwise_or(ink, cv2.bitwise_or(fill_h, fill_v))
 
 
-def _looks_outlined(ink: np.ndarray, T: float) -> bool:
-    """Thin strokes dominate and the thick-wall mask keeps little of the drawing."""
-    if T < 2:
-        return True
-    k = max(3, int(round(T * 0.6))) | 1
-    thick = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
-    return float((thick > 0).sum()) < 0.25 * float((ink > 0).sum())
-
-
 def skew_angle(gray: np.ndarray) -> float | None:
     """Dominant drawing angle in degrees (image coordinates, in [-45, 45)) when the plan is rotated."""
     _, ink = cv2.threshold(cv2.GaussianBlur(gray, (3, 3), 0), 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
@@ -261,7 +301,7 @@ def skew_angle(gray: np.ndarray) -> float | None:
     if segs is None:
         return None
     angles, weights = [], []
-    for x0, y0, x1, y1 in segs[:, 0]:
+    for x0, y0, x1, y1 in segs.reshape(-1, 4):
         a = math.degrees(math.atan2(float(y1 - y0), float(x1 - x0)))
         angles.append((a + 45) % 90 - 45)
         weights.append(math.hypot(float(x1 - x0), float(y1 - y0)))
@@ -309,7 +349,7 @@ def _diagonal_segments(thick: np.ndarray, horiz: np.ndarray, vert: np.ndarray, l
     if segs is None:
         return []
     clusters: list[dict] = []
-    for x0, y0, x1, y1 in segs[:, 0].astype(float):
+    for x0, y0, x1, y1 in segs.reshape(-1, 4).astype(float):
         theta = math.atan2(y1 - y0, x1 - x0) % math.pi
         deg = math.degrees(theta) % 90
         if deg < 5 or deg > 85:
@@ -497,6 +537,9 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
 
     blur = cv2.GaussianBlur(gray, (3, 3), 0)
     _, ink = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Faint thin lines (glazing, after resampling) fall below Otsu; use a softer mask to read gap contents only.
+    otsu = float(cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0])
+    soft_ink = ((blur < min(235.0, otsu + 0.6 * (255.0 - otsu))) * 255).astype(np.uint8) if opts.soft_gap_ink else ink
     frac = float((ink > 0).mean())
     if frac < 0.0005:
         raise ParseError("No drawing was found in the image (it is almost blank).")
@@ -506,9 +549,12 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
 
     T = estimate_thickness_px(ink)
     wall_ink = ink
-    if opts.outline_walls and _looks_outlined(ink, T):
+    if opts.outline_walls and math.isfinite(0.35 / mpp) and 0.35 / mpp < max(h_img, w_img) / 4:
+        # Accept the fill only when it clearly changes the drawing: much more ink and much thicker strokes.
+        # Solid-wall plans gain little (only window glazing bands), so they are left untouched.
         filled = _fill_outline_walls(ink, mpp)
-        if float((filled > 0).sum()) > 1.2 * float((ink > 0).sum()):
+        if (float((filled > 0).sum()) > 1.5 * float((ink > 0).sum())
+                and estimate_thickness_px(filled) >= 2 * max(T, 1)):
             wall_ink = filled
             T = estimate_thickness_px(wall_ink)
             warnings.append("Walls appear to be drawn as double outlines; the space between parallel strokes was "
@@ -516,7 +562,8 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     if T < 2:
         raise ParseError("Could not find solid wall strokes (lines are at most 1 px thick). Use a drawing where walls are drawn as thick solid lines.")
     k = (max(3, int(round(T * 0.6))) | 1) if opts.thin_line_removal else 1  # odd kernels avoid a 1 px anchor shift
-    thick = cv2.morphologyEx(wall_ink, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+    # An elliptical kernel removes thin linework at any angle, so diagonal wall strokes survive.
+    thick = cv2.morphologyEx(wall_ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
     min_wall_px = MIN_WALL_M / mpp
     if not math.isfinite(min_wall_px) or min_wall_px > max(h_img, w_img):
         raise ParseError("The calibrated image is smaller than the minimum 0.3 m wall length. Check the calibration distance.")
@@ -525,8 +572,9 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     vert = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((L, 1), np.uint8))
     progress(0.4)
 
-    h_lines = _merge_lines(_bands(horiz, "h", k), ink, T, mpp, warnings, opts.opening_detection)
-    v_lines = _merge_lines(_bands(vert, "v", k), ink, T, mpp, warnings, opts.opening_detection)
+    pier = thick if opts.pier_split else None
+    h_lines = _merge_lines(_bands(horiz, "h", k), soft_ink, T, mpp, warnings, opts.opening_detection, pier)
+    v_lines = _merge_lines(_bands(vert, "v", k), soft_ink, T, mpp, warnings, opts.opening_detection, pier)
     if opts.endpoint_snap:
         _snap(h_lines, v_lines, T)
         _snap(v_lines, h_lines, T)
@@ -605,7 +653,7 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
                 "id": f"{kind}-{len(openings) + 1}", "type": kind, "wallId": wid,
                 "offset": round(offset, 4), "width": round(width, 4), "height": o_h, "bottom": o_b,
                 "provenance": prov("inferred", fo, notes,
-                                   _opening_factors(kind, ln, g0, g1, filled, ink, thick, T, mpp)),
+                                   _opening_factors(kind, ln, g0, g1, filled, soft_ink, thick, T, mpp)),
             })
     for dg in diagonals:
         wid = f"wall-{len(walls) + 1}"
@@ -615,8 +663,8 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
                   2: (1.0, "Both ends meet adjoining walls.")}[min(dg["joined"], 2)]
         walls.append({
             "id": wid,
-            "start": [round(dg["p0"][0] * mpp, 4), round(dg["p0"][1] * mpp, 4)],
-            "end": [round(dg["p1"][0] * mpp, 4), round(dg["p1"][1] * mpp, 4)],
+            "start": [round(float(dg["p0"][0]) * mpp, 4), round(float(dg["p0"][1]) * mpp, 4)],
+            "end": [round(float(dg["p1"][0]) * mpp, 4), round(float(dg["p1"][1]) * mpp, 4)],
             "height": height,
             "thickness": round(t_m, 4),
             "provenance": prov("evidence",

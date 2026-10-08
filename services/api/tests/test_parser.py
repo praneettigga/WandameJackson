@@ -4,7 +4,7 @@ import pytest
 from shapely.geometry import Polygon
 
 from roomshift_api.images import load_gray
-from roomshift_api.parser import ParseError, parse_blueprint
+from roomshift_api.parser import ParseError, ParserOptions, parse_blueprint, skew_angle
 
 from conftest import CONTRACTS, l_shaped_plan
 
@@ -52,12 +52,15 @@ def test_noise_fails():
         parse_blueprint((rng.random((300, 300)) * 255).astype(np.uint8), 0.02)
 
 
-def test_only_diagonal_lines_fail():
+def test_only_diagonal_lines_give_walls_but_no_rooms():
     img = np.full((400, 400), 255, np.uint8)
     cv2.line(img, (20, 20), (380, 380), 0, 8)
     cv2.line(img, (20, 380), (380, 20), 0, 8)
+    r = parse_blueprint(img, 0.02)
+    assert len(r["walls"]) == 2 and r["rooms"] == []
+    assert all(type(v) is float for w in r["walls"] for v in w["start"] + w["end"])
     with pytest.raises(ParseError):
-        parse_blueprint(img, 0.02)
+        parse_blueprint(img, 0.02, options=ParserOptions(diagonal_walls=False))
 
 
 def test_tiny_scale_fails_before_allocating_a_huge_kernel():
@@ -94,3 +97,46 @@ def test_free_standing_wall_scores_lower_than_joined_walls():
     scores = {tuple(w["start"] + w["end"]): w["provenance"]["confidence"] for w in r["walls"]}
     lone = min(scores.values())
     assert lone < 0.8 and max(scores.values()) >= 0.95
+
+
+def _rotate_plan(img: np.ndarray, deg: float) -> np.ndarray:
+    h, w = img.shape
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), deg, 1.0)
+    return cv2.warpAffine(img, M, (w, h), borderValue=255)
+
+
+def test_deskew_recovers_a_rotated_plan():
+    plan = np.pad(l_shaped_plan(), 80, constant_values=255)
+    rotated = _rotate_plan(plan, 4.0)
+    assert skew_angle(rotated) is not None and abs(abs(skew_angle(rotated)) - 4.0) < 0.5
+    straight = parse_blueprint(rotated, MPP)
+    areas = sorted(round(Polygon(rm["polygon"]).area) for rm in straight["rooms"])
+    assert areas == [25, 50]
+    assert any("rotated" in w for w in straight["warnings"])
+    # Without deskew, rectilinear extraction fails or loses rooms on the same image.
+    try:
+        raw = parse_blueprint(rotated, MPP, options=ParserOptions(deskew=False))
+        assert sorted(round(Polygon(rm["polygon"]).area) for rm in raw["rooms"]) != [25, 50]
+    except ParseError:
+        pass
+
+
+def test_outline_walls_are_filled():
+    img = np.full((400, 500), 255, np.uint8)
+    # Double-line walls: two 2 px strokes 10 px (0.2 m) apart around a 8 x 6 m room.
+    for d in (0, 10):
+        cv2.rectangle(img, (50 + d, 50 + d), (450 - d, 350 - d), 0, 2)
+    r = parse_blueprint(img, 0.02)
+    assert len(r["walls"]) == 4 and len(r["rooms"]) == 1
+    assert any("double outlines" in w for w in r["warnings"])
+    # Without the stage, each outline stroke becomes its own thin wall.
+    assert len(parse_blueprint(img, 0.02, options=ParserOptions(outline_walls=False))["walls"]) == 8
+
+
+def test_ablation_options_cover_every_stage():
+    names = set(ParserOptions.ablations())
+    assert names == {"full", "no_deskew", "no_outline_walls", "no_diagonal_walls", "no_endpoint_snap",
+                     "no_opening_detection", "no_thin_line_removal", "no_pier_split", "no_soft_gap_ink"}
+    r = parse_blueprint(load_gray(CONTRACTS / "fixtures" / "room.png"), 0.02,
+                        options=ParserOptions(opening_detection=False))
+    assert r["openings"] == []

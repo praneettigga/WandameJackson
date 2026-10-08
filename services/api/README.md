@@ -14,7 +14,7 @@ python -m venv .venv
 
 macOS installs the native Vision OCR bindings through `requirements.txt`. On Linux, install `tesseract-ocr` and `tesseract-ocr-eng` through your system package manager; on Windows install Tesseract with English trained data and put `tesseract` on PATH. A Tesseract installation also works on macOS. OCR runs locally, with no API key or external image upload. The macOS engine needs normal native system access; restrictive sandboxes may prevent image buffer allocation.
 
-The web app requests `/api/projects/{id}/scale` after upload and selects **Automatic (default)**. It matches readable metric or feet/inches lengths to horizontal/vertical dimension lines with paired extension marks, handles rotated text, and checks agreement across measurements. Bare numbers require a drawing note specifying units. The selected reference is highlighted; the saved Scene records the method and notes. OCR scores are only used to reject weak text, not exposed as a calibrated probability.
+The web app requests `/api/projects/{id}/scale` after upload and selects **Automatic (default)**. It matches readable metric or feet/inches lengths to horizontal/vertical dimension lines with paired extension marks or overall dimension lines aligned with the outside walls, handles rotated text, and checks agreement across measurements. Bare numbers require a drawing note specifying units. The selected reference is highlighted; the saved Scene records the method and notes. OCR scores are only used to reject weak text, not exposed as a calibrated probability.
 
 If evidence is unavailable or contradictory, the app explicitly estimates scale by assuming 0.20 m solid walls. If it cannot find suitable wall strokes, it assumes a 10 m longest image side. These assumptions are not suitable for exact measurement. Choose **Manual reference**, click two endpoints, and enter their length in metres to override. The manual scale persists when reopening a saved reconstruction.
 
@@ -25,7 +25,7 @@ OCR uses [Tesseract TSV word boxes](https://tesseract-ocr.github.io/tessdoc/Comm
 ## Run
 
 ```powershell
-.venv\Scripts\python -m uvicorn roomshift_api.main:app --host 127.0.0.1 --port 8000
+.venv\Scripts\python -m uvicorn roomshift_api.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir roomshift_api
 ```
 
 | Env var | Default | Meaning |

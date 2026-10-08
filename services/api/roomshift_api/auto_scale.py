@@ -1,7 +1,8 @@
 """Conservative automatic scale: OCR dimensions + extension lines, then an explicit prior.
 
 OCR numbers are never treated as lengths without a unit (or a drawing unit note),
-paired extension marks, and an unambiguous geometric association. No network API.
+an unambiguous geometric association, and either extension marks or alignment
+with the outside walls of the plan. No network API.
 """
 from __future__ import annotations
 
@@ -126,6 +127,35 @@ def _unit_note(labels: list[Label]) -> str | None:
     return next(iter(units)) if len(units) == 1 else None
 
 
+def _outside_wall_span(ink: np.ndarray, label: Label, x: float, y: float,
+                       width: float, line_height: float) -> tuple[float, float] | None:
+    """Accept an unticked overall dimension only when both ends align with walls.
+
+    A nearby underline or room label alone is insufficient: the line must be
+    outside the structural footprint and span its two outer perpendicular walls.
+    """
+    vertical = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones(
+        (max(20, round(label.h * 2)), max(4, int(line_height) + 2)), np.uint8))
+    count, _, stats, _ = cv2.connectedComponentsWithStats(vertical)
+    walls = [s for s in stats[1:count] if s[3] >= max(20, label.h * 2) and s[2] < s[3] / 2]
+    if len(walls) < 2:
+        return None
+    outer_left = min(walls, key=lambda s: s[0])
+    outer_right = max(walls, key=lambda s: s[0] + s[2])
+    top = min(s[1] for s in walls)
+    bottom = max(s[1] + s[3] for s in walls)
+    gap = top - y if y < top else y - bottom if y > bottom else -1
+    if not 0 < gap <= max(15, label.h * 3):
+        return None
+    centers = [s[0] + (s[2] - 1) / 2 for s in (outer_left, outer_right)]
+    for endpoint, center, wall in zip((x, x + width - 1), centers, (outer_left, outer_right)):
+        if abs(endpoint - center) > max(4, wall[2] * .6, label.h * .25):
+            return None
+        if min(abs(y - wall[1]), abs(y - (wall[1] + wall[3]))) > max(15, label.h * 3):
+            return None
+    return float(centers[0]), float(centers[1])
+
+
 def _dimension_span(ink: np.ndarray, label: Label) -> tuple[list[float], list[float]] | None:
     """Find the nearest thin dimension line with extension marks bracketing its label.
 
@@ -162,9 +192,13 @@ def _dimension_span(ink: np.ndarray, label: Label) -> tuple[list[float], list[fl
         ticks = [float(np.mean(g)) for g in groups if g.size]
         left = [p for p in ticks if p < label.x - 2]
         right = [p for p in ticks if p > label.x + label.w + 2]
-        if not left or not right:
-            continue
-        a, b = max(left), min(right)
+        if left and right:
+            a, b = max(left), min(right)
+        else:
+            overall = _outside_wall_span(ink, label, x, line_y, width, height)
+            if overall is None:
+                continue
+            a, b = overall
         if b - a < max(25, label.w * 1.4) or abs((a + b) / 2 - cx) > (b - a) * .22:
             continue
         # Centered text next to a dimension segment, not an arbitrary distant number.
@@ -240,7 +274,7 @@ def estimate_scale(gray: np.ndarray) -> dict:
             median = float(np.median([c["metersPerPixel"] for c in cluster]))
             chosen = min(cluster, key=lambda c: abs(c["metersPerPixel"] - median)).copy()
             label = chosen.pop("label")
-            notes = [f'Automatic scale from printed dimension “{label}” matched to its extension marks ({len(cluster)} agreeing measurement(s)). Verify the highlighted reference.']
+            notes = [f'Automatic scale from printed dimension “{label}” matched to its dimension line ({len(cluster)} agreeing measurement(s)). Verify the highlighted reference.']
             if len(cluster) < len(candidates):
                 notes.append("Conflicting dimension readings were excluded by majority agreement.")
             return {**chosen, "method": "printed-dimension", "notes": notes + warnings}

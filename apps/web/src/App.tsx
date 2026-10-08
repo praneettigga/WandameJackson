@@ -234,12 +234,16 @@ export default function App() {
   const [scaleMode, setScaleMode] = useState<'auto' | 'manual'>('auto');
   const [automaticScale, setAutomaticScale] = useState<ScaleCalibration | null>(null);
   const [findingScale, setFindingScale] = useState(false);
+  const [scaleError, setScaleError] = useState('');
   async function findScale(id: string) {
     setFindingScale(true);
     setAutomaticScale(null);
+    setScaleError('');
     try {
       const result = await api.getScale(id);
       setAutomaticScale(result.calibration);
+    } catch (e) {
+      setScaleError(e instanceof Error ? e.message : String(e));
     } finally {
       setFindingScale(false);
     }
@@ -297,7 +301,9 @@ export default function App() {
       useEditor.setState({ workspace: 'Edit' });
     }
     setNotice(
-      scene ? `Loaded revision ${scene.revision}` : 'Project loaded. Automatic scale is ready.',
+      scene
+        ? `Loaded revision ${scene.revision}`
+        : 'Project loaded. Reconstruction will use automatic scale.',
     );
   }
   useEffect(() => {
@@ -397,7 +403,7 @@ export default function App() {
   const disabled = working || state.busy;
   const renderBlueprint = state.workspace === 'Reconstruct' && project && showBlueprint;
   async function reconstruct() {
-    if (!project || !scale || !discard()) return;
+    if (!project || (scaleMode === 'manual' && !scale) || !discard()) return;
     await guarded(async () => {
       if (
         (height !== '' &&
@@ -424,7 +430,12 @@ export default function App() {
         wallThickness: thickness === '' ? null : Number(thickness),
       });
       await pollJob(api, initial, setJob, { signal: polling.current.signal });
-      state.load(await api.getScene(project.project.id));
+      const scene = await api.getScene(project.project.id);
+      state.load(scene);
+      if (scaleMode === 'auto') {
+        setAutomaticScale(scene.source.calibration);
+        setScaleError('');
+      }
       useEditor.setState({ workspace: 'Edit' });
       setNotice(
         api.mock
@@ -531,7 +542,7 @@ export default function App() {
                       setNotice(
                         api.mock
                           ? 'Mock mode always displays the committed fixture; your image is not reconstructed.'
-                          : 'Blueprint uploaded. Automatic scale is ready; you can override it with a manual reference.',
+                          : 'Blueprint uploaded. Reconstruct space will use automatic scale; you can override it with a manual reference.',
                       );
                     });
                   }}
@@ -597,8 +608,9 @@ export default function App() {
                               ? api.mock
                                 ? 'Synthetic fixture scale'
                                 : 'Estimated scale · no verified measurement'
-                              : 'Automatic scale unavailable. Retry or use a manual reference.'}
+                              : 'Scale preview unavailable. Reconstruct space will calculate the scale automatically.'}
                     </p>
+                    {scaleError && <p className="hint">{scaleError}</p>}
                     {automaticScale?.notes?.map((note, i) => (
                       <p className="hint" key={i}>
                         {note}
@@ -686,7 +698,7 @@ export default function App() {
                 </label>
                 <button
                   className="primary wide"
-                  disabled={!project || !scale || disabled}
+                  disabled={!project || (scaleMode === 'manual' && !scale) || disabled}
                   onClick={() => void reconstruct()}
                 >
                   {working

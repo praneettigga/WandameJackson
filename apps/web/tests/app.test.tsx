@@ -135,6 +135,23 @@ describe('application integration without WebGL', () => {
     expect(screen.getByLabelText('Known distance (metres)')).toHaveValue(3);
     expect(screen.getByText('0.030000')).toBeInTheDocument();
   });
+  it('can reconstruct automatically even if scale preview fails', async () => {
+    vi.spyOn(api, 'getScale').mockRejectedValueOnce(new Error('Scale preview unavailable'));
+    const reconstruct = vi.spyOn(api, 'reconstruct');
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reconstruct' }));
+    fireEvent.change(screen.getByLabelText('Upload blueprint'), {
+      target: { files: [new File(['image'], 'plan.png', { type: 'image/png' })] },
+    });
+    await screen.findByRole('button', { name: 'Retry automatic scale' });
+    const button = screen.getByRole('button', { name: 'Load synthetic reconstruction →' });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.getByLabelText('Scale method')).toHaveValue('auto');
+    fireEvent.click(button);
+    await waitFor(() => expect(useEditor.getState().workspace).toBe('Edit'), { timeout: 4000 });
+    expect(reconstruct.mock.calls.at(-1)![1]).not.toHaveProperty('calibration');
+  });
   it('allows manual calibration when automatic scale lookup fails', async () => {
     vi.spyOn(api, 'getScale').mockRejectedValueOnce(new Error('Scale lookup unavailable'));
     render(<App />);

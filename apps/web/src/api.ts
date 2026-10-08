@@ -98,12 +98,22 @@ export class HttpApi implements RoomshiftApi {
   getProject(id: string) {
     return this.request<ProjectEnvelope>(`/api/projects/${encodeURIComponent(id)}`);
   }
-  getScale(id: string) {
-    return this.request<{ calibration: ScaleCalibration }>(
-      `/api/projects/${encodeURIComponent(id)}/scale`,
-      undefined,
-      60_000,
-    );
+  async getScale(id: string) {
+    try {
+      return await this.request<{ calibration: ScaleCalibration }>(
+        `/api/projects/${encodeURIComponent(id)}/scale`,
+        undefined,
+        60_000,
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404 && error.code === 'NOT_FOUND')
+        throw new ApiError(
+          404,
+          'API_UPDATE_REQUIRED',
+          'The running backend does not support automatic scale. Restart the backend with the updated code.',
+        );
+      throw error;
+    }
   }
   reconstruct(id: string, input: ReconstructionRequest) {
     return this.request<{ job: Job }>(`/api/projects/${encodeURIComponent(id)}/reconstruct`, {

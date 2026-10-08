@@ -14,7 +14,7 @@ root, start the backend:
 cd services/api
 python -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m uvicorn roomshift_api.main:app --host 127.0.0.1 --port 8000
+.venv/bin/python -m uvicorn roomshift_api.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir roomshift_api
 ```
 
 In another terminal:

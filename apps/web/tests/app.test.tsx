@@ -163,6 +163,82 @@ describe('application integration without WebGL', () => {
     fireEvent.change(screen.getByLabelText('Scale method'), { target: { value: 'manual' } });
     expect(screen.getByRole('button', { name: 'Load synthetic reconstruction →' })).toBeEnabled();
   });
+  it('uploads multiple floors, reconstructs them, and switches floor/exploded views', async () => {
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reconstruct' }));
+    fireEvent.change(screen.getByLabelText('Upload blueprint'), {
+      target: {
+        files: [
+          new File(['image'], 'Ground.png', { type: 'image/png' }),
+          new File(['image'], 'First.png', { type: 'image/png' }),
+        ],
+      },
+    });
+    await screen.findByRole('dialog', { name: 'Group blueprints' });
+    fireEvent.click(screen.getByRole('button', { name: 'Floors of the same building' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create grouped project' }));
+    await waitFor(() => expect(useEditor.getState().assembly?.buildings[0].floors).toHaveLength(2));
+    expect(
+      new Set(useEditor.getState().assembly!.buildings[0].floors.map((f) => f.projectId)).size,
+    ).toBe(2);
+    const reconstruct = screen.getByRole('button', { name: 'Load synthetic reconstruction →' });
+    await waitFor(() => expect(reconstruct).toBeEnabled());
+    fireEvent.click(reconstruct);
+    await waitFor(() => expect(Object.keys(useEditor.getState().scenes)).toHaveLength(2), {
+      timeout: 4000,
+    });
+    await waitFor(() => expect(useEditor.getState().busy).toBe(false));
+    fireEvent.change(screen.getByLabelText('View'), { target: { value: 'exploded' } });
+    expect(screen.getByLabelText('Visual gap (m)')).toHaveValue(2);
+    fireEvent.change(screen.getByLabelText('View'), { target: { value: 'floor' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Next floor' }));
+    expect(useEditor.getState().activeProjectId).toBe(
+      useEditor.getState().assembly!.buildings[0].floors[1].projectId,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save project' }));
+    await waitFor(() => expect(useEditor.getState().hasUnsaved()).toBe(false));
+  });
+  it('adds a floor to an existing single project while keeping its furniture edits', async () => {
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    const originalId = useEditor.getState().scene!.id;
+    useEditor.getState().commit((scene) => {
+      scene.name = 'Edited original';
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reconstruct' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add blueprints / floors' }));
+    fireEvent.change(screen.getByLabelText('Upload blueprint'), {
+      target: { files: [new File(['image'], 'Upper.png', { type: 'image/png' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Floors of the same building' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create grouped project' }));
+    await waitFor(() => expect(useEditor.getState().assembly?.buildings[0].floors).toHaveLength(2));
+    expect(useEditor.getState().activeProjectId).toBe(originalId);
+    expect(useEditor.getState().scene!.name).toBe('Edited original');
+    expect(useEditor.getState().dirty).toBe(true);
+    expect(useEditor.getState().assembly!.buildings[0].floors[0].projectId).toBe(originalId);
+  });
+  it('allows grouping several files into each of multiple buildings', async () => {
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reconstruct' }));
+    fireEvent.change(screen.getByLabelText('Upload blueprint'), {
+      target: {
+        files: ['A.png', 'B.png', 'C.png'].map(
+          (name) => new File(['image'], name, { type: 'image/png' }),
+        ),
+      },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Different buildings' }));
+    const assignments = screen.getAllByLabelText('Building');
+    fireEvent.change(assignments[1], {
+      target: { value: (assignments[0] as HTMLSelectElement).value },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create grouped project' }));
+    await waitFor(() => expect(useEditor.getState().assembly?.buildings).toHaveLength(2));
+    expect(useEditor.getState().assembly!.buildings.map((b) => b.floors.length)).toEqual([2, 1]);
+  });
   it('performs two-point visual calibration and mock job polling, then opens the fixture', async () => {
     const reconstruct = vi.spyOn(api, 'reconstruct');
     render(<App />);

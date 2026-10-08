@@ -8,8 +8,15 @@ import {
   TransformControls,
 } from '@react-three/drei';
 import * as THREE from 'three';
-import { buildSceneGeometry, collides, disposeGeometry, pointInRoom } from './geometry';
-import { useEditor } from './store';
+import {
+  buildSceneGeometry,
+  buildAssemblyGeometry,
+  collides,
+  disposeGeometry,
+  pointInRoom,
+} from './geometry';
+import { useEditor, editorScenes } from './store';
+import { floorsOf, placements, type Placement } from './assembly';
 import { resizedObject, type Scene, type V3 } from './scene';
 
 function FrameCamera({ root }: { root: THREE.Group }) {
@@ -20,13 +27,22 @@ function FrameCamera({ root }: { root: THREE.Group }) {
   useEffect(() => {
     if (workspace === 'Explore') return;
     const id = useEditor.getState().selectedId;
+    const state = useEditor.getState();
+    const active = state.assembly
+      ? floorsOf(state.assembly).find((f) => f.projectId === state.activeProjectId)
+      : null;
+    const scope = active ? (root.getObjectByName(`floor:${active.id}`) ?? root) : root;
     const object = id
-      ? (root.getObjectByName(id) ?? root.children.find((c) => c.userData.entityId === id))
+      ? (scope.getObjectByName(id) ?? scope.children.find((c) => c.userData.entityId === id))
       : root;
     const bounds = new THREE.Box3().setFromObject(object ?? root);
     if (bounds.isEmpty()) return;
     const center = bounds.getCenter(new THREE.Vector3());
     const distance = Math.max(bounds.getSize(new THREE.Vector3()).length() * 0.85, 2);
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.far = Math.max(500, distance * 10);
+      camera.updateProjectionMatrix();
+    }
     camera.position.copy(center).add(new THREE.Vector3(distance * 0.85, distance * 0.85, distance));
     camera.lookAt(center);
     if (controls && 'target' in controls) {
@@ -38,7 +54,7 @@ function FrameCamera({ root }: { root: THREE.Group }) {
   }, [frame, camera, controls, workspace]);
   return null;
 }
-function FirstPerson({ scene }: { scene: Scene }) {
+function FirstPerson({ scene, placement }: { scene: Scene; placement?: Placement }) {
   const camera = useThree((s) => s.camera);
   const keys = useRef(new Set<string>());
   const [locked, setLocked] = useState(false);
@@ -60,8 +76,13 @@ function FirstPerson({ scene }: { scene: Scene }) {
       if (spawn) break;
     }
     const start = spawn ?? scene.rooms[0]?.polygon[0] ?? [0, 0];
-    camera.position.set(start[0], 1.65, start[1]);
-    camera.lookAt(start[0] + 1, 1.65, start[1] + 1);
+    const position = new THREE.Vector3(start[0], 1.65, start[1]);
+    if (placement)
+      position
+        .applyAxisAngle(new THREE.Vector3(0, 1, 0), placement.rotationY)
+        .add(new THREE.Vector3(...placement.position));
+    camera.position.copy(position);
+    camera.lookAt(position.clone().add(new THREE.Vector3(1, 0, 1)));
     const down = (e: KeyboardEvent) => {
       if (
         !(e.target instanceof HTMLElement) ||
@@ -79,7 +100,7 @@ function FirstPerson({ scene }: { scene: Scene }) {
       window.removeEventListener('keyup', up);
       window.removeEventListener('blur', clear);
     };
-  }, [camera, scene]);
+  }, [camera, scene, placement?.floor.id, placement?.position.join(), placement?.rotationY]);
   useFrame((_, delta) => {
     if (!locked) return;
     const k = keys.current;
@@ -91,11 +112,19 @@ function FirstPerson({ scene }: { scene: Scene }) {
       .multiplyScalar(Number(k.has('KeyW')) - Number(k.has('KeyS')))
       .add(right.multiplyScalar(Number(k.has('KeyD')) - Number(k.has('KeyA'))));
     if (movement.lengthSq()) movement.normalize().multiplyScalar(Math.min(delta, 0.05) * 2);
-    if (!collides(scene, camera.position.x + movement.x, camera.position.z))
+    const blocked = (x: number, z: number) => {
+      const local = new THREE.Vector3(x, 0, z);
+      if (placement)
+        local
+          .sub(new THREE.Vector3(placement.position[0], 0, placement.position[2]))
+          .applyAxisAngle(new THREE.Vector3(0, 1, 0), -placement.rotationY);
+      return collides(scene, local.x, local.z);
+    };
+    if (!blocked(camera.position.x + movement.x, camera.position.z))
       camera.position.x += movement.x;
-    if (!collides(scene, camera.position.x, camera.position.z + movement.z))
+    if (!blocked(camera.position.x, camera.position.z + movement.z))
       camera.position.z += movement.z;
-    camera.position.y = 1.65;
+    camera.position.y = (placement?.elevation ?? 0) + 1.65;
   });
   return (
     <PointerLockControls
@@ -110,16 +139,45 @@ function FirstPerson({ scene }: { scene: Scene }) {
 }
 function World() {
   const state = useEditor();
+  const scenes = editorScenes(state);
+  const activeFloor = state.assembly
+    ? floorsOf(state.assembly).find((f) => f.projectId === state.activeProjectId)
+    : undefined;
+  const view =
+    state.workspace === 'Explore' && activeFloor
+      ? { ...state.view, mode: 'floor' as const, floorId: activeFloor.id, buildingId: null }
+      : state.view;
+  const activePlacement = state.assembly
+    ? placements(state.assembly, scenes).find((p) => p.floor.projectId === state.activeProjectId)
+    : undefined;
   const root = useMemo(
     () =>
-      state.scene
-        ? buildSceneGeometry(state.scene, {
+      state.assembly
+        ? buildAssemblyGeometry(state.assembly, editorScenes(state), view, {
             ceilings: state.ceilings || state.workspace === 'Explore',
             xray: state.xray,
             selectedId: state.selectedId,
+            activeProjectId: state.activeProjectId,
           })
-        : new THREE.Group(),
-    [state.scene, state.ceilings, state.workspace, state.xray, state.selectedId],
+        : state.scene
+          ? buildSceneGeometry(state.scene, {
+              ceilings: state.ceilings || state.workspace === 'Explore',
+              xray: state.xray,
+              selectedId: state.selectedId,
+            })
+          : new THREE.Group(),
+    [
+      state.scene,
+      state.scenes,
+      state.floorStates,
+      state.assembly,
+      state.view,
+      state.activeProjectId,
+      state.ceilings,
+      state.workspace,
+      state.xray,
+      state.selectedId,
+    ],
   );
   const ghost = useMemo(
     () =>
@@ -128,6 +186,15 @@ function World() {
         : null,
     [state.sourceScene, state.compare, state.ceilings],
   );
+  if (ghost && activePlacement) {
+    const display = state.assembly
+      ? placements(state.assembly, scenes, view.mode === 'exploded' ? view.gap : 0).find(
+          (p) => p.floor.id === activePlacement.floor.id,
+        )!
+      : activePlacement;
+    ghost.position.set(...display.position);
+    ghost.rotation.y = display.rotationY;
+  }
   useEffect(() => () => disposeGeometry(root), [root]);
   useEffect(
     () => () => {
@@ -136,7 +203,8 @@ function World() {
     [ghost],
   );
   const selected = state.scene?.objects.find((o) => o.id === state.selectedId);
-  const target = selected ? root.getObjectByName(selected.id) : undefined;
+  const activeRoot = activeFloor ? root.getObjectByName(`floor:${activeFloor.id}`) : root;
+  const target = selected ? activeRoot?.getObjectByName(selected.id) : undefined;
   const dragging = useRef(false);
   function click(event: ThreeEvent<MouseEvent>) {
     event.stopPropagation();
@@ -146,7 +214,9 @@ function World() {
       useEditor.setState({
         measures: [...(state.measures.length === 2 ? [] : state.measures), [p.x, p.y, p.z]],
       });
-    } else state.select(event.object.userData.entityId ?? null);
+    } else if (state.assembly && event.object.userData.projectId)
+      state.activateFloor(event.object.userData.projectId, event.object.userData.entityId);
+    else state.select(event.object.userData.entityId ?? null);
   }
   return (
     <>
@@ -159,7 +229,15 @@ function World() {
       {state.workspace !== 'Explore' && (
         <>
           <Grid
-            position={[0, -0.015, 0]}
+            position={[
+              0,
+              state.assembly
+                ? view.mode === 'floor'
+                  ? (activePlacement?.elevation ?? 0) - 0.215
+                  : -0.215
+                : -0.015,
+              0,
+            ]}
             args={[100, 100]}
             cellSize={0.1}
             sectionSize={1}
@@ -170,7 +248,14 @@ function World() {
             fadeDistance={35}
             infiniteGrid
           />
-          <OrbitControls makeDefault minDistance={0.4} maxDistance={100} />
+          <OrbitControls
+            makeDefault
+            minDistance={0.4}
+            maxDistance={Math.max(
+              100,
+              new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3()).length() * 3,
+            )}
+          />
           {target && selected && !state.measure && !state.busy && (
             <TransformControls
               object={target}
@@ -205,7 +290,9 @@ function World() {
           <FrameCamera root={root} />
         </>
       )}
-      {state.workspace === 'Explore' && state.scene && <FirstPerson scene={state.scene} />}
+      {state.workspace === 'Explore' && state.scene && (
+        <FirstPerson scene={state.scene} placement={activePlacement} />
+      )}
       {state.measures.map((p, i) => (
         <mesh key={i} position={p} userData={{ helper: true }}>
           <sphereGeometry args={[0.035]} />
@@ -237,6 +324,9 @@ export function Viewport() {
   const scene = useEditor((s) => s.scene),
     workspace = useEditor((s) => s.workspace),
     measures = useEditor((s) => s.measures);
+  const assembly = useEditor((s) => s.assembly),
+    memberScenes = useEditor((s) => s.scenes);
+  const hasScene = Boolean(scene || (assembly && Object.keys(memberScenes).length));
   const measure = useEditor((s) => s.measure),
     compare = useEditor((s) => s.compare);
   return (
@@ -256,7 +346,7 @@ export function Viewport() {
         <span className="live-dot" /> {workspace === 'Explore' ? 'FIRST PERSON' : 'PERSPECTIVE'}{' '}
         <span className="muted">/ METRES</span>
       </div>
-      {!scene && (
+      {!hasScene && (
         <div className="empty-viewport">
           <div className="room-symbol">⌑</div>
           <h2>A plan becomes a place.</h2>

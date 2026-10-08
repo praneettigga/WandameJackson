@@ -134,3 +134,16 @@ JPEG pixel coordinates and reported dimensions use the image's EXIF display orie
 ## Fixture / dev seed
 
 `fixtures/room.scene.json` is synthetic (`source.synthetic: true`, parser `fixture`). The backend serves it only when an explicit, documented dev seed option is enabled, as project `demo-room`. It is never used as a fallback for a failed parse. Frontend mock mode uses it with a `MOCK DATA` badge.
+
+## Grouped projects — Assembly 1.0
+
+The additive [assembly schema](assembly.schema.json) references unchanged Scene 0.1.0 projects. Buildings contain ordered floors (bottom first). Each floor references a unique `projectId` and stores offsets in metres, rotation in radians, optional story height, reconstruction settings, and a server-owned job link. Building transforms apply after floor transforms. Plans are centered for placement; source scene coordinates remain unchanged. Automatic story height is maximum wall/room height plus a 0.20 m slab. Manual heights below that minimum are rejected. Exploded spacing is display-only.
+
+- `POST /api/assemblies`: body `{name, buildings}`; returns 201 with the envelope below. IDs and project membership must be unique; referenced projects must exist.
+- `GET /api/assemblies/{id}`: returns 200 with available scenes and latest linked jobs.
+- `PUT /api/assemblies/{id}`: full Assembly with matching ID, revision, and immutable creation time; increments revision. Stale saves return `REVISION_CONFLICT`. Server job links are preserved.
+- `POST /api/assemblies/{id}/reconstruct`: `{}` targets missing or previously failed floors; `{projectIds:[...]}` targets explicit members. Uses independent automatic/manual calibration and wall settings. Reuses running jobs. Returns 202 with the envelope plus `submittedJobs` and per-project `errors`. Updates assembly revision. One failed submission does not abort other floors.
+
+Envelope: `{assembly, projects:[ProjectEnvelope], scenes:{[projectId]:Scene}, jobs:{[projectId]:Job}}`. Unavailable scenes/jobs are omitted. Unknown grouped IDs return `ASSEMBLY_NOT_FOUND`. Existing child project, scene, source, and job endpoints remain supported.
+
+Save-all uses separate revision checks for layout and child scenes; failed saves retain local changes. JSON bundles the assembly, available scenes, and `omittedFloors`. GLB contains available geometry at physical elevations and reports omitted floors.

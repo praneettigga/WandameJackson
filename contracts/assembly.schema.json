@@ -1,0 +1,297 @@
+{
+  "$defs": {
+    "Building": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "offset": {
+          "default": [
+            0,
+            0
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Offset",
+          "type": "array"
+        },
+        "rotationY": {
+          "default": 0,
+          "title": "Rotationy",
+          "type": "number"
+        },
+        "floors": {
+          "items": {
+            "$ref": "#/$defs/Floor"
+          },
+          "minItems": 1,
+          "title": "Floors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "floors"
+      ],
+      "title": "Building",
+      "type": "object"
+    },
+    "CalibrationInput": {
+      "additionalProperties": false,
+      "properties": {
+        "pointA": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Pointa",
+          "type": "array"
+        },
+        "pointB": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Pointb",
+          "type": "array"
+        },
+        "distanceMeters": {
+          "exclusiveMinimum": 0,
+          "title": "Distancemeters",
+          "type": "number"
+        }
+      },
+      "required": [
+        "pointA",
+        "pointB",
+        "distanceMeters"
+      ],
+      "title": "CalibrationInput",
+      "type": "object"
+    },
+    "Floor": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "projectId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Projectid",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "offset": {
+          "default": [
+            0,
+            0
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Offset",
+          "type": "array"
+        },
+        "rotationY": {
+          "default": 0,
+          "title": "Rotationy",
+          "type": "number"
+        },
+        "storyHeight": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 100,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Storyheight"
+        },
+        "settings": {
+          "$ref": "#/$defs/FloorSettings"
+        },
+        "lastJobId": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lastjobid"
+        }
+      },
+      "required": [
+        "id",
+        "projectId",
+        "name"
+      ],
+      "title": "Floor",
+      "type": "object"
+    },
+    "FloorSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "scaleMode": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "manual"
+          ],
+          "title": "Scalemode",
+          "type": "string"
+        },
+        "calibration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CalibrationInput"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "wallHeight": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 20,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wallheight"
+        },
+        "wallThickness": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 2,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wallthickness"
+        }
+      },
+      "title": "FloorSettings",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "buildings": {
+      "items": {
+        "$ref": "#/$defs/Building"
+      },
+      "minItems": 1,
+      "title": "Buildings",
+      "type": "array"
+    },
+    "schemaVersion": {
+      "default": "1.0",
+      "pattern": "^1\\.0$",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.-]+$",
+      "title": "Id",
+      "type": "string"
+    },
+    "revision": {
+      "minimum": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "createdAt": {
+      "title": "Createdat",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "buildings",
+    "id",
+    "revision",
+    "createdAt"
+  ],
+  "title": "Assembly",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Building/floor composition referencing independent 0.1.0 scenes. Floors are ordered bottom to top; offsets use metres and rotations use radians. Slab thickness is inferred as 0.20 m."
+}

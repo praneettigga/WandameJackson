@@ -1,5 +1,19 @@
 import { create } from 'zustand';
-import { ApiError, type RoomshiftApi } from './api';
+import {
+  defaultView,
+  floorsOf,
+  assemblySchema,
+  layoutErrors,
+  type Assembly,
+  type FloorView,
+} from './assembly';
+import {
+  ApiError,
+  type AssemblyEnvelope,
+  type Job,
+  type ProjectEnvelope,
+  type RoomshiftApi,
+} from './api';
 import {
   createObject,
   editEntity,
@@ -14,7 +28,30 @@ import {
 
 type Workspace = 'Reconstruct' | 'Edit' | 'Inspect' | 'Explore';
 type Mode = 'translate' | 'rotate' | 'scale';
-type EditorState = {
+type FloorSnapshot = {
+  scene: Scene | null;
+  past: Scene[];
+  future: Scene[];
+  dirty: boolean;
+  conflict: boolean;
+  selectedId: string | null;
+};
+export type EditorState = {
+  assembly: Assembly | null;
+  assemblyDirty: boolean;
+  assemblyConflict: boolean;
+  projects: Record<string, ProjectEnvelope>;
+  scenes: Record<string, Scene>;
+  floorStates: Record<string, FloorSnapshot>;
+  activeProjectId: string | null;
+  jobs: Record<string, Job>;
+  view: FloorView;
+  loadAssembly: (envelope: AssemblyEnvelope) => void;
+  refreshAssembly: (envelope: AssemblyEnvelope) => void;
+  activateFloor: (projectId: string, entityId?: string) => void;
+  updateAssembly: (mutate: (assembly: Assembly) => void) => void;
+  setView: (patch: Partial<FloorView>) => void;
+  hasUnsaved: () => boolean;
   scene: Scene | null;
   selectedId: string | null;
   past: Scene[];
@@ -45,6 +82,110 @@ type EditorState = {
   save: (api: RoomshiftApi) => Promise<void>;
 };
 export const useEditor = create<EditorState>((set, get) => ({
+  assembly: null,
+  assemblyDirty: false,
+  assemblyConflict: false,
+  projects: {},
+  scenes: {},
+  floorStates: {},
+  activeProjectId: null,
+  jobs: {},
+  view: { ...defaultView },
+  hasUnsaved: () =>
+    get().dirty || get().assemblyDirty || Object.values(get().floorStates).some((s) => s.dirty),
+  loadAssembly: (envelope) => {
+    const floor =
+      floorsOf(envelope.assembly).find((f) => envelope.scenes[f.projectId]) ??
+      floorsOf(envelope.assembly)[0];
+    get().load(envelope.scenes[floor.projectId] ?? null);
+    set({
+      assembly: assemblySchema.parse(envelope.assembly),
+      projects: Object.fromEntries(envelope.projects.map((p) => [p.project.id, p])),
+      scenes: envelope.scenes,
+      jobs: envelope.jobs,
+      activeProjectId: floor.projectId,
+    });
+  },
+  refreshAssembly: (envelope) => {
+    const s = get();
+    const contexts = stashFloor(s);
+    const scenes = { ...envelope.scenes };
+    for (const [id, context] of Object.entries(contexts)) {
+      if (context.dirty && context.scene) scenes[id] = context.scene;
+      else contexts[id] = { ...context, scene: scenes[id] ?? null, past: [], future: [] };
+    }
+    const active = s.activeProjectId;
+    const changed =
+      Object.keys(s.scenes).length !== Object.keys(scenes).length ||
+      Object.entries(scenes).some(([id, scene]) => s.scenes[id]?.revision !== scene.revision);
+    set({
+      assembly: s.assemblyDirty ? s.assembly : assemblySchema.parse(envelope.assembly),
+      projects: Object.fromEntries(envelope.projects.map((p) => [p.project.id, p])),
+      jobs: envelope.jobs,
+      scenes,
+      scene: active ? (scenes[active] ?? null) : s.scene,
+      floorStates: contexts,
+      ...(active && !contexts[active]?.dirty ? { past: [], future: [] } : {}),
+      frame: s.frame + (changed ? 1 : 0),
+    });
+  },
+  activateFloor: (projectId, entityId) => {
+    const s = get();
+    if (!s.assembly || !s.projects[projectId] || s.busy) return;
+    const floorStates = stashFloor(s);
+    const saved = floorStates[projectId];
+    const scene = saved?.scene ?? s.scenes[projectId] ?? null;
+    set({
+      activeProjectId: projectId,
+      floorStates,
+      scene,
+      past: saved?.past ?? [],
+      future: saved?.future ?? [],
+      dirty: saved?.dirty ?? false,
+      conflict: saved?.conflict ?? false,
+      selectedId:
+        entityId && scene && entityById(scene, entityId) ? entityId : (saved?.selectedId ?? null),
+      sourceScene: null,
+      compare: false,
+      measures: [],
+      measure: false,
+      error: null,
+      frame: s.frame + 1,
+      view: {
+        ...s.view,
+        ...(s.view.mode === 'floor'
+          ? { floorId: floorsOf(s.assembly).find((f) => f.projectId === projectId)?.id ?? null }
+          : {}),
+        ...(s.view.buildingId
+          ? {
+              buildingId:
+                s.assembly.buildings.find((b) => b.floors.some((f) => f.projectId === projectId))
+                  ?.id ?? null,
+            }
+          : {}),
+      },
+      workspace: scene ? (s.workspace === 'Reconstruct' ? 'Reconstruct' : 'Edit') : 'Reconstruct',
+    });
+  },
+  updateAssembly: (mutate) => {
+    const s = get();
+    if (!s.assembly || s.busy) return;
+    try {
+      const next = structuredClone(s.assembly);
+      mutate(next);
+      assemblySchema.parse(next);
+      const errors = layoutErrors(next, editorScenes(s));
+      if (errors.length) throw new Error(errors[0]);
+      set({ assembly: next, assemblyDirty: true, error: null, frame: s.frame + 1 });
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e) });
+    }
+  },
+  setView: (patch) => {
+    const s = get();
+    if (s.busy) return;
+    set({ view: { ...s.view, ...patch }, selectedId: null, measures: [], frame: s.frame + 1 });
+  },
   scene: null,
   selectedId: null,
   past: [],
@@ -65,6 +206,15 @@ export const useEditor = create<EditorState>((set, get) => ({
   frame: 0,
   load: (scene) =>
     set({
+      assembly: null,
+      assemblyDirty: false,
+      assemblyConflict: false,
+      projects: {},
+      scenes: {},
+      floorStates: {},
+      activeProjectId: scene?.id ?? null,
+      jobs: {},
+      view: { ...defaultView },
       scene: scene ? sceneSchema.parse(scene) : null,
       selectedId: null,
       past: [],
@@ -185,6 +335,63 @@ export const useEditor = create<EditorState>((set, get) => ({
     });
   },
   save: async (api) => {
+    const group = get();
+    if (group.assembly) {
+      if (group.busy) return;
+      const contexts = stashFloor(group);
+      set({ busy: true, error: null });
+      const failures: string[] = [];
+      let assembly = group.assembly;
+      let assemblyDirty = group.assemblyDirty;
+      let assemblyConflict = group.assemblyConflict;
+      if (assemblyDirty && assemblyConflict) {
+        failures.push('Grouped layout: reload to resolve its revision conflict before saving.');
+      }
+      if (assemblyDirty && !assemblyConflict) {
+        try {
+          assembly = (await api.saveAssembly(assembly)).assembly;
+          assemblyDirty = false;
+        } catch (e) {
+          failures.push(e instanceof Error ? e.message : String(e));
+          assemblyConflict = e instanceof ApiError && e.code === 'REVISION_CONFLICT';
+        }
+      }
+      for (const [id, context] of Object.entries(contexts)) {
+        if (!context.dirty || !context.scene) continue;
+        if (context.conflict) {
+          failures.push(`${context.scene.name}: resolve its revision conflict before saving.`);
+          continue;
+        }
+        try {
+          context.scene = await api.saveScene(id, context.scene);
+          context.dirty = false;
+        } catch (e) {
+          failures.push(`${context.scene.name}: ${e instanceof Error ? e.message : String(e)}`);
+          context.conflict = e instanceof ApiError && e.code === 'REVISION_CONFLICT';
+        }
+      }
+      const active = contexts[group.activeProjectId ?? ''];
+      set({
+        assembly,
+        assemblyDirty,
+        assemblyConflict,
+        floorStates: contexts,
+        scenes: {
+          ...group.scenes,
+          ...Object.fromEntries(
+            Object.entries(contexts)
+              .filter(([, c]) => c.scene)
+              .map(([id, c]) => [id, c.scene!]),
+          ),
+        },
+        ...(active ? { scene: active.scene, dirty: active.dirty, conflict: active.conflict } : {}),
+        busy: false,
+        error: failures.length
+          ? `${failures.join(' ')} Local edits have been retained. Export JSON before reloading.`
+          : null,
+      });
+      return;
+    }
     const scene = get().scene;
     if (!scene || get().busy || get().conflict) return;
     set({ busy: true, error: null });
@@ -206,3 +413,32 @@ export const useEditor = create<EditorState>((set, get) => ({
     }
   },
 }));
+
+function stashFloor(s: EditorState): Record<string, FloorSnapshot> {
+  return {
+    ...s.floorStates,
+    ...(s.activeProjectId
+      ? {
+          [s.activeProjectId]: {
+            scene: s.scene,
+            past: s.past,
+            future: s.future,
+            dirty: s.dirty,
+            conflict: s.conflict,
+            selectedId: s.selectedId,
+          },
+        }
+      : {}),
+  };
+}
+export function editorScenes(s: EditorState): Record<string, Scene> {
+  return {
+    ...s.scenes,
+    ...Object.fromEntries(
+      Object.entries(s.floorStates)
+        .filter(([, c]) => c.scene)
+        .map(([id, c]) => [id, c.scene!]),
+    ),
+    ...(s.scene ? { [s.scene.id]: s.scene } : {}),
+  };
+}

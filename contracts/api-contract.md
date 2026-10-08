@@ -219,3 +219,50 @@ Errors include `WORKER_NOT_CONFIGURED`, `GPU_UNAVAILABLE`, `CHECKPOINT_MISSING`,
 `CHECKPOINT_LICENSE_REQUIRED`, `GPU_OUT_OF_MEMORY`, `RECONSTRUCTION_TIMEOUT`,
 `WORKER_EXITED`, `INVALID_MESH`, and `JOB_CANCELLED`. Failed/cancelled reruns retain
 the previous published mesh. See [worker setup and validation boundaries](../services/reconstruction/README.md).
+
+## Mode 2 scale and alignment (Milestone 3)
+
+`PUT /api/projects/{id}/mesh/calibration` applies a complete calibration specification:
+
+```json
+{
+  "jobId": "j_current_mesh",
+  "expectedRevision": null,
+  "reference": { "pointA": [0, 0, 0], "pointB": [1, 0, 0], "distanceMeters": 2 },
+  "floor": { "points": [[0, 0, 0], [1, 0, 0], [0, 0, 1]], "flipNormal": false },
+  "rotationDegrees": [0, 0, 0]
+}
+```
+
+Points use the original reconstruction coordinates. `reference` and `floor` may
+be null. With both null and zero rotation, the result resets to original geometry.
+`expectedRevision` must match the current `calibrationRevision` (null initially);
+stale revisions or reconstruction job IDs return 409 `CALIBRATION_CONFLICT`.
+Invalid/non-finite references, coincident scale points and collinear floor points
+return 400. Two-point scale must be between 1e-4 and 1e4 model-to-world units.
+
+Floor alignment rotates the selected normal toward +Y, translating the first floor
+point to the origin. `flipNormal` reverses the chosen up direction. Manual X/Y/Z
+Euler corrections in degrees, each within ±180, apply after floor alignment in
+X-then-Y-then-Z order. The final transform is `T = [sR, -sR origin; 0, 1]`.
+
+Success returns the effective mesh manifest, version `1.1.0`, including
+`reconstructionToWorld` (row-major 4×4), `calibrationRevision`, `calibration`,
+`meshUrl` and `manifestUrl`. Units are `meters` only when a reference distance is
+present. Geometry positions use T; normals use R. Camera orientations use R and
+centers use T, keeping rigid camera bases and inverse world-to-camera matrices.
+`worldToViewer`, when present, composes T with the original convention conversion.
+Geometry-length statistics are scaled; source-image intrinsics remain unchanged.
+
+`GET /api/projects/{id}/mesh` returns the latest effective calibration after reload.
+`GET /api/projects/{id}/mesh-calibrations/{revision}/{mesh.glb|manifest.json}` serves
+only the current published calibration. GLB transforms are baked into vertices;
+the manifest matrix describes the operation already applied (do not apply twice).
+Diagnostic PLY continues to use original uncalibrated coordinates and is labeled
+accordingly. Calibrations are always rebuilt from the original mesh, avoiding
+cumulative transform error. Tiny faces collapsed at float32 precision are removed,
+with a count in `statistics.calibrationDegenerateTrianglesRemoved`.
+
+Publication is atomic under the project lock. Failed calibration/rerun preserves
+the previous result. A successful new reconstruction has a new coordinate frame
+and starts uncalibrated. Existing Mode 1 and uncalibrated Mode 2 projects still load.

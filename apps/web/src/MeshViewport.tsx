@@ -1,6 +1,7 @@
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Bounds, OrbitControls } from '@react-three/drei';
+import { Bounds, OrbitControls, Html, Line } from '@react-three/drei';
+import type { MeshPoint } from './api';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as THREE from 'three';
 
@@ -36,7 +37,19 @@ function RenderReady({ onReady }: { onReady: () => void }) {
   });
   return null;
 }
-export function MeshViewport({ url }: { url: string }) {
+export function MeshViewport({
+  url,
+  units = 'uncalibrated',
+  points = [],
+  onPick,
+  floorAligned = false,
+}: {
+  url: string;
+  units?: 'uncalibrated' | 'meters';
+  points?: MeshPoint[];
+  onPick?: (point: MeshPoint) => void;
+  floorAligned?: boolean;
+}) {
   const [object, setObject] = useState<THREE.Group | null>(null);
   const [error, setError] = useState('');
   const [wireframe, setWireframe] = useState(false);
@@ -76,9 +89,16 @@ export function MeshViewport({ url }: { url: string }) {
     });
   }, [object, wireframe]);
   return (
-    <div className="mesh-viewport" data-rendered={rendered}>
+    <div className="mesh-viewport" data-rendered={rendered} data-picking={!!onPick}>
       <div className="mesh-view-controls">
-        <button onClick={() => { setRendered(false); setFrame((v) => v + 1); }}>Fit mesh</button>
+        <button
+          onClick={() => {
+            setRendered(false);
+            setFrame((v) => v + 1);
+          }}
+        >
+          Fit mesh
+        </button>
         <button aria-pressed={wireframe} onClick={() => setWireframe(!wireframe)}>
           Wireframe
         </button>
@@ -98,15 +118,42 @@ export function MeshViewport({ url }: { url: string }) {
             <ambientLight intensity={1.4} />
             <directionalLight position={[5, 8, 5]} intensity={2} />
             <Bounds fit clip observe margin={1.25}>
-              <primitive object={object} dispose={null} />
+              <primitive
+                object={object}
+                dispose={null}
+                onClick={(event: {
+                  delta: number;
+                  point: THREE.Vector3;
+                  stopPropagation: () => void;
+                }) => {
+                  if (onPick && event.delta <= 4) {
+                    event.stopPropagation();
+                    onPick(event.point.toArray() as MeshPoint);
+                  }
+                }}
+              />
             </Bounds>
+            {points.length > 1 && <Line points={points} color="#ffcb70" lineWidth={2} />}
+            {points.map((point, i) => (
+              <Html key={i} position={point} center style={{ pointerEvents: 'none' }}>
+                <span className="mesh-point-label">{i + 1}</span>
+              </Html>
+            ))}
+            {floorAligned && <axesHelper args={[units === 'meters' ? 1 : 0.25]} />}
             <OrbitControls makeDefault enableDamping />
             <RenderReady onReady={() => setRendered(true)} />
           </Canvas>
-          {!rendered && <div className="mesh-load-state mesh-render-loading" role="status">Loading colored mesh…</div>}
+          {!rendered && (
+            <div className="mesh-load-state mesh-render-loading" role="status">
+              Loading colored mesh…
+            </div>
+          )}
         </MeshBoundary>
       )}
-      <div className="mesh-view-caption">Drag to orbit · Scroll to zoom · Uncalibrated scale</div>
+      <div className="mesh-view-caption">
+        {onPick ? 'Click a surface to select a point · ' : ''}Drag to orbit · Scroll to zoom ·{' '}
+        {units === 'meters' ? 'Meters · user calibrated' : 'Uncalibrated scale'}
+      </div>
     </div>
   );
 }

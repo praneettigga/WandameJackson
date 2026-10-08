@@ -25,6 +25,7 @@ from .config import SCHEMA_VERSION, Settings
 from .errors import ApiError, error_body
 from .images import inspect_image, load_gray
 from .mesh_worker import capability_report
+from .mesh_calibration import current_mesh, mesh_response, save_calibration
 from .jobs import JobRunner, now_iso, public_job
 from .storage import Storage
 from .validation import validate_scene
@@ -50,6 +51,28 @@ class ReconstructIn(BaseModel):
 class MeshReconstructIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     maxViews: Literal[12, 20, 32, 40] = 12
+
+
+class MeshReferenceIn(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    pointA: tuple[float, float, float]
+    pointB: tuple[float, float, float]
+    distanceMeters: float = Field(gt=0, le=10000)
+
+
+class MeshFloorIn(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    points: tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]
+    flipNormal: bool = False
+
+
+class MeshCalibrationIn(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    jobId: str
+    expectedRevision: str | None = None
+    reference: MeshReferenceIn | None = None
+    floor: MeshFloorIn | None = None
+    rotationDegrees: tuple[float, float, float] = (0, 0, 0)
 
 
 def project_envelope(p: dict) -> dict:
@@ -223,13 +246,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/projects/{project_id}/mesh")
     async def get_mesh(project_id: str):
         p = need_project(project_id)
-        if not p.get("meshManifestPath"):
-            raise ApiError(404, "MESH_NOT_READY", "No successful mesh reconstruction exists yet.")
-        manifest = json.loads((storage.project_dir(project_id) / p["meshManifestPath"]).read_text())
-        prefix = f"/api/projects/{project_id}/mesh-artifacts/{manifest['jobId']}"
-        manifest["meshUrl"] = f"{prefix}/mesh.glb"
-        manifest["diagnosticUrl"] = f"{prefix}/diagnostic.ply"
-        return manifest
+        return mesh_response(current_mesh(storage, p))
+
+    @app.put('/api/projects/{project_id}/mesh/calibration')
+    async def calibrate_mesh(project_id: str, body: MeshCalibrationIn):
+        return await run_in_threadpool(save_calibration, storage, project_id, body.model_dump())
+
+    @app.get('/api/projects/{project_id}/mesh-calibrations/{revision}/{filename}')
+    async def calibrated_artifact(project_id: str, revision: str, filename: str):
+        p = need_project(project_id)
+        manifest = current_mesh(storage, p)
+        if filename not in {'mesh.glb', 'manifest.json'} or revision != manifest.get('calibrationRevision'):
+            raise ApiError(404, 'NOT_FOUND', 'This calibrated artifact is not the published result.')
+        return FileResponse(storage.project_dir(project_id)/'calibrations'/revision/filename,
+                            media_type='model/gltf-binary' if filename == 'mesh.glb' else 'application/json',
+                            filename=f'{project_id}-calibrated-{filename}')
 
     @app.get("/api/projects/{project_id}/mesh-artifacts/{job_id}/{filename}")
     async def mesh_artifact(project_id: str, job_id: str, filename: str):

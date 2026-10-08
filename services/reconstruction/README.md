@@ -100,8 +100,36 @@ degenerate, colorless, or malformed mesh results fail publication.
 
 The fixed `diag(1,-1,-1,1)` convention conversion is applied to geometry and camera
 poses together. This changes OpenCV axes into viewer axes; it does not estimate
-gravity or align the floor. Scale stays explicitly **uncalibrated**, with no metric
-measurements. Calibration/floor alignment remain Milestone 3.
+gravity or align the floor. New reconstructions start explicitly **uncalibrated**.
+
+## Scale and alignment (Milestone 3)
+
+Under the 3D mesh, select **Set scale · 2 points**, click two surface points,
+enter their known distance in meters, and apply. **Align floor · 3 points** rotates
+the selected plane onto Y=0 and uses the first point as the origin. Pick widely
+spaced points on the same floor. Manual orientation controls provide X/Y/Z angle
+corrections and a floor-up flip. **Measure · 2 points** lets you check an independent
+distance; uncalibrated meshes only show model units.
+
+Applying changes saves a versioned calibration and a derived GLB, leaving the raw
+reconstruction intact. The viewer and GLB download use the same baked geometry.
+The JSON manifest includes the row-major `reconstructionToWorld` matrix, raw-frame
+reference points, scale, floor reference, orientation corrections and transformed
+camera poses. Camera bases remain rigid; their translations scale with geometry.
+The diagnostic PLY remains explicitly labeled as original uncalibrated evidence.
+Reset restores the original coordinates and uncalibrated units. Successful new
+reconstructions start uncalibrated; failed reruns keep the previous calibration.
+
+Saves detect stale mesh/calibration revisions. Artifacts publish only after
+validation; numerical faces collapsed by float32 export are removed and counted.
+Metric calibration establishes a user-supplied scale, not an independent claim of
+dimensional accuracy. Ground-truth room measurements remain required for that claim.
+
+Validation: from `services/api`, run `.venv/bin/python -m pytest
+tests/test_mesh_calibration.py tests/test_mesh.py -q`. From `apps/web`, run
+`ROOMSHIFT_CHROMIUM=/usr/bin/chromium npx playwright test --config
+playwright.calibration.config.ts`. This browser test starts isolated temporary
+data/API and frontend servers on ports 8012/5189 and stops them afterward.
 
 ## Artifacts and observability
 

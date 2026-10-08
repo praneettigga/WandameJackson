@@ -10,7 +10,7 @@ import {
   type WorkerCapabilities,
 } from './api';
 import { CaptureGuide } from './CaptureGuide';
-import { MeshViewport } from './MeshViewport';
+import { CalibratedMesh } from './CalibratedMesh';
 
 export function CaptureWorkspace() {
   const [viewBudget, setViewBudget] = useState(12);
@@ -365,12 +365,14 @@ export function CaptureWorkspace() {
                 </button>
               </div>
               <span>
-                {mesh && view === 'mesh' ? 'INFERRED · UNCALIBRATED' : 'ORIGINAL CAPTURE EVIDENCE'}
+                {mesh && view === 'mesh'
+                  ? `INFERRED · ${mesh.units === 'meters' ? 'METERS · USER CALIBRATED' : 'UNCALIBRATED'}`
+                  : 'ORIGINAL CAPTURE EVIDENCE'}
               </span>
             </div>
           )}
           {mesh && view === 'mesh' ? (
-            <MeshViewport key={mesh.jobId} url={api.imageUrl(mesh.meshUrl)} />
+            <CalibratedMesh key={mesh.jobId} mesh={mesh} onChange={setMesh} disabled={busy} />
           ) : input ? (
             <div className="capture-source-preview">
               <img
@@ -447,7 +449,9 @@ export function CaptureWorkspace() {
             <span>
               <b>{Math.round(mesh.statistics.executionSeconds)}s</b> reconstruction
             </span>
-            <span>Scale: uncalibrated</span>
+            <span>
+              Scale: {mesh.units === 'meters' ? 'meters · user calibrated' : 'uncalibrated'}
+            </span>
           </div>
         )}
         {input ? (
@@ -499,7 +503,7 @@ export function CaptureWorkspace() {
                   </a>{' '}
                   ·{' '}
                   <a href={api.imageUrl(mesh.diagnosticUrl)} download>
-                    Diagnostic PLY
+                    Diagnostic PLY (original, uncalibrated)
                   </a>
                 </>
               )}

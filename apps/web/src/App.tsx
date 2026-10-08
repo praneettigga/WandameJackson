@@ -1294,14 +1294,14 @@ export default function App() {
       <footer className="status-bar">
         <span>
           <i className="online-dot" />
-          {working ? 'Working…' : state.dirty ? 'Unsaved changes' : 'Ready'}
+          {inputMode === 'capture' ? 'Capture workspace' : working ? 'Working…' : state.dirty ? 'Unsaved changes' : 'Ready'}
           <b>·</b>
-          {state.scene ? `Revision ${state.scene.revision}` : 'No scene loaded'}
+          {inputMode === 'capture' ? 'Local project storage' : state.scene ? `Revision ${state.scene.revision}` : 'No scene loaded'}
         </span>
         <span>
-          {state.scene
+          {inputMode === 'capture' ? 'Photo/video mesh · Scale & alignment in viewer' : state.scene
             ? `${state.scene.rooms.length} rooms / ${state.scene.walls.length} walls / ${state.scene.objects.length} objects`
-            : inputMode === 'capture' ? 'Capture preparation / No metric scale' : 'Single floor / Metric / Y up'}
+            : 'Single floor / Metric / Y up'}
           <b>·</b>ROOMSHIFT PROTOTYPE
         </span>
       </footer>

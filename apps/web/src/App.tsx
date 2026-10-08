@@ -10,7 +10,6 @@ import {
 import { api, pollJob, type Job, type ProjectEnvelope } from './api';
 import type { ScaleCalibration } from './api';
 import {
-  components,
   confidenceLevel,
   entities,
   exportSceneJson,
@@ -26,6 +25,8 @@ import { useEditor } from './store';
 import { confidenceColors, download, exportGlb, originColors, originLabels } from './geometry';
 import { ConfidenceChip, Inspector } from './Inspector';
 import { Viewport } from './Viewport';
+import { ComponentLibrary } from './ComponentLibrary';
+import { loadLibrary } from './library';
 
 class ViewportBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -349,6 +350,7 @@ export default function App() {
         ),
       )
       .catch(() => setHealth('API offline'));
+    void loadLibrary();
     if (api.mock) void guarded(() => loadProject('demo-room'));
     return () => polling.current?.abort();
     // Startup only; subsequent loads are explicit to protect local edits.
@@ -850,28 +852,7 @@ export default function App() {
                     </div>
                   ))}
               </div>
-              <section className="library">
-                <h4>
-                  COMPONENT LIBRARY <span>LOCAL</span>
-                </h4>
-                <p className="hint">Procedural furniture · click to add</p>
-                <div className="component-grid">
-                  {components.map((c, i) => (
-                    <button
-                      key={c.id}
-                      aria-label={`Add ${c.name}`}
-                      disabled={!state.scene || disabled}
-                      onClick={() => state.add(c.id)}
-                    >
-                      <span>{['⑂', '⊓', '▰', '▱', '▤'][i]}</span>
-                      {c.name}
-                      <small>
-                        {c.dimensions[0]} × {c.dimensions[2]} m
-                      </small>
-                    </button>
-                  ))}
-                </div>
-              </section>
+              <ComponentLibrary disabled={disabled} />
             </>
           )}
           <section className="project-section">

@@ -11,6 +11,7 @@ import {
 import * as THREE from 'three';
 import { GeometryCache, buildSceneGeometry, collides, disposeGeometry, pointInRoom } from './geometry';
 import { useEditor } from './store';
+import { useLibrary } from './library';
 import { SNAP_PX, gridStepFor, snapToWalls, worldPerPixel } from './snapping';
 import { WallTools } from './WallTools';
 import { danglingEnds } from './wallGraph';
@@ -215,6 +216,8 @@ function FirstPerson({ scene }: { scene: Scene }) {
 }
 function World() {
   const state = useEditor();
+  // Custom-scan meshes load asynchronously; placements rebuild once their mesh arrives or is removed.
+  const libraryRevision = useLibrary((s) => s.revision);
   // Unchanged entities keep their geometry between edits; only changed ones are rebuilt.
   const cache = useMemo(() => new GeometryCache(), []);
   useEffect(() => () => cache.clear(), [cache]);
@@ -242,6 +245,7 @@ function World() {
       state.confidenceMap,
       state.selectedId,
       cache,
+      libraryRevision,
     ],
   );
   const ghost = useMemo(
@@ -249,7 +253,7 @@ function World() {
       state.sourceScene && state.compare
         ? buildSceneGeometry(state.sourceScene, { ghost: true, ceilings: state.ceilings })
         : null,
-    [state.sourceScene, state.compare, state.ceilings],
+    [state.sourceScene, state.compare, state.ceilings, libraryRevision],
   );
   useEffect(
     () => () => {

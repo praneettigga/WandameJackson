@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { ApiError, type RoomshiftApi } from './api';
+import { customSpec } from './library';
 import {
+  components,
   createObject,
   editEntity,
   entityById,
@@ -135,6 +137,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       }
     }),
   add: (componentId) => {
+    const component = components.find((c) => c.id === componentId) ?? customSpec(componentId);
+    if (!component) return;
     const room = get().scene?.rooms[0];
     const points = room?.polygon ?? [[0, 0]];
     const position: V3 = [
@@ -142,7 +146,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       0,
       points.reduce((s, p) => s + p[1], 0) / points.length,
     ];
-    const object = createObject(componentId, position);
+    const object = createObject(component, position);
     if (
       get().commit((scene) => {
         scene.objects.push(object);

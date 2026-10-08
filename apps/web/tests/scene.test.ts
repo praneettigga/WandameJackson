@@ -6,6 +6,7 @@ import schema from '../../../contracts/scene.schema.json';
 import fixture from '../../../contracts/fixtures/room.scene.json';
 import { demoScene } from '../src/api';
 import {
+  components,
   createObject,
   editEntity,
   exportSceneJson,
@@ -123,8 +124,8 @@ describe('frozen Scene contract', () => {
     disposeGeometry(root);
   });
   it('creates fresh user entities and preserves original origins on edit', () => {
-    const a = createObject('chair.basic'),
-      b = createObject('chair.basic');
+    const a = createObject(components[0]),
+      b = createObject(components[0]);
     expect(a.id).not.toBe(b.id);
     expect(a.provenance.origin).toBe('user');
     expect(a.provenance.confidence).toBeNull();

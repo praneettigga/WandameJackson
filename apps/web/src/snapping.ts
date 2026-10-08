@@ -234,3 +234,100 @@ export function snapPoint(p: V2, ctx: SnapContext): SnapResult {
 
 export const snapSegments = (walls: { id: string; start: V2; end: V2 }[]): Segment[] =>
   walls.map((w) => ({ id: w.id, start: w.start, end: w.end }));
+
+// ---- Openings slide along their wall --------------------------------------------------------
+
+export type OpeningSnap = { offset: number; kind: 'end' | 'centre' | 'neighbour' | 'grid' | null };
+/**
+ * Snap an opening's offset (distance from wall.start to its near edge). Targets are the wall ends
+ * (with `clearance`), the wall centre and the edges of neighbouring openings; otherwise the grid.
+ */
+export function snapOpeningOffset(
+  raw: number,
+  width: number,
+  wallLength: number,
+  neighbours: { offset: number; width: number }[],
+  tolerance: number,
+  gridStep: number,
+  clearance = 0,
+  enabled = true,
+): OpeningSnap {
+  const max = Math.max(0, wallLength - width);
+  const clamp = (v: number) => Math.min(max, Math.max(0, v));
+  if (!enabled) return { offset: clamp(raw), kind: null };
+  const targets: { offset: number; kind: OpeningSnap['kind'] }[] = [
+    { offset: Math.min(clearance, max), kind: 'end' },
+    { offset: Math.max(0, max - clearance), kind: 'end' },
+    { offset: max / 2, kind: 'centre' },
+    ...neighbours.flatMap((n) => [
+      { offset: n.offset + n.width, kind: 'neighbour' as const },
+      { offset: n.offset - width, kind: 'neighbour' as const },
+    ]),
+  ].filter((t) => t.offset >= -1e-9 && t.offset <= max + 1e-9);
+  let best: (typeof targets)[number] | null = null;
+  for (const t of targets)
+    if (Math.abs(t.offset - raw) <= tolerance && (!best || Math.abs(t.offset - raw) < Math.abs(best.offset - raw))) best = t;
+  if (best) return { offset: clamp(best.offset), kind: best.kind };
+  return { offset: clamp(round(raw, gridStep)), kind: 'grid' };
+}
+
+// ---- Furniture snaps flush to wall faces ----------------------------------------------------
+
+export type WallLike = { id: string; start: V2; end: V2; thickness: number };
+export type FurnitureSnap = { position: V2; rotationY: number; wallIds: string[] };
+
+/** Half extent of a rotated w×d footprint along a unit direction. */
+function halfExtent(w: number, d: number, rotationY: number, n: V2) {
+  // Local +x → (cos r, -sin r), local +z → (sin r, cos r) in (x, z), matching three.js rotation.y.
+  const c = Math.cos(rotationY),
+    s = Math.sin(rotationY);
+  return Math.abs((w / 2) * (c * n[0] - s * n[1])) + Math.abs((d / 2) * (s * n[0] + c * n[1]));
+}
+
+/**
+ * Push a furniture footprint flush against the nearest wall face within tolerance, optionally
+ * turning its back (local −Z) to the wall, then try a second, non-parallel wall for corners.
+ */
+export function snapToWalls(
+  position: V2,
+  rotationY: number,
+  size: [number, number],
+  walls: WallLike[],
+  tolerance: number,
+  alignRotation: boolean,
+): FurnitureSnap | null {
+  let p: V2 = [...position];
+  let r = rotationY;
+  const used: WallLike[] = [];
+  for (let pass = 0; pass < 2; pass++) {
+    let best: { gap: number; wall: WallLike; n: V2; dist: number } | null = null;
+    for (const wall of walls) {
+      if (used.includes(wall)) continue;
+      const len = Math.hypot(wall.end[0] - wall.start[0], wall.end[1] - wall.start[1]);
+      if (len < 1e-9) continue;
+      const d: V2 = [(wall.end[0] - wall.start[0]) / len, (wall.end[1] - wall.start[1]) / len];
+      if (used.some((u) => {
+        const ul = Math.hypot(u.end[0] - u.start[0], u.end[1] - u.start[1]);
+        return Math.abs(((u.end[0] - u.start[0]) * d[1] - (u.end[1] - u.start[1]) * d[0]) / ul) < 0.2;
+      }))
+        continue;
+      const rel: V2 = [p[0] - wall.start[0], p[1] - wall.start[1]];
+      const t = rel[0] * d[0] + rel[1] * d[1];
+      const side = rel[0] * -d[1] + rel[1] * d[0];
+      const n: V2 = side >= 0 ? [-d[1], d[0]] : [d[1], -d[0]];
+      const rot = alignRotation && pass === 0 ? Math.atan2(n[0], n[1]) : r;
+      const h = halfExtent(size[0], size[1], rot, n);
+      if (t < -h || t > len + h) continue;
+      const gap = Math.abs(side) - wall.thickness / 2 - h;
+      if (gap <= tolerance && gap > -h && (!best || Math.abs(gap) < Math.abs(best.gap)))
+        best = { gap, wall, n, dist: Math.abs(side) };
+    }
+    if (!best) break;
+    if (alignRotation && pass === 0) r = Math.atan2(best.n[0], best.n[1]);
+    const h = halfExtent(size[0], size[1], r, best.n);
+    const move = best.wall.thickness / 2 + h - best.dist;
+    p = [p[0] + best.n[0] * move, p[1] + best.n[1] * move];
+    used.push(best.wall);
+  }
+  return used.length ? { position: p, rotationY: r, wallIds: used.map((w) => w.id) } : null;
+}

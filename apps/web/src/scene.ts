@@ -210,7 +210,7 @@ export function geometryWarnings(scene: Scene): string[] {
   ];
 }
 
-function simplePolygon(points: V2[]) {
+export function simplePolygon(points: V2[]) {
   if (new Set(points.map((p) => JSON.stringify(p))).size !== points.length) return false;
   const cross = (a: V2, b: V2, c: V2) =>
     (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);

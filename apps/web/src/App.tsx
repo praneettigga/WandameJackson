@@ -18,6 +18,11 @@ import {
   metersPerPixel,
   type V2,
 } from './scene';
+import { useEditor, editorScenes } from './store';
+import { BlueprintWizard, AssemblyControls, FloorViews } from './AssemblyPanel';
+import { floorsOf, exportAssemblyJson, layoutErrors, type Floor } from './assembly';
+import { download, exportGlb, exportAssemblyGlb, originColors } from './geometry';
+import { Inspector } from './Inspector';
 import { completeness } from './completeness';
 import { snapKindLabels, type SnapKind } from './snapping';
 import { clearDraft, restorableDraft, writeDraft } from './draft';
@@ -232,6 +237,9 @@ function Calibration({
 
 export default function App() {
   const state = useEditor();
+  const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
+  const addFiles = useRef(false);
+  const [exportScope, setExportScope] = useState<'all' | 'floor'>('all');
   const [project, setProject] = useState<ProjectEnvelope | null>(null);
   const [points, setPoints] = useState<V2[]>([]),
     [distance, setDistance] = useState('2');
@@ -294,6 +302,25 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const error = (e: unknown) =>
     useEditor.setState({ error: e instanceof Error ? e.message : String(e) });
+  async function refreshApiHealth() {
+    const result = await api.health();
+    if (result.status !== 'ok' || result.schemaVersion !== '0.1.0') {
+      setHealth('API version mismatch');
+      throw new Error('The API version does not match this web app.');
+    }
+    setHealth('API connected');
+  }
+  async function ensureApiReady() {
+    try {
+      await refreshApiHealth();
+    } catch (cause) {
+      setHealth('API offline');
+      const detail = cause instanceof Error ? ` ${cause.message}` : '';
+      throw new Error(
+        `The API is unavailable. From the repository root, run \"npm run dev\", wait for the API to connect, then retry.${detail}`,
+      );
+    }
+  }
   const guarded = async (action: () => Promise<void>) => {
     if (useEditor.getState().busy) return;
     setWorking(true);
@@ -308,11 +335,28 @@ export default function App() {
     }
   };
   const discard = () =>
-    !useEditor.getState().dirty ||
+    !useEditor.getState().hasUnsaved() ||
     window.confirm(
       'Discard unsaved local edits? Export Scene JSON first if you want to keep them.',
     );
   async function loadProject(id: string) {
+    if (id.startsWith('a_')) {
+      const envelope = await api.getAssembly(id);
+      state.loadAssembly(envelope);
+      setProjectId(id);
+      localStorage.setItem('roomshift.lastProject', id);
+      setShowBlueprint(false);
+      setNotice('Grouped project loaded. Floors keep independent scales and edits.');
+      const pending = Object.values(envelope.jobs).filter(
+        (j) => j.status === 'queued' || j.status === 'running',
+      );
+      if (pending.length)
+        await trackAssembly(
+          id,
+          pending.map((j) => j.projectId),
+        );
+      return;
+    }
     const envelope = await api.getProject(id);
     const scene = envelope.project.hasScene ? await api.getScene(id) : null;
     state.load(scene);
@@ -340,6 +384,7 @@ export default function App() {
     );
   }
   useEffect(() => {
+    void refreshApiHealth().catch(() => setHealth('API offline'));
     api
       .health()
       .then((result) =>
@@ -357,8 +402,162 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
+    if (!state.assembly || !state.activeProjectId) return;
+    const id = state.activeProjectId;
+    const floor = floorsOf(state.assembly).find((f) => f.projectId === id)!;
+    setProject(state.projects[id]);
+    const scene = editorScenes(state)[id];
+    const calibration = floor.settings.calibration ?? scene?.source.calibration;
+    setPoints(calibration ? [calibration.pointA, calibration.pointB] : []);
+    setDistance(String(calibration?.distanceMeters ?? 2));
+    setScaleMode(
+      floor.settings.scaleMode ??
+        (floor.settings.calibration || (scene && !scene.source.calibration.method)
+          ? 'manual'
+          : 'auto'),
+    );
+    setAutomaticScale(scene?.source.calibration ?? null);
+    setScaleError('');
+    setHeight(floor.settings.wallHeight == null ? '' : String(floor.settings.wallHeight));
+    setThickness(floor.settings.wallThickness == null ? '' : String(floor.settings.wallThickness));
+    setShowBlueprint(!scene);
+    setJob(state.jobs[id] ?? null);
+    // Floor controls must not reset measurements on unrelated edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.activeProjectId, state.assembly?.id]);
+  async function trackAssembly(id: string, ids: string[]) {
+    const deadline = Date.now() + Math.max(180_000, ids.length * 180_000);
+    while (true) {
+      const envelope = await api.getAssembly(id);
+      state.refreshAssembly(envelope);
+      const pending = ids.filter((pid) =>
+        ['queued', 'running'].includes(envelope.jobs[pid]?.status),
+      );
+      if (!pending.length) {
+        const failed = ids.filter((pid) => envelope.jobs[pid]?.status === 'failed');
+        const scenes = editorScenes(useEditor.getState());
+        const first = floorsOf(envelope.assembly).find((f) => scenes[f.projectId]);
+        if (first && !useEditor.getState().scene) {
+          // Polling owns the busy flag; activate the first successful floor once the batch finishes.
+          useEditor.setState({ busy: false });
+          useEditor.getState().activateFloor(first.projectId);
+          useEditor.setState({ busy: true });
+        }
+        if (first) {
+          useEditor.setState({ workspace: 'Edit' });
+          setShowBlueprint(false);
+        }
+        setNotice(
+          failed.length
+            ? `${failed.length} floor(s) failed. Successful floors are available; select a failed floor to retry.`
+            : 'Buildings and floors reconstructed. Review the scale and placement assumptions.',
+        );
+        return;
+      }
+      if (Date.now() > deadline)
+        throw new Error(
+          'Reconstruction is still running. Reopen the grouped project to resume progress.',
+        );
+      if (polling.current?.signal.aborted) return;
+      await new Promise((resolve) => setTimeout(resolve, api.mock ? 80 : 800));
+      // Mock jobs advance when polled; real jobs report the worker state.
+      await Promise.all(pending.map((pid) => api.getJob(envelope.jobs[pid].id)));
+    }
+  }
+  function updateFloorSettings(floor: Floor) {
+    floor.settings = {
+      scaleMode,
+      calibration:
+        scaleMode === 'manual' && points.length === 2
+          ? { pointA: points[0], pointB: points[1], distanceMeters: Number(distance) }
+          : null,
+      wallHeight: height === '' ? null : Number(height),
+      wallThickness: thickness === '' ? null : Number(thickness),
+    };
+  }
+  useEffect(() => {
+    const s = useEditor.getState();
+    if (!s.assembly || s.busy) return;
+    const floor = floorsOf(s.assembly).find((f) => f.projectId === s.activeProjectId);
+    if (!floor) return;
+    if (
+      (height &&
+        (!Number.isFinite(Number(height)) || Number(height) <= 0 || Number(height) > 20)) ||
+      (thickness &&
+        (!Number.isFinite(Number(thickness)) || Number(thickness) <= 0 || Number(thickness) > 2)) ||
+      (scaleMode === 'manual' && (!Number.isFinite(Number(distance)) || Number(distance) <= 0))
+    )
+      return;
+    const updated = structuredClone(floor);
+    updateFloorSettings(updated);
+    const current = {
+      scaleMode: floor.settings.scaleMode ?? 'auto',
+      calibration: floor.settings.calibration ?? null,
+      wallHeight: floor.settings.wallHeight ?? null,
+      wallThickness: floor.settings.wallThickness ?? null,
+    };
+    if (JSON.stringify(current) !== JSON.stringify(updated.settings))
+      s.updateAssembly((a) => {
+        floorsOf(a).find((f) => f.projectId === floor.projectId)!.settings = updated.settings;
+      });
+    // Only user changes to calibration fields should update the active floor request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scaleMode, points, distance, height, thickness]);
+  async function reconstructGroup(ids?: string[]) {
+    const current = useEditor.getState();
+    if (!current.assembly || current.busy) return;
+    const targets =
+      ids ??
+      floorsOf(current.assembly)
+        .filter(
+          (f) =>
+            !editorScenes(current)[f.projectId] || current.jobs[f.projectId]?.status === 'failed',
+        )
+        .map((f) => f.projectId);
+    if (
+      targets.some(
+        (id) => (id === current.scene?.id && current.dirty) || current.floorStates[id]?.dirty,
+      ) &&
+      !discard()
+    )
+      return;
+    // Copy the active calibration controls into the saved floor request.
+    const next = structuredClone(current.assembly);
+    const active = floorsOf(next).find((f) => f.projectId === current.activeProjectId);
+    if (active && (!ids || ids.includes(active.projectId))) updateFloorSettings(active);
+    await guarded(async () => {
+      const saved = await api.saveAssembly(next);
+      useEditor.setState({ assembly: saved.assembly, assemblyDirty: false });
+      const result = await api.reconstructAssembly(saved.assembly.id, ids);
+      const submittedIds = result.submittedJobs.map((j) => j.projectId);
+      if (submittedIds.length) {
+        const floorStates = { ...useEditor.getState().floorStates };
+        submittedIds.forEach((id) => {
+          delete floorStates[id];
+        });
+        useEditor.setState({
+          floorStates,
+          ...(submittedIds.includes(current.activeProjectId ?? '')
+            ? { dirty: false, past: [], future: [] }
+            : {}),
+        });
+      }
+      state.refreshAssembly(result);
+      if (result.errors.length)
+        useEditor.setState({
+          error: result.errors.map((e) => `${e.projectId}: ${e.error.message}`).join(' '),
+        });
+      polling.current?.abort();
+      polling.current = new AbortController();
+      await trackAssembly(
+        saved.assembly.id,
+        result.submittedJobs.map((j) => j.projectId),
+      );
+    });
+  }
+  useEffect(() => {
     const beforeUnload = (e: BeforeUnloadEvent) => {
-      if (useEditor.getState().dirty) {
+      if (useEditor.getState().hasUnsaved()) {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -422,6 +621,20 @@ export default function App() {
   } catch {
     /* Inline readiness below. */
   }
+  const warnings = [
+    ...(state.scene
+      ? [...state.scene.reconstruction.warnings, ...geometryWarnings(state.scene)]
+      : []),
+    ...(state.assembly
+      ? [
+          'Floors are centered automatically; verify alignment. Slabs assume 0.20 m and buildings start 3 m apart.',
+          ...layoutErrors(state.assembly, editorScenes(state)),
+          ...floorsOf(state.assembly)
+            .filter((f) => !editorScenes(state)[f.projectId])
+            .map((f) => `${f.name}: not reconstructed; excluded from 3D geometry and GLB export.`),
+        ]
+      : []),
+  ];
   const warnings = state.scene
     ? [...state.scene.reconstruction.warnings, ...geometryWarnings(state.scene)]
     : [];
@@ -438,6 +651,10 @@ export default function App() {
   const disabled = working || state.busy;
   const renderBlueprint = state.workspace === 'Reconstruct' && project && showBlueprint;
   async function reconstruct() {
+    if (state.assembly) {
+      await reconstructGroup();
+      return;
+    }
     if (!project || (scaleMode === 'manual' && !scale) || !discard()) return;
     await guarded(async () => {
       if (
@@ -491,22 +708,26 @@ export default function App() {
           <span className="brand-mark">▱</span>ROOMSHIFT<span className="version">/ 0.1</span>
         </a>
         <div className="project-title">
-          {state.scene?.name ?? project?.project.name ?? 'Untitled space'}
+          {state.assembly?.name ?? state.scene?.name ?? project?.project.name ?? 'Untitled space'}
           {state.dirty && <span title="Unsaved changes" className="dirty-dot" />}
         </div>
         <div className="header-actions">
           {api.mock && <span className="mock-badge">MOCK DATA</span>}
           <button
-            disabled={!state.scene || disabled || state.conflict}
+            disabled={
+              (!state.scene && !state.assembly) || disabled || (!state.assembly && state.conflict)
+            }
             className="primary small"
             onClick={() => {
               void state.save(api).then(() => {
                 if (!useEditor.getState().error)
-                  setNotice(`Saved revision ${useEditor.getState().scene?.revision}`);
+                  setNotice(
+                    `Saved revision ${useEditor.getState().assembly?.revision ?? useEditor.getState().scene?.revision}`,
+                  );
               });
             }}
           >
-            {state.busy && !working ? 'Saving…' : 'Save scene'}
+            {state.busy && !working ? 'Saving…' : state.assembly ? 'Save project' : 'Save scene'}
           </button>
         </div>
       </header>
@@ -577,6 +798,9 @@ export default function App() {
       )}
       <main className="editor-layout">
         <aside className="left-panel panel">
+          {state.assembly && (
+            <AssemblyControls onReconstruct={(ids) => void reconstructGroup(ids)} />
+          )}
           {state.workspace === 'Reconstruct' ? (
             <>
               <div className="panel-heading">
@@ -589,13 +813,36 @@ export default function App() {
                 <input
                   ref={fileRef}
                   type="file"
+                  multiple
                   accept="image/png,image/jpeg"
                   className="sr-only"
                   aria-label="Upload blueprint"
                   onChange={(e) => {
-                    const file = e.target.files?.[0];
+                    const files = Array.from(e.target.files ?? []);
                     e.target.value = '';
-                    if (!file || !discard()) return;
+                    if (!files.length) return;
+                    if (files.length > 20) {
+                      error(new Error('Select at most 20 blueprints per upload batch.'));
+                      return;
+                    }
+                    if (
+                      files.some(
+                        (f) =>
+                          !['image/png', 'image/jpeg'].includes(f.type) ||
+                          f.size > 20 * 1024 * 1024,
+                      )
+                    ) {
+                      error(new Error('Choose PNG/JPEG images, each 20 MB or smaller.'));
+                      return;
+                    }
+                    if (files.length > 1 || state.assembly || addFiles.current) {
+                      if (!addFiles.current && !state.assembly && !discard()) return;
+                      setPendingFiles(files);
+                      useEditor.setState({ busy: true });
+                      return;
+                    }
+                    const file = files[0];
+                    if (!discard()) return;
                     void guarded(async () => {
                       if (!['image/png', 'image/jpeg'].includes(file.type))
                         throw new Error('Choose a PNG or JPEG blueprint.');
@@ -626,14 +873,35 @@ export default function App() {
                 <button
                   className="upload-zone"
                   disabled={disabled}
-                  onClick={() => fileRef.current?.click()}
+                  onClick={() => {
+                    addFiles.current = Boolean(state.assembly);
+                    fileRef.current?.click();
+                  }}
                 >
                   <span>↥</span>
-                  <b>{project ? 'Replace blueprint' : 'Choose a blueprint'}</b>
-                  <small>PNG / JPG · up to 20 MB</small>
+                  <b>
+                    {state.assembly
+                      ? 'Add blueprints'
+                      : project
+                        ? 'Replace blueprint'
+                        : 'Choose blueprints'}
+                  </b>
+                  <small>PNG / JPG · up to 20 files · 20 MB each</small>
                 </button>
                 {project && (
                   <>
+                    {!state.assembly && (
+                      <button
+                        className="wide"
+                        disabled={disabled}
+                        onClick={() => {
+                          addFiles.current = true;
+                          fileRef.current?.click();
+                        }}
+                      >
+                        Add blueprints / floors
+                      </button>
+                    )}
                     <p className="hint">
                       {project.project.name}
                       <br />
@@ -781,7 +1049,9 @@ export default function App() {
                     ? 'Working…'
                     : api.mock
                       ? 'Load synthetic reconstruction →'
-                      : 'Reconstruct space →'}
+                      : state.assembly
+                        ? 'Reconstruct buildings & floors →'
+                        : 'Reconstruct space →'}
                 </button>
                 {job && (
                   <div className="job-progress" role="status">
@@ -887,7 +1157,8 @@ export default function App() {
               <button
                 disabled={!state.scene || disabled}
                 onClick={() => {
-                  if (discard()) void guarded(() => loadProject(state.scene!.id));
+                  if (discard())
+                    void guarded(() => loadProject(state.assembly?.id ?? state.scene!.id));
                 }}
               >
                 Reload
@@ -900,6 +1171,7 @@ export default function App() {
           onChange={(width) => setLeftWidth(Math.max(220, Math.min(420, width)))}
         />
         <div className="center-panel">
+          <FloorViews />
           <div className="viewport-toolbar">
             <div className="tool-group">
               {(
@@ -1189,10 +1461,28 @@ export default function App() {
                 {notice && warnings.length > 0 && <p className="hint">{notice}</p>}
               </div>
               <div className="export-actions">
+                {state.assembly && (
+                  <label className="field">
+                    GLB export scope
+                    <select
+                      value={exportScope}
+                      onChange={(e) => setExportScope(e.target.value as 'all' | 'floor')}
+                    >
+                      <option value="all">All buildings & floors</option>
+                      <option value="floor">Active floor</option>
+                    </select>
+                  </label>
+                )}
                 <button
-                  disabled={!state.scene}
+                  disabled={!state.scene && !state.assembly}
                   onClick={() => {
-                    if (state.scene)
+                    if (state.assembly) {
+                      download(
+                        exportAssemblyJson(state.assembly, editorScenes(state)),
+                        'application/json',
+                        `${state.assembly.id}.assembly.json`,
+                      );
+                    } else if (state.scene)
                       download(
                         exportSceneJson(state.scene),
                         'application/json',
@@ -1203,6 +1493,11 @@ export default function App() {
                   ↓ Scene JSON
                 </button>
                 <button
+                  disabled={
+                    (!state.scene && !state.assembly) ||
+                    disabled ||
+                    (Boolean(state.assembly) && exportScope === 'floor' && !state.scene)
+                  }
                   disabled={!state.scene || disabled}
                   title="Download this scene with its blueprint image as an evaluation ground-truth pair (name.png + name.scene.json)"
                   onClick={() =>
@@ -1228,7 +1523,29 @@ export default function App() {
                   disabled={!state.scene || disabled}
                   onClick={() =>
                     void guarded(async () => {
-                      if (state.scene) {
+                      if (state.assembly) {
+                        const floor = floorsOf(state.assembly).find(
+                          (f) => f.projectId === state.activeProjectId,
+                        );
+                        const view = {
+                          ...state.view,
+                          buildingId: null,
+                          mode: exportScope === 'floor' ? ('floor' as const) : ('all' as const),
+                          floorId: floor?.id ?? null,
+                        };
+                        const scenes = editorScenes(state);
+                        const missing = floorsOf(state.assembly).filter(
+                          (f) => !scenes[f.projectId],
+                        );
+                        download(
+                          await exportAssemblyGlb(state.assembly, scenes, view, state.ceilings),
+                          'model/gltf-binary',
+                          `${state.assembly.id}${exportScope === 'floor' ? '-floor' : ''}.glb`,
+                        );
+                        setNotice(
+                          `GLB uses actual elevations. ${missing.length ? `${missing.length} unreconstructed floor(s) omitted.` : 'All requested floors exported.'}`,
+                        );
+                      } else if (state.scene) {
                         download(
                           await exportGlb(
                             state.scene,
@@ -1261,17 +1578,72 @@ export default function App() {
         />
         <Inspector />
       </main>
+      {pendingFiles && (
+        <BlueprintWizard
+          files={pendingFiles}
+          existing={state.assembly}
+          previous={addFiles.current && !state.assembly ? project : null}
+          ensureApiReady={ensureApiReady}
+          onCancel={() => {
+            setPendingFiles(null);
+            useEditor.setState({ busy: false });
+          }}
+          onComplete={(envelope) => {
+            const previous = useEditor.getState();
+            const contexts = {
+              ...previous.floorStates,
+              ...(previous.activeProjectId
+                ? {
+                    [previous.activeProjectId]: {
+                      scene: previous.scene,
+                      past: previous.past,
+                      future: previous.future,
+                      dirty: previous.dirty,
+                      conflict: previous.conflict,
+                      selectedId: previous.selectedId,
+                    },
+                  }
+                : {}),
+            };
+            state.loadAssembly(envelope);
+            const allowed = new Set(floorsOf(envelope.assembly).map((f) => f.projectId));
+            const retained = Object.fromEntries(
+              Object.entries(contexts).filter(([id]) => allowed.has(id)),
+            );
+            useEditor.setState({ floorStates: retained, busy: false });
+            const active = useEditor.getState().activeProjectId;
+            if (active && retained[active]) {
+              const context = retained[active];
+              useEditor.setState({
+                scene: context.scene,
+                past: context.past,
+                future: context.future,
+                dirty: context.dirty,
+                conflict: context.conflict,
+                selectedId: context.selectedId,
+              });
+            }
+            setProjectId(envelope.assembly.id);
+            localStorage.setItem('roomshift.lastProject', envelope.assembly.id);
+            setPendingFiles(null);
+            setShowBlueprint(true);
+            setNotice('Grouped project created. Choose Reconstruct buildings & floors to begin.');
+          }}
+        />
+      )}
       <footer className="status-bar">
         <span>
           <i className="online-dot" />
-          {working ? 'Working…' : state.dirty ? 'Unsaved changes' : 'Ready'}
+          {working ? 'Working…' : state.hasUnsaved() ? 'Unsaved changes' : 'Ready'}
           <b>·</b>
           {state.scene ? `Revision ${state.scene.revision}` : 'No scene loaded'}
         </span>
         <span>
           {state.scene
             ? `${state.scene.rooms.length} rooms / ${state.scene.walls.length} walls / ${state.scene.objects.length} objects`
-            : 'Single floor / Metric / Y up'}
+            : state.assembly
+              ? `${state.assembly.buildings.length} buildings / ${floorsOf(state.assembly).length} floors`
+              : 'Single floor / Metric / Y up'}
           <b>·</b>ROOMSHIFT PROTOTYPE
         </span>
       </footer>

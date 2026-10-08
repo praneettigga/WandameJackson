@@ -16,13 +16,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .assemblies import Assembly, AssemblyCreate, AssemblyReconstruct
 from .auto_scale import estimate_scale
 from .calibration import compute_calibration
 from .config import SCHEMA_VERSION, Settings
 from .errors import ApiError, error_body
 from .images import inspect_image, load_gray
 from .jobs import JobRunner, now_iso, public_job
-from .storage import Storage
+from .storage import Storage, atomic_write_json, read_json
 from .validation import validate_scene
 
 log = logging.getLogger("roomshift")
@@ -112,6 +113,117 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if p is None:
             raise ApiError(404, "PROJECT_NOT_FOUND", f"Project {project_id!r} does not exist.")
         return p
+
+    def assembly_path(assembly_id: str):
+        if not assembly_id.startswith("a_") or not all(c.isalnum() or c in "_-" for c in assembly_id):
+            raise ApiError(404, "ASSEMBLY_NOT_FOUND", "Grouped project not found.")
+        return storage.root / "assemblies" / f"{assembly_id}.json"
+
+    def need_assembly(assembly_id: str):
+        assembly = read_json(assembly_path(assembly_id))
+        if assembly is None:
+            raise ApiError(404, "ASSEMBLY_NOT_FOUND", "Grouped project not found.")
+        return assembly
+
+    def check_assembly(assembly):
+        for building in assembly["buildings"]:
+            for floor in building["floors"]:
+                p = need_project(floor["projectId"])
+                scene = storage.get_scene(p["id"])
+                height = floor.get("storyHeight")
+                if height is not None and scene:
+                    heights = [w["height"] for w in scene["walls"]] + [r["height"] for r in scene["rooms"]]
+                    minimum = max(heights or [2.7]) + .2
+                    if height + 1e-6 < minimum:
+                        raise ApiError(400, "INVALID_FLOOR_HEIGHT", f"{floor['name']} needs a floor height of at least {minimum:g} m, including its 0.20 m slab.")
+                c = floor.get("settings", {}).get("calibration")
+                if c:
+                    compute_calibration(c["pointA"], c["pointB"], c["distanceMeters"], p["image"]["width"], p["image"]["height"])
+
+    def assembly_envelope(assembly):
+        ids = [f["projectId"] for b in assembly["buildings"] for f in b["floors"]]
+        jobs = {f["projectId"]: public_job(job) for b in assembly["buildings"] for f in b["floors"]
+                if f.get("lastJobId") and (job := storage.get_job(f["lastJobId"]))}
+        return {"assembly": assembly, "projects": [project_envelope(need_project(pid)) for pid in ids],
+                "scenes": {pid: scene for pid in ids if (scene := storage.get_scene(pid))}, "jobs": jobs}
+
+    @app.post("/api/assemblies", status_code=201)
+    async def create_assembly(body: AssemblyCreate):
+        assembly = {**body.model_dump(mode="json"), "schemaVersion": "1.0", "id": "a_" + uuid.uuid4().hex[:12],
+                    "revision": 0, "createdAt": now_iso()}
+        for building in assembly["buildings"]:
+            for floor in building["floors"]:
+                floor["lastJobId"] = None
+        check_assembly(assembly)
+        atomic_write_json(assembly_path(assembly["id"]), assembly)
+        return assembly_envelope(assembly)
+
+    @app.get("/api/assemblies/{assembly_id}")
+    async def get_assembly(assembly_id: str):
+        return assembly_envelope(need_assembly(assembly_id))
+
+    @app.put("/api/assemblies/{assembly_id}")
+    async def save_assembly(assembly_id: str, body: Assembly):
+        assembly = body.model_dump(mode="json")
+        if assembly["id"] != assembly_id:
+            raise ApiError(409, "PROJECT_ID_MISMATCH", "Grouped project ID does not match the URL.")
+        with storage.project_lock(assembly_id):
+            current = need_assembly(assembly_id)
+            if assembly["revision"] != current["revision"]:
+                raise ApiError(409, "REVISION_CONFLICT", "The grouped project changed elsewhere. Reload before saving.")
+            if assembly["createdAt"] != current["createdAt"]:
+                raise ApiError(409, "IMMUTABLE_FIELD", "Creation time cannot be edited.")
+            check_assembly(assembly)
+            # Job linkage belongs to the server, even when the layout is edited.
+            existing = {f["projectId"]: f.get("lastJobId") for b in current["buildings"] for f in b["floors"]}
+            for b in assembly["buildings"]:
+                for f in b["floors"]:
+                    f["lastJobId"] = existing.get(f["projectId"])
+            assembly["revision"] += 1
+            atomic_write_json(assembly_path(assembly_id), assembly)
+        return assembly_envelope(assembly)
+
+    @app.post("/api/assemblies/{assembly_id}/reconstruct", status_code=202)
+    async def reconstruct_assembly(assembly_id: str, body: AssemblyReconstruct):
+        jobs, errors = [], []
+        with storage.project_lock(assembly_id):
+            assembly = need_assembly(assembly_id)
+            floors = [f for b in assembly["buildings"] for f in b["floors"]]
+            allowed = {f["projectId"] for f in floors}
+            if body.projectIds is not None and (not body.projectIds or len(set(body.projectIds)) != len(body.projectIds) or not set(body.projectIds) <= allowed):
+                raise ApiError(400, "VALIDATION_ERROR", "Choose unique blueprint IDs belonging to this grouped project.")
+            for floor in floors:
+                pid = floor["projectId"]
+                previous = storage.get_job(floor["lastJobId"]) if floor.get("lastJobId") else None
+                if body.projectIds is not None and pid not in body.projectIds:
+                    continue
+                if body.projectIds is None and storage.get_scene(pid) and not (previous and previous["status"] == "failed"):
+                    continue
+                try:
+                    if previous and previous["status"] in {"queued", "running"}:
+                        job = previous
+                    else:
+                        p = need_project(pid)
+                        if p.get("synthetic"):
+                            raise ApiError(400, "VALIDATION_ERROR", "Upload a blueprint rather than reconstructing the seeded demo.")
+                        req = floor["settings"]
+                        c = req.get("calibration")
+                        if req.get("scaleMode") == "manual" and not c:
+                            raise ApiError(400, "INVALID_CALIBRATION", "Set two reference points and a known distance for this floor, or choose automatic scale.")
+                        cal = compute_calibration(c["pointA"], c["pointB"], c["distanceMeters"], p["image"]["width"], p["image"]["height"]) if c else p.get("automaticCalibration")
+                        try:
+                            job = runner.submit(p, cal, req.get("wallHeight"), req.get("wallThickness"))
+                        except ApiError as exc:
+                            if exc.code != "JOB_IN_PROGRESS":
+                                raise
+                            job = storage.get_job(exc.details["jobId"])
+                    floor["lastJobId"] = job["id"]
+                    jobs.append(public_job(job))
+                except ApiError as exc:
+                    errors.append({"projectId": pid, "error": exc.body()["error"]})
+            assembly["revision"] += 1
+            atomic_write_json(assembly_path(assembly_id), assembly)
+        return {**assembly_envelope(assembly), "submittedJobs": jobs, "errors": errors}
 
     # --- routes ---------------------------------------------------------
     @app.get("/api/health")

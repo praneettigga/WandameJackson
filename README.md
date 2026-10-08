@@ -7,27 +7,30 @@ Upload a floor-plan PNG/JPEG, automatically read printed dimensions or estimate 
 Use Python 3.12+ and Node 22.12+. The current checkout directory contains `:`
 (`National-Round:Hacknex`), which Python and Vitest/Vite treat as a path/URL
 separator. Move or clone this repository into a directory without `:` before
-running it (for example, `~/Projects/WandameJackson`). From the repository
-root, start the backend:
+running it (for example, `~/Projects/WandameJackson`). Install the backend dependencies:
 
 ```bash
 cd services/api
 python -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m uvicorn roomshift_api.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir roomshift_api
 ```
 
-In another terminal:
+Install the web dependencies:
 
 ```bash
 cd apps/web
 npm ci
-VITE_USE_MOCK_API=false VITE_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-Open http://127.0.0.1:5173. On Windows use `.venv\Scripts\python` and set environment variables with PowerShell. API data persists in `services/api/data/`; use one API worker for this local prototype.
+Start the full local stack from the repository root:
 
-For an offline demo use `VITE_USE_MOCK_API=true npm run dev`. It loads the synthetic fixture and simulates reconstruction. Explicit environment variables override any local `.env.local` settings.
+```bash
+npm run dev
+```
+
+The command starts FastAPI on `http://127.0.0.1:8000`, waits for `/api/health`, then starts Vite at `http://127.0.0.1:5173`. It uses `services/api/.venv` by default; set `ROOMSHIFT_PYTHON` for a nonstandard Python executable, `ROOMSHIFT_RELOAD=true` to restart FastAPI when backend files change, or `ROOMSHIFT_API_PORT` / `ROOMSHIFT_WEB_PORT` to use other ports. The launcher stops with an error if either requested port is already in use. On Windows it uses `.venv\Scripts\python.exe`. API data persists in `services/api/data/`; use one API worker for this local prototype.
+
+For an offline demo use `cd apps/web && VITE_USE_MOCK_API=true npm run dev`. It loads the synthetic fixture and simulates reconstruction. Explicit environment variables override any local `.env.local` settings.
 
 ## First demo
 
@@ -101,3 +104,15 @@ Results and their caveats are in [docs/eval/RESULTS.md](docs/eval/RESULTS.md). C
 The CPU parser targets clean line drawings. It handles solid or double-line walls, straight diagonal walls, and slightly rotated scans, which it straightens and maps back. It detects doors (with swing direction when an arc is drawn) and windows on horizontal/vertical walls. It does not extract furniture; users add furniture from the library. Door/window detection is heuristic, heights and ceilings are assumptions, and unsuccessful parsing never falls back to a fake room. Arbitrary architectural drawings, video, multi-floor plans, and benchmark superiority are not claimed.
 
 See [prototype scope](docs/architecture/prototype-scope.md), [workflow](docs/workflow/end-to-end-workflow.md), and the authoritative [API contract](contracts/api-contract.md) / [Scene schema](contracts/scene.schema.json). Schema version is `0.1.0`; older docs under `docs/contracts/` are superseded.
+
+## Multiple blueprints and floors
+
+Select up to 20 PNG/JPEG files at once (20 MB each). The grouping dialog offers one building with multiple floors or multiple buildings and floors. In the multi-building layout, assign files to buildings to group several files as floors under the same building, rename them, and order floors from bottom to top. Use **Add blueprints / floors** to extend an existing project.
+
+Each image gets its own automatic scale and reconstruction job. Printed dimensions are preferred; fallback estimates are labeled. Manual references and wall settings apply to the selected floor. Successful floors remain usable if another image fails; retry that floor from the building list.
+
+View all buildings, one building, a selected floor with previous/next navigation, or an exploded view. Plans are initially centered; floor and building offsets and rotations are adjustable. Story heights default to the tallest wall plus a 0.20 m slab. These placements are editable assumptions.
+
+Furniture changes and undo history belong to their floor. **Save project** saves the layout and all edited floors. JSON includes the layout, available scenes, and omitted floors. GLB supports all floors or the selected floor and uses physical elevations even in exploded view. Explore mode walks the active floor at its physical elevation.
+
+Grouped projects use [Assembly 1.0](contracts/assembly.schema.json); existing Scene 0.1.0 projects remain supported.

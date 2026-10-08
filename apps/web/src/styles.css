@@ -1333,6 +1333,150 @@ body:has(.explore-overlay) canvas {
   }
 }
 
+.modal-shade {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #101719d9;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.blueprint-wizard {
+  width: min(900px, 95vw);
+  max-height: 90vh;
+  overflow: auto;
+  background: #242d31;
+  border: 1px solid #526064;
+  border-radius: 14px;
+  padding: 28px;
+  box-shadow: 0 24px 100px #0008;
+}
+.blueprint-wizard h2 {
+  margin-top: 0;
+}
+.blueprint-wizard p {
+  color: #aebcbe;
+  line-height: 1.6;
+}
+.group-choice {
+  display: flex;
+  gap: 12px;
+  margin: 20px 0;
+}
+.group-choice button {
+  flex: 1;
+  padding: 18px;
+  white-space: normal;
+}
+.group-choice .active,
+.floor-row.active {
+  background: #55452e;
+  border-color: #e9b568;
+}
+.wizard-buildings {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.blueprint-rows {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+}
+.blueprint-row {
+  display: grid;
+  grid-template-columns: 140px 1fr 40px;
+  gap: 18px;
+  border: 1px solid #414d50;
+  padding: 16px;
+  border-radius: 8px;
+}
+.blueprint-row img {
+  width: 140px;
+  height: 100px;
+  object-fit: contain;
+  background: white;
+  border-radius: 4px;
+}
+.blueprint-row small {
+  display: block;
+  color: #90ac9f;
+  margin: 5px 0;
+}
+.floor-order {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+}
+.assembly-panel {
+  border-bottom: 1px solid #414d50;
+}
+.building-tree {
+  margin: 12px 0;
+}
+.building-tree > b {
+  display: block;
+  padding: 8px 0;
+}
+.floor-row {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 5px;
+}
+.floor-row > span:first-child {
+  color: #e9b568;
+  min-width: 20px;
+}
+.floor-row small {
+  display: block;
+  font-size: 10px;
+  color: #9baeb2;
+  margin-top: 4px;
+}
+.floor-view-bar {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #414d50;
+  background: #252f33;
+}
+.floor-view-bar label {
+  display: grid;
+  gap: 4px;
+  font-size: 10px;
+  color: #acbabc;
+}
+.floor-view-bar select,
+.floor-view-bar input {
+  padding: 6px 8px;
+  min-width: 100px;
+  max-width: 240px;
+  background: #172024;
+  border: 1px solid #49575b;
+  border-radius: 4px;
+  color: #dce4e5;
+}
+.floor-view-bar input {
+  width: 100px;
+}
+@media (max-width: 600px) {
+  .blueprint-row {
+    grid-template-columns: 70px 1fr 30px;
+    gap: 8px;
+    padding: 10px;
+  }
+  .blueprint-row img {
+    width: 70px;
+    height: 70px;
+  }
+  .blueprint-wizard {
+    padding: 16px;
+  }
 .snap-glyph {
   font: 600 10px/1.2 ui-monospace, monospace;
   color: #11181b;

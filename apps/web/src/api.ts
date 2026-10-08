@@ -1,3 +1,4 @@
+import { assemblySchema, floorsOf, type Assembly, type AssemblyInput } from './assembly';
 import fixture from '../../../contracts/fixtures/room.scene.json';
 import fixtureImage from '../../../contracts/fixtures/room.png?url';
 import { sceneSchema, validateScene, type Scene, type V2 } from './scene';
@@ -5,6 +6,16 @@ import { sceneSchema, validateScene, type Scene, type V2 } from './scene';
 export type ProjectEnvelope = {
   project: { id: string; name: string; createdAt: string; hasScene: boolean };
   image: { url: string; width: number; height: number; mimeType: 'image/png' | 'image/jpeg' };
+};
+export type AssemblyEnvelope = {
+  assembly: Assembly;
+  projects: ProjectEnvelope[];
+  scenes: Record<string, Scene>;
+  jobs: Record<string, Job>;
+};
+export type AssemblySubmission = AssemblyEnvelope & {
+  submittedJobs: Job[];
+  errors: { projectId: string; error: ApiErrorBody }[];
 };
 export type ScaleCalibration = Scene['source']['calibration'];
 export type ReconstructionRequest = {
@@ -39,8 +50,12 @@ export class ApiError extends Error {
 export interface RoomshiftApi {
   readonly mock: boolean;
   health(): Promise<{ status: 'ok'; schemaVersion: '0.1.0' }>;
-  createProject(file: File, name?: string): Promise<ProjectEnvelope>;
+  createProject(file: File, name?: string, independent?: boolean): Promise<ProjectEnvelope>;
   getProject(id: string): Promise<ProjectEnvelope>;
+  createAssembly(input: AssemblyInput): Promise<AssemblyEnvelope>;
+  getAssembly(id: string): Promise<AssemblyEnvelope>;
+  saveAssembly(assembly: Assembly): Promise<AssemblyEnvelope>;
+  reconstructAssembly(id: string, projectIds?: string[]): Promise<AssemblySubmission>;
   listProjects(): Promise<{ projects: ProjectEnvelope[] }>;
   cancelJob(id: string): Promise<{ job: Job }>;
   getScale(id: string): Promise<{ calibration: ScaleCalibration }>;
@@ -71,7 +86,7 @@ export class HttpApi implements RoomshiftApi {
       throw new ApiError(
         0,
         'NETWORK_ERROR',
-        `Cannot reach the API at ${this.baseUrl}. Check the server and CORS configuration. ${error instanceof Error ? error.message : ''}`,
+        `Cannot reach the API at ${this.baseUrl}. For local development, run \"npm run dev\" from the repository root. Otherwise check VITE_API_BASE_URL and CORS configuration. ${error instanceof Error ? error.message : ''}`,
       );
     }
     const body = await response.json().catch(() => null);
@@ -93,11 +108,54 @@ export class HttpApi implements RoomshiftApi {
   health() {
     return this.request<{ status: 'ok'; schemaVersion: '0.1.0' }>('/api/health');
   }
-  createProject(file: File, name?: string) {
+  createProject(file: File, name?: string, _independent?: boolean) {
     const body = new FormData();
     body.append('blueprint', file);
     if (name) body.append('name', name);
     return this.request<ProjectEnvelope>('/api/projects', { method: 'POST', body });
+  }
+  private parseAssembly(value: AssemblyEnvelope): AssemblyEnvelope {
+    return {
+      ...value,
+      assembly: assemblySchema.parse(value.assembly),
+      scenes: Object.fromEntries(
+        Object.entries(value.scenes).map(([id, scene]) => [id, sceneSchema.parse(scene)]),
+      ),
+    };
+  }
+  async createAssembly(input: AssemblyInput) {
+    return this.parseAssembly(
+      await this.request<AssemblyEnvelope>('/api/assemblies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    );
+  }
+  async getAssembly(id: string) {
+    return this.parseAssembly(
+      await this.request<AssemblyEnvelope>(`/api/assemblies/${encodeURIComponent(id)}`),
+    );
+  }
+  async saveAssembly(assembly: Assembly) {
+    return this.parseAssembly(
+      await this.request<AssemblyEnvelope>(`/api/assemblies/${encodeURIComponent(assembly.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(assemblySchema.parse(assembly)),
+      }),
+    );
+  }
+  async reconstructAssembly(id: string, projectIds?: string[]) {
+    const value = await this.request<AssemblySubmission>(
+      `/api/assemblies/${encodeURIComponent(id)}/reconstruct`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(projectIds ? { projectIds } : {}),
+      },
+    );
+    return { ...value, ...this.parseAssembly(value) };
   }
   getProject(id: string) {
     return this.request<ProjectEnvelope>(`/api/projects/${encodeURIComponent(id)}`);
@@ -158,6 +216,26 @@ export class MockApi implements RoomshiftApi {
   readonly mock = true;
   private scene: Scene;
   private jobs = new Map<string, Job>();
+  private grouped: {
+    projects: Record<string, ProjectEnvelope>;
+    scenes: Record<string, Scene>;
+    sources: Record<string, Scene>;
+    assemblies: Record<string, Assembly>;
+  } = { projects: {}, scenes: {}, sources: {}, assemblies: {} };
+  private persistGrouped() {
+    this.storage?.setItem(
+      'roomshift.mock.groups.v1',
+      JSON.stringify({ ...this.grouped, jobs: [...this.jobs] }),
+    );
+  }
+  private refreshGrouped() {
+    const raw = this.storage?.getItem('roomshift.mock.groups.v1');
+    if (raw) {
+      const data = JSON.parse(raw);
+      this.grouped = data;
+      this.jobs = new Map(data.jobs ?? []);
+    }
+  }
   constructor(private storage?: Pick<Storage, 'getItem' | 'setItem'>) {
     try {
       this.scene = sceneSchema.parse(
@@ -172,7 +250,8 @@ export class MockApi implements RoomshiftApi {
     if (raw) this.scene = sceneSchema.parse(JSON.parse(raw));
   }
   private project(id: string) {
-    if (id !== fixture.id)
+    this.refreshGrouped();
+    if (id !== fixture.id && !this.grouped.projects[id])
       throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Mock mode contains only demo-room.');
   }
   imageUrl(_path: string) {
@@ -181,11 +260,31 @@ export class MockApi implements RoomshiftApi {
   async health() {
     return { status: 'ok', schemaVersion: '0.1.0' } as const;
   }
-  async createProject(_file: File, _name?: string) {
-    return this.getProject(fixture.id);
+  async createProject(file: File, name?: string, independent = false) {
+    if (!independent) return this.getProject(fixture.id);
+    this.refreshGrouped();
+    const id = 'p_' + crypto.randomUUID().replaceAll('-', '').slice(0, 12);
+    const envelope: ProjectEnvelope = {
+      project: {
+        id,
+        name: name ?? file.name,
+        createdAt: new Date().toISOString(),
+        hasScene: false,
+      },
+      image: {
+        url: `/api/projects/${id}/blueprint`,
+        width: fixture.source.imageWidth,
+        height: fixture.source.imageHeight,
+        mimeType: 'image/png',
+      },
+    };
+    this.grouped.projects[id] = envelope;
+    this.persistGrouped();
+    return structuredClone(envelope);
   }
   async getProject(id: string): Promise<ProjectEnvelope> {
     this.project(id);
+    if (id !== fixture.id) return structuredClone(this.grouped.projects[id]);
     return {
       project: {
         id,
@@ -229,7 +328,11 @@ export class MockApi implements RoomshiftApi {
   }
   async reconstruct(id: string, _input: ReconstructionRequest) {
     this.project(id);
-    if ([...this.jobs.values()].some((j) => j.status === 'queued' || j.status === 'running'))
+    if (
+      [...this.jobs.values()].some(
+        (j) => j.projectId === id && (j.status === 'queued' || j.status === 'running'),
+      )
+    )
       throw new ApiError(409, 'JOB_IN_PROGRESS', 'A mock job is already running.');
     const time = new Date().toISOString();
     const job: Job = {
@@ -243,17 +346,32 @@ export class MockApi implements RoomshiftApi {
       updatedAt: time,
     };
     this.jobs.set(job.id, job);
+    this.persistGrouped();
     return { job: structuredClone(job) };
   }
   async getJob(id: string) {
+    this.refreshGrouped();
     const job = this.jobs.get(id);
     if (!job) throw new ApiError(404, 'JOB_NOT_FOUND', 'Unknown mock job.');
     if (job.status === 'running') {
-      this.refresh();
-      const revision = this.scene.revision + 1;
-      this.scene = demoScene();
-      this.scene.revision = revision;
-      this.storage?.setItem('roomshift.mock.scene.v1', JSON.stringify(this.scene));
+      if (job.projectId === fixture.id) {
+        this.refresh();
+        const revision = this.scene.revision + 1;
+        this.scene = demoScene();
+        this.scene.revision = revision;
+        this.storage?.setItem('roomshift.mock.scene.v1', JSON.stringify(this.scene));
+      } else {
+        const scene = demoScene();
+        scene.id = job.projectId;
+        scene.name = this.grouped.projects[job.projectId].project.name;
+        scene.source.imageUrl = `/api/projects/${job.projectId}/blueprint`;
+        this.grouped.sources[job.projectId] = structuredClone(scene);
+        scene.revision = this.grouped.scenes[job.projectId]
+          ? this.grouped.scenes[job.projectId].revision + 1
+          : 0;
+        this.grouped.scenes[job.projectId] = scene;
+        this.grouped.projects[job.projectId].project.hasScene = true;
+      }
       job.status = 'succeeded';
       job.progress = 1;
       job.sceneUrl = `/api/projects/${job.projectId}/scene`;
@@ -262,20 +380,47 @@ export class MockApi implements RoomshiftApi {
       job.progress = 0.5;
     }
     job.updatedAt = new Date().toISOString();
+    this.persistGrouped();
     return { job: structuredClone(job) };
   }
   async getScene(id: string) {
     this.project(id);
+    if (id !== fixture.id) {
+      if (!this.grouped.scenes[id])
+        throw new ApiError(404, 'SCENE_NOT_READY', 'Reconstruct this blueprint first.');
+      return structuredClone(this.grouped.scenes[id]);
+    }
     this.refresh();
     return structuredClone(this.scene);
   }
   async getSourceScene(id: string) {
     this.project(id);
+    if (id !== fixture.id) {
+      if (!this.grouped.sources[id])
+        throw new ApiError(404, 'SCENE_NOT_READY', 'Reconstruct this blueprint first.');
+      return structuredClone(this.grouped.sources[id]);
+    }
     return demoScene();
   }
   async saveScene(id: string, scene: Scene) {
     this.project(id);
     this.refresh();
+    if (id !== fixture.id) {
+      const current = this.grouped.scenes[id];
+      if (!current) throw new ApiError(404, 'SCENE_NOT_READY', 'Reconstruct first.');
+      if (scene.id !== id) throw new ApiError(409, 'PROJECT_ID_MISMATCH', 'Scene ID must match.');
+      if (scene.revision !== current.revision)
+        throw new ApiError(409, 'REVISION_CONFLICT', 'This floor changed elsewhere.');
+      if (
+        JSON.stringify(scene.source) !== JSON.stringify(current.source) ||
+        JSON.stringify(scene.reconstruction) !== JSON.stringify(current.reconstruction)
+      )
+        throw new ApiError(409, 'IMMUTABLE_FIELD', 'Source and reconstruction are immutable.');
+      const saved = { ...validateScene(scene), revision: current.revision + 1 };
+      this.grouped.scenes[id] = saved;
+      this.persistGrouped();
+      return structuredClone(saved);
+    }
     if (scene.id !== id)
       throw new ApiError(409, 'PROJECT_ID_MISMATCH', 'Scene ID must match the project.');
     if (scene.revision !== this.scene.revision)
@@ -294,6 +439,91 @@ export class MockApi implements RoomshiftApi {
     this.storage?.setItem('roomshift.mock.scene.v1', JSON.stringify(saved));
     this.scene = saved;
     return structuredClone(saved);
+  }
+  private envelope(assembly: Assembly): AssemblyEnvelope {
+    this.refresh();
+    const ids = floorsOf(assembly).map((f) => f.projectId);
+    const demo: ProjectEnvelope = {
+      project: {
+        id: fixture.id,
+        name: fixture.name,
+        createdAt: fixture.reconstruction.createdAt,
+        hasScene: true,
+      },
+      image: {
+        url: fixture.source.imageUrl,
+        width: fixture.source.imageWidth,
+        height: fixture.source.imageHeight,
+        mimeType: 'image/png',
+      },
+    };
+    const scenes = { ...this.grouped.scenes, [fixture.id]: this.scene };
+    return structuredClone({
+      assembly,
+      projects: ids.map((id) => (id === fixture.id ? demo : this.grouped.projects[id])),
+      scenes: Object.fromEntries(ids.filter((id) => scenes[id]).map((id) => [id, scenes[id]])),
+      jobs: Object.fromEntries(
+        floorsOf(assembly)
+          .filter((f) => f.lastJobId && this.jobs.has(f.lastJobId))
+          .map((f) => [f.projectId, this.jobs.get(f.lastJobId!)!]),
+      ),
+    });
+  }
+  async createAssembly(input: AssemblyInput) {
+    this.refreshGrouped();
+    const assembly = assemblySchema.parse({
+      ...input,
+      schemaVersion: '1.0',
+      id: 'a_' + crypto.randomUUID().replaceAll('-', '').slice(0, 12),
+      revision: 0,
+      createdAt: new Date().toISOString(),
+    });
+    floorsOf(assembly).forEach((f) => this.project(f.projectId));
+    this.grouped.assemblies[assembly.id] = assembly;
+    this.persistGrouped();
+    return this.envelope(assembly);
+  }
+  async getAssembly(id: string) {
+    this.refreshGrouped();
+    const assembly = this.grouped.assemblies[id];
+    if (!assembly) throw new ApiError(404, 'ASSEMBLY_NOT_FOUND', 'Grouped project not found.');
+    return this.envelope(assembly);
+  }
+  async saveAssembly(value: Assembly) {
+    const { assembly: current } = await this.getAssembly(value.id);
+    if (current.revision !== value.revision)
+      throw new ApiError(409, 'REVISION_CONFLICT', 'Grouped project changed elsewhere.');
+    const assembly = assemblySchema.parse({ ...value, revision: value.revision + 1 });
+    const jobs = new Map(floorsOf(current).map((f) => [f.projectId, f.lastJobId]));
+    floorsOf(assembly).forEach((f) => {
+      f.lastJobId = jobs.get(f.projectId) ?? null;
+    });
+    this.grouped.assemblies[value.id] = assembly;
+    this.persistGrouped();
+    return this.envelope(assembly);
+  }
+  async reconstructAssembly(id: string, projectIds?: string[]) {
+    const { assembly } = await this.getAssembly(id);
+    const submittedJobs: Job[] = [];
+    for (const floor of floorsOf(assembly)) {
+      if (
+        projectIds
+          ? !projectIds.includes(floor.projectId)
+          : Boolean(floor.projectId === fixture.id || this.grouped.scenes[floor.projectId])
+      )
+        continue;
+      const prior = floor.lastJobId ? this.jobs.get(floor.lastJobId) : null;
+      const job =
+        prior && ['queued', 'running'].includes(prior.status)
+          ? prior
+          : (await this.reconstruct(floor.projectId, {})).job;
+      floor.lastJobId = job.id;
+      submittedJobs.push(job);
+    }
+    assembly.revision++;
+    this.grouped.assemblies[id] = assembly;
+    this.persistGrouped();
+    return { ...this.envelope(assembly), submittedJobs, errors: [] };
   }
 }
 export async function pollJob(

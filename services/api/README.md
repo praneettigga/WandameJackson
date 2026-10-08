@@ -24,6 +24,8 @@ OCR uses [Tesseract TSV word boxes](https://tesseract-ocr.github.io/tessdoc/Comm
 
 ## Run
 
+For the normal full-stack development workflow, run `npm run dev` from the repository root after completing setup. To run only the API:
+
 ```powershell
 .venv\Scripts\python -m uvicorn roomshift_api.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir roomshift_api
 ```
@@ -56,3 +58,9 @@ OCR uses [Tesseract TSV word boxes](https://tesseract-ocr.github.io/tessdoc/Comm
 - `roomshift_api/images.py`: content-based PNG/JPEG validation
 
 See [`docs/backend/HANDOFF.md`](../../docs/backend/HANDOFF.md) for API behavior, limitations and frontend integration.
+
+## Grouped projects
+
+Assembly 1.0 stores buildings, ordered floor references, placement, story heights, per-image settings, and server-owned job links under `data/assemblies/`. Child scenes retain Scene 0.1.0 coordinates and persistence.
+
+Create/read/save through `/api/assemblies` and `/api/assemblies/{id}`. Batch reconstruction queues independent jobs and reports per-floor errors without discarding successful scenes. See the [assembly API contract](../../contracts/api-contract.md#grouped-projects--assembly-10) and `tests/test_assemblies.py`.

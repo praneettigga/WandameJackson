@@ -1,4 +1,11 @@
 import * as THREE from 'three';
+import {
+  placements,
+  visiblePlacements,
+  layoutErrors,
+  type Assembly,
+  type FloorView,
+} from './assembly';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import {
   confidenceLevel,
@@ -469,6 +476,9 @@ export function disposeGeometry(root: THREE.Object3D) {
 // Exports are rebuilt from semantic data, so controls/grid/ghosts can never leak in.
 export async function exportGlb(scene: Scene, ceilings: boolean): Promise<ArrayBuffer> {
   const root = buildSceneGeometry(scene, { ceilings });
+  return exportGeometry(root);
+}
+async function exportGeometry(root: THREE.Group): Promise<ArrayBuffer> {
   root.updateMatrixWorld(true);
   try {
     return (await new GLTFExporter().parseAsync(root, {
@@ -528,4 +538,62 @@ export function collides(scene: Scene, x: number, z: number) {
       Math.abs(s * dx + c * dz) < o.dimensions[2] / 2 + radius
     );
   });
+}
+
+export function buildAssemblyGeometry(
+  assembly: Assembly,
+  scenes: Record<string, Scene>,
+  view: FloorView,
+  options: RenderOptions & { activeProjectId?: string | null } = {},
+) {
+  const root = new THREE.Group();
+  root.name = assembly.name;
+  root.userData.units = 'meters';
+  const all = placements(assembly, scenes, view.mode === 'exploded' ? view.gap : 0);
+  for (const placement of visiblePlacements(all, view)) {
+    if (!placement.scene) continue;
+    const child = buildSceneGeometry(placement.scene, {
+      ...options,
+      selectedId: placement.floor.projectId === options.activeProjectId ? options.selectedId : null,
+    });
+    child.name = `floor:${placement.floor.id}`;
+    child.position.set(...placement.position);
+    child.rotation.y = placement.rotationY;
+    for (const room of placement.scene.rooms) {
+      const shape = new THREE.Shape(room.polygon.map(([x, z]) => new THREE.Vector2(x, z)));
+      const mesh = new THREE.Mesh(
+        new THREE.ExtrudeGeometry(shape, { depth: 0.2, bevelEnabled: false }),
+        material(room, '#7e8986', options),
+      );
+      mesh.rotation.x = Math.PI / 2;
+      mesh.name = `${room.id}:slab`;
+      mesh.userData = { entityId: room.id, derived: true, assumption: '0.20 m slab' };
+      child.add(mesh);
+      const surface = child.getObjectByName(`${room.id}:floor`);
+      if (surface) surface.visible = false;
+    }
+    child.traverse((node) => {
+      node.userData.projectId = placement.floor.projectId;
+      node.userData.floorId = placement.floor.id;
+    });
+    root.add(child);
+  }
+  return root;
+}
+export async function exportAssemblyGlb(
+  assembly: Assembly,
+  scenes: Record<string, Scene>,
+  view: FloorView,
+  ceilings: boolean,
+) {
+  const errors = layoutErrors(assembly, scenes);
+  if (errors.length) throw new Error(errors[0]);
+  return exportGeometry(
+    buildAssemblyGeometry(
+      assembly,
+      scenes,
+      { ...view, mode: view.mode === 'floor' ? 'floor' : 'all' },
+      { ceilings },
+    ),
+  );
 }

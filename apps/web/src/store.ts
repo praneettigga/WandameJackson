@@ -11,6 +11,7 @@ import {
   type SceneObject,
   type V3,
 } from './scene';
+import { defaultSnapSettings, type SnapSettings } from './snapping';
 
 type Workspace = 'Reconstruct' | 'Edit' | 'Inspect' | 'Explore';
 type Mode = 'translate' | 'rotate' | 'scale';
@@ -26,6 +27,10 @@ type EditorState = {
   workspace: Workspace;
   mode: Mode;
   snap: boolean;
+  /** Per-kind snap toggles; UI state only, never serialized. */
+  snapSettings: SnapSettings;
+  /** Current zoom-adaptive grid step in metres. */
+  gridStep: number;
   xray: boolean;
   confidenceMap: boolean;
   ceilings: boolean;
@@ -57,6 +62,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   workspace: 'Reconstruct',
   mode: 'translate',
   snap: true,
+  snapSettings: defaultSnapSettings,
+  gridStep: 0.1,
   xray: false,
   confidenceMap: false,
   ceilings: false,

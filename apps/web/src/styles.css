@@ -336,6 +336,10 @@ button.text-button {
   color: #819095;
   pointer-events: none;
 }
+.snap-readout {
+  color: #f3bd63;
+  letter-spacing: 0.08em;
+}
 .viewport-bottom i {
   font-size: 12px;
   font-style: normal;

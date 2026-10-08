@@ -772,7 +772,7 @@ export default function App() {
               <button
                 className={state.snap ? 'active' : ''}
                 onClick={() => useEditor.setState({ snap: !state.snap })}
-                title="0.1 m translation grid; 15° rotation; 0.1 scale steps"
+                title="Zoom-adaptive translation grid (see SNAP readout); 15° rotation; 0.1 scale steps"
               >
                 ⌗<span>0.1 m</span>
               </button>

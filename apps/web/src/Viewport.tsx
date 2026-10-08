@@ -11,6 +11,7 @@ import {
 import * as THREE from 'three';
 import { buildSceneGeometry, collides, disposeGeometry, pointInRoom } from './geometry';
 import { useEditor } from './store';
+import { gridStepFor, worldPerPixel } from './snapping';
 import { resizedObject, type Scene, type V3 } from './scene';
 
 function MeasurePoint({
@@ -75,6 +76,21 @@ function MeasureOverlay({ points, hover }: { points: V3[]; hover: V3 | null }) {
   );
 }
 
+/** Keeps the store's grid step matched to the current zoom (distance to the orbit target). */
+function SnapScale() {
+  const camera = useThree((s) => s.camera),
+    controls = useThree((s) => s.controls) as unknown as { target?: THREE.Vector3 } | null,
+    height = useThree((s) => s.size.height);
+  useFrame(() => {
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+    const target = controls?.target ?? new THREE.Vector3();
+    const wpp = worldPerPixel(camera.position.distanceTo(target), camera.fov, height);
+    const current = useEditor.getState().gridStep;
+    const next = gridStepFor(wpp, current);
+    if (next !== current) useEditor.setState({ gridStep: next });
+  });
+  return null;
+}
 function FrameCamera({ root }: { root: THREE.Group }) {
   const camera = useThree((s) => s.camera),
     controls = useThree((s) => s.controls);
@@ -246,13 +262,13 @@ function World() {
           <Grid
             position={[0, -0.015, 0]}
             args={[100, 100]}
-            cellSize={0.1}
-            sectionSize={1}
+            cellSize={state.gridStep}
+            sectionSize={state.gridStep * 10}
             cellColor="#343d41"
             sectionColor="#4e595e"
             cellThickness={0.4}
             sectionThickness={0.8}
-            fadeDistance={35}
+            fadeDistance={Math.max(35, state.gridStep * 400)}
             infiniteGrid
           />
           <OrbitControls makeDefault minDistance={0.4} maxDistance={100} />
@@ -264,7 +280,7 @@ function World() {
               showX={state.mode !== 'rotate'}
               showY
               showZ={state.mode !== 'rotate'}
-              translationSnap={state.snap ? 0.1 : null}
+              translationSnap={state.snap ? state.gridStep : null}
               rotationSnap={state.snap ? Math.PI / 12 : null}
               scaleSnap={state.snap ? 0.1 : null}
               onMouseDown={() => {
@@ -288,6 +304,7 @@ function World() {
             />
           )}
           <FrameCamera root={root} />
+          <SnapScale />
         </>
       )}
       {state.workspace === 'Explore' && state.scene && <FirstPerson scene={state.scene} />}
@@ -315,7 +332,9 @@ export function Viewport() {
     workspace = useEditor((s) => s.workspace),
     measures = useEditor((s) => s.measures);
   const measure = useEditor((s) => s.measure),
-    compare = useEditor((s) => s.compare);
+    compare = useEditor((s) => s.compare),
+    snap = useEditor((s) => s.snap),
+    gridStep = useEditor((s) => s.gridStep);
   return (
     <div className="viewport">
       <Canvas
@@ -363,6 +382,11 @@ export function Viewport() {
                 : 'MEASURE · Click a surface to place point A · Esc to exit'
               : 'LMB select · Drag to orbit · RMB pan · Scroll zoom'}
         </span>
+        {workspace !== 'Explore' && (
+          <span className="snap-readout" title="Grid and snap step adapt to zoom">
+            {snap ? `SNAP ${gridStep < 0.1 ? gridStep.toFixed(2) : gridStep} m` : 'SNAP OFF'}
+          </span>
+        )}
         <span>
           X <i className="axis-x">━</i> Y <i className="axis-y">━</i> Z <i className="axis-z">━</i>
         </span>

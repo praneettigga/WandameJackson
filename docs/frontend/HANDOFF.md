@@ -4,6 +4,29 @@
 
 Implemented on `feat/prototype-frontend`, against the committed `contracts/scene.schema.json`, `contracts/api-contract.md`, and the unchanged `contracts/fixtures/room.scene.json` / `room.png`. All implementation, dependencies, configuration, and tests are under `apps/web/`; this handoff is under `docs/frontend/`.
 
+## Prototype 2 update (supersedes statements below where they conflict)
+
+- **Architecture is editable.** `src/wallGraph.ts` provides pure, tested wall topology operations: move a corner (connected walls follow), move a wall along its normal, add a wall (splitting the walls it touches or crosses), split, delete, and merge collinear walls. Doors and windows keep their world position, and an edit that would push one off its wall is rejected. Rooms are rebuilt from the planar wall graph after every edit. Unchanged rooms keep their IDs and polygons; changed ones get `fieldOrigins.polygon = "user"`. `store.wallEdit` applies an edit and the room rebuild as one undo step.
+- **Tools** (`src/WallTools.tsx`):
+  - `W` draws walls (type a length + Enter, Shift = 90°, Alt = no snap); `D`/`N` place doors/windows.
+  - Selected walls show end and middle handles. Selected openings show a slide handle that can cross onto a collinear wall.
+  - Native pointer handlers read state through refs, which fixes a pointer-up race the browser tests found.
+- **Snapping** (`src/snapping.ts`):
+  - The tolerance is a fixed 10 px converted to metres at the cursor (`worldPerPixel`), so it adapts to zoom.
+  - The grid step (0.01–5 m, with 20% hysteresis) follows the distance to the orbit target and drives the drawn grid and furniture `translationSnap`.
+  - Targets, in priority order: endpoint, intersection, midpoint, on-wall, then alignment guides, angle lock, grid/length rounding. Each can be toggled from the ▾ menu.
+  - Furniture snaps flush to wall faces and into corners, optionally turning its back to the wall.
+- **Output quality** (`src/geometry.ts`):
+  - Two-wall corners are closed by extending one wall, with no overlapping faces.
+  - Doors get a leaf on the swing side recorded by the parser; windows get sills.
+  - glTF nodes carry provenance in `extras`. The exported GLB passes the Khronos validator in tests.
+  - `GeometryCache` reuses unchanged entity meshes between edits.
+- **Review:**
+  - `src/completeness.ts` flags dangling wall ends (also red viewport markers), walls that bound no room, rooms without doors, and furniture blocking a door or outside rooms.
+  - `src/draft.ts` autosaves unsaved edits locally and offers Restore after a refresh. A stale draft is offered as a JSON download instead.
+- **API client:** `listProjects` (Project field suggestions) and `cancelJob` (Cancel button during reconstruction). Both have mock and HTTP implementations and conformance tests.
+- **Browser verification:** `npm run e2e` (Playwright, Chromium with SwiftShader WebGL, mock data) runs 8 tests. Their screenshots are in `test-results/`. The "no browser verification" limitation below no longer applies, except pointer-lock walking.
+
 ## Install and run
 
 Run these commands from the repository root:

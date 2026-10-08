@@ -22,6 +22,8 @@ export type Job = {
   error: ApiErrorBody | null;
   createdAt: string;
   updatedAt: string;
+  /** Set once a cancel was requested for a running job; it ends as failed/JOB_CANCELLED. */
+  cancelRequested?: boolean;
 };
 export class ApiError extends Error {
   constructor(
@@ -39,6 +41,8 @@ export interface RoomshiftApi {
   health(): Promise<{ status: 'ok'; schemaVersion: '0.1.0' }>;
   createProject(file: File, name?: string): Promise<ProjectEnvelope>;
   getProject(id: string): Promise<ProjectEnvelope>;
+  listProjects(): Promise<{ projects: ProjectEnvelope[] }>;
+  cancelJob(id: string): Promise<{ job: Job }>;
   getScale(id: string): Promise<{ calibration: ScaleCalibration }>;
   reconstruct(id: string, input: ReconstructionRequest): Promise<{ job: Job }>;
   getJob(id: string): Promise<{ job: Job }>;
@@ -97,6 +101,12 @@ export class HttpApi implements RoomshiftApi {
   }
   getProject(id: string) {
     return this.request<ProjectEnvelope>(`/api/projects/${encodeURIComponent(id)}`);
+  }
+  listProjects() {
+    return this.request<{ projects: ProjectEnvelope[] }>('/api/projects');
+  }
+  cancelJob(id: string) {
+    return this.request<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
   }
   async getScale(id: string) {
     try {
@@ -190,6 +200,23 @@ export class MockApi implements RoomshiftApi {
         mimeType: 'image/png',
       },
     };
+  }
+  async listProjects() {
+    return { projects: [await this.getProject(fixture.id)] };
+  }
+  async cancelJob(id: string) {
+    const job = this.jobs.get(id);
+    if (!job) throw new ApiError(404, 'JOB_NOT_FOUND', 'Unknown mock job.');
+    if (job.status !== 'queued' && job.status !== 'running')
+      throw new ApiError(409, 'JOB_NOT_ACTIVE', `Job already ${job.status}.`);
+    job.status = 'failed';
+    job.error = {
+      code: 'JOB_CANCELLED',
+      message: 'The reconstruction was cancelled. The previous scene (if any) is unchanged.',
+      details: null,
+    };
+    job.updatedAt = new Date().toISOString();
+    return { job: structuredClone(job) };
   }
   async getScale(id: string) {
     this.project(id);

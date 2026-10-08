@@ -19,6 +19,9 @@ import {
   metersPerPixel,
   type V2,
 } from './scene';
+import { completeness } from './completeness';
+import { snapKindLabels, type SnapKind } from './snapping';
+import { clearDraft, restorableDraft, writeDraft } from './draft';
 import { useEditor } from './store';
 import { confidenceColors, download, exportGlb, originColors, originLabels } from './geometry';
 import { ConfidenceChip, Inspector } from './Inspector';
@@ -258,6 +261,34 @@ export default function App() {
     [rightWidth, setRightWidth] = useState(286);
   const [notice, setNotice] = useState(''),
     [showBlueprint, setShowBlueprint] = useState(true);
+  const [draftOffer, setDraftOffer] = useState<ReturnType<typeof restorableDraft>>(null);
+  const [projects, setProjects] = useState<ProjectEnvelope[]>([]);
+  const refreshProjects = () =>
+    api
+      .listProjects()
+      .then((r) => setProjects(r.projects))
+      .catch(() => setProjects([])); // older backends have no list endpoint; the ID field still works
+  useEffect(() => {
+    void refreshProjects();
+  }, []);
+  // Autosave: mirror unsaved edits to a local draft (debounced); clear it once saved or discarded.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = useEditor.subscribe((s, prev) => {
+      if (s.scene && s.dirty && s.scene !== prev.scene) {
+        clearTimeout(timer);
+        const scene = s.scene;
+        timer = setTimeout(() => writeDraft(scene), 800);
+      } else if (prev.dirty && !s.dirty && prev.scene) {
+        clearTimeout(timer);
+        clearDraft(prev.scene.id);
+      }
+    });
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+    };
+  }, []);
   const polling = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const error = (e: unknown) =>
@@ -284,6 +315,7 @@ export default function App() {
     const envelope = await api.getProject(id);
     const scene = envelope.project.hasScene ? await api.getScene(id) : null;
     state.load(scene);
+    setDraftOffer(scene ? restorableDraft(scene) : null);
     setJob(null);
     setShowBlueprint(true);
     setHeight('');
@@ -394,6 +426,7 @@ export default function App() {
   const scored = state.scene
     ? entities(state.scene).filter((e) => e.provenance.confidence !== null)
     : [];
+  const issues = state.scene ? completeness(state.scene) : [];
   const review = scored
     .filter((e) => confidenceLevel(e.provenance.confidence) === 'low')
     .sort((a, b) => a.provenance.confidence! - b.provenance.confidence!);
@@ -499,6 +532,47 @@ export default function App() {
         </div>
       </nav>
       <ErrorBanner />
+      {draftOffer && state.scene?.id === draftOffer.draft.scene.id && (
+        <div className="draft-banner" role="status">
+          <b>Unsaved draft</b>
+          <span>
+            {draftOffer.stale
+              ? `Local edits from ${new Date(draftOffer.draft.savedAt).toLocaleString()} are based on revision ${draftOffer.draft.baseRevision}, but the server now has revision ${state.scene.revision}. Restoring them would conflict; download them as JSON instead.`
+              : `Local edits from ${new Date(draftOffer.draft.savedAt).toLocaleString()} were not saved.`}
+          </span>
+          {draftOffer.stale ? (
+            <button
+              onClick={() =>
+                download(
+                  JSON.stringify(draftOffer.draft.scene, null, 2),
+                  'application/json',
+                  `${draftOffer.draft.scene.id}-draft.scene.json`,
+                )
+              }
+            >
+              Download draft
+            </button>
+          ) : (
+            <button
+              className="primary small"
+              onClick={() => {
+                useEditor.setState({ scene: draftOffer.draft.scene, dirty: true, past: [], future: [] });
+                setDraftOffer(null);
+              }}
+            >
+              Restore
+            </button>
+          )}
+          <button
+            onClick={() => {
+              clearDraft(draftOffer.draft.scene.id);
+              setDraftOffer(null);
+            }}
+          >
+            Discard
+          </button>
+        </div>
+      )}
       <main className="editor-layout">
         <aside className="left-panel panel">
           {state.workspace === 'Reconstruct' ? (
@@ -711,8 +785,22 @@ export default function App() {
                   <div className="job-progress" role="status">
                     <progress value={job.progress} max={1} />
                     <span>
-                      {job.status} · {Math.round(job.progress * 100)}%
+                      {job.cancelRequested ? 'cancelling' : job.status} ·{' '}
+                      {Math.round(job.progress * 100)}%
                     </span>
+                    {(job.status === 'queued' || job.status === 'running') && !job.cancelRequested && (
+                      <button
+                        className="small"
+                        onClick={() =>
+                          void api
+                            .cancelJob(job.id)
+                            .then((r) => setJob(r.job))
+                            .catch(error)
+                        }
+                      >
+                        Cancel
+                      </button>
+                    )}
                   </div>
                 )}
               </section>
@@ -792,9 +880,19 @@ export default function App() {
               Project ID
               <input
                 value={projectId}
+                list="project-list"
                 placeholder="Project ID from the API"
+                onFocus={() => void refreshProjects()}
                 onChange={(e) => setProjectId(e.target.value)}
               />
+              <datalist id="project-list">
+                {projects.map((p) => (
+                  <option key={p.project.id} value={p.project.id}>
+                    {p.project.name} · {new Date(p.project.createdAt).toLocaleDateString()}
+                    {p.project.hasScene ? '' : ' · not reconstructed'}
+                  </option>
+                ))}
+              </datalist>
             </label>
             <div className="button-row">
               <button
@@ -920,6 +1018,28 @@ export default function App() {
               >
                 ⌗<span>Snap</span>
               </button>
+              <details className="snap-menu">
+                <summary title="Choose snap targets" aria-label="Snap targets">
+                  ▾
+                </summary>
+                <div className="snap-menu-panel">
+                  <small>Snap distance is 10 px on screen, so it adapts to zoom.</small>
+                  {(Object.keys(snapKindLabels) as SnapKind[]).map((kind) => (
+                    <label key={kind}>
+                      <input
+                        type="checkbox"
+                        checked={state.snapSettings[kind]}
+                        onChange={(e) =>
+                          useEditor.setState({
+                            snapSettings: { ...state.snapSettings, [kind]: e.target.checked },
+                          })
+                        }
+                      />
+                      {snapKindLabels[kind]}
+                    </label>
+                  ))}
+                </div>
+              </details>
             </div>
           </div>
           <div className="viewport-host">
@@ -1028,6 +1148,7 @@ export default function App() {
               <span>REVIEW & OUTPUT</span>
               <span>
                 {warnings.length} {warnings.length === 1 ? 'notice' : 'notices'}
+                {issues.length > 0 && ` · ${issues.length} completeness ${issues.length === 1 ? 'check' : 'checks'}`}
               </span>
             </div>
             <div className="dock-body">
@@ -1058,6 +1179,19 @@ export default function App() {
                     )}
                   </div>
                 )}
+                {issues.length > 0 && (
+                  <div className="completeness" aria-label="Completeness checks">
+                    {issues.map((issue, i) => (
+                      <p key={i} className={`issue ${issue.severity}`}>
+                        <span>{issue.severity === 'warning' ? '◆' : '◇'}</span>
+                        {issue.message}
+                        {issue.entityId && (
+                          <button onClick={() => state.select(issue.entityId)}>Show</button>
+                        )}
+                      </p>
+                    ))}
+                  </div>
+                )}
                 {warnings.length ? (
                   warnings.map((warning, i) => (
                     <p key={i}>
@@ -1086,6 +1220,28 @@ export default function App() {
                   }}
                 >
                   ↓ Scene JSON
+                </button>
+                <button
+                  disabled={!state.scene || disabled}
+                  title="Download this scene with its blueprint image as an evaluation ground-truth pair (name.png + name.scene.json)"
+                  onClick={() =>
+                    void guarded(async () => {
+                      if (!state.scene) return;
+                      const scene = state.scene;
+                      const image = await fetch(api.imageUrl(scene.source.imageUrl)).then((r) => {
+                        if (!r.ok) throw new Error(`Could not download the blueprint (HTTP ${r.status}).`);
+                        return r.blob();
+                      });
+                      const ext = scene.source.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+                      download(image, scene.source.mimeType, `${scene.id}.${ext}`);
+                      download(exportSceneJson(scene), 'application/json', `${scene.id}.scene.json`);
+                      setNotice(
+                        'Ground-truth pair downloaded. Put both files in services/api/data/gt and run python -m eval.run --set real.',
+                      );
+                    })
+                  }
+                >
+                  ↓ GT pair
                 </button>
                 <button
                   disabled={!state.scene || disabled}

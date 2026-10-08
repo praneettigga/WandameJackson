@@ -105,6 +105,23 @@ export function segmentIntersection(a: Segment, b: Segment): V2 | null {
 }
 
 type Candidate = { point: V2; id?: string };
+
+// Wall crossings are O(n²) to find, so they are computed once per segment list and reused for
+// every pointer move until the walls change (snapSegments returns a stable list per walls array).
+const crossingCache = new WeakMap<Segment[], (Candidate & { other: string })[]>();
+function crossingsOf(segments: Segment[]) {
+  let out = crossingCache.get(segments);
+  if (!out) {
+    out = [];
+    for (let i = 0; i < segments.length; i++)
+      for (let j = i + 1; j < segments.length; j++) {
+        const x = segmentIntersection(segments[i], segments[j]);
+        if (x) out.push({ point: x, id: segments[i].id, other: segments[j].id });
+      }
+    crossingCache.set(segments, out);
+  }
+  return out;
+}
 function nearest(p: V2, candidates: Candidate[], tolerance: number) {
   let best: (Candidate & { d: number }) | null = null;
   for (const c of candidates) {
@@ -132,12 +149,9 @@ export function snapPoint(p: V2, ctx: SnapContext): SnapResult {
     if (hit) return { point: [...hit.point], kind: 'endpoint', guides: [], targetId: hit.id };
   }
   if (settings.intersection) {
-    const crossings: Candidate[] = [];
-    for (let i = 0; i < segments.length; i++)
-      for (let j = i + 1; j < segments.length; j++) {
-        const x = segmentIntersection(segments[i], segments[j]);
-        if (x) crossings.push({ point: x, id: segments[i].id });
-      }
+    const crossings = crossingsOf(ctx.segments).filter(
+      (c) => !ctx.exclude || (!ctx.exclude.has(c.id!) && !ctx.exclude.has(c.other)),
+    );
     const hit = nearest(p, crossings, tolerance);
     if (hit) return { point: hit.point, kind: 'intersection', guides: [], targetId: hit.id };
   }
@@ -232,8 +246,16 @@ export function snapPoint(p: V2, ctx: SnapContext): SnapResult {
   return { point, kind, guides: guides.map(([from]) => [from, point]) };
 }
 
-export const snapSegments = (walls: { id: string; start: V2; end: V2 }[]): Segment[] =>
-  walls.map((w) => ({ id: w.id, start: w.start, end: w.end }));
+const segmentCache = new WeakMap<object, Segment[]>();
+/** Segments for a walls array; the same array instance returns the same (cached) list. */
+export const snapSegments = (walls: { id: string; start: V2; end: V2 }[]): Segment[] => {
+  let out = segmentCache.get(walls);
+  if (!out) {
+    out = walls.map((w) => ({ id: w.id, start: w.start, end: w.end }));
+    segmentCache.set(walls, out);
+  }
+  return out;
+};
 
 // ---- Openings slide along their wall --------------------------------------------------------
 

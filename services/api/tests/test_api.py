@@ -241,3 +241,44 @@ def test_jpeg_orientation_matches_browser_calibration(client, tmp_path):
     gray = load_gray(path)
     assert gray.shape == (100, 60)
     assert gray[20, 40] < 20
+
+
+def test_list_projects_newest_first(client):
+    a = upload(client, png_bytes(l_shaped_plan()), name="a.png").json()["project"]
+    b = upload(client, png_bytes(l_shaped_plan()), name="b.png").json()["project"]
+    listed = client.get("/api/projects").json()["projects"]
+    ids = [p["project"]["id"] for p in listed]
+    assert set(ids) == {a["id"], b["id"]}
+    assert listed[0]["image"]["url"].startswith("/api/projects/")
+
+
+def test_cancel_running_job_keeps_previous_scene(client, monkeypatch):
+    import threading
+    import roomshift_api.jobs as jobs
+
+    pid = reconstructed(client)
+    before = client.get(f"/api/projects/{pid}/scene").json()
+    started, release = threading.Event(), threading.Event()
+    real = jobs.parse_blueprint
+
+    def slow(gray, mpp, h, t, progress):
+        started.set()
+        release.wait(5)
+        progress(0.5)  # the cancel takes effect at the next progress step
+        return real(gray, mpp, h, t, progress)
+
+    monkeypatch.setattr(jobs, "parse_blueprint", slow)
+    job = client.post(f"/api/projects/{pid}/reconstruct", json={"calibration": CAL}).json()["job"]
+    assert started.wait(5)
+    r = client.post(f"/api/jobs/{job['id']}/cancel")
+    assert r.status_code == 202 and r.json()["job"]["cancelRequested"] is True
+    release.set()
+    done = wait_job(client, job["id"])
+    assert done["status"] == "failed" and done["error"]["code"] == "JOB_CANCELLED"
+    assert client.get(f"/api/projects/{pid}/scene").json() == before
+    assert_error(client.post(f"/api/jobs/{job['id']}/cancel"), 409, "JOB_NOT_ACTIVE")
+    assert_error(client.post("/api/jobs/j_missing/cancel"), 404, "JOB_NOT_FOUND")
+    # A new job can be submitted after cancellation.
+    monkeypatch.setattr(jobs, "parse_blueprint", real)
+    again = client.post(f"/api/projects/{pid}/reconstruct", json={"calibration": CAL}).json()["job"]
+    assert wait_job(client, again["id"])["status"] == "succeeded"

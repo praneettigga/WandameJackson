@@ -39,6 +39,7 @@ Every non-2xx response, including framework/request validation errors:
 | 404 | `SCENE_NOT_READY` | No successful reconstruction yet |
 | 409 | `REVISION_CONFLICT` | Stale `revision` on PUT |
 | 409 | `JOB_IN_PROGRESS` | A job for this project is already queued/running |
+| 409 | `JOB_NOT_ACTIVE` | Cancel requested for a job that already finished |
 | 409 | `PROJECT_ID_MISMATCH` | Scene `id` ≠ URL ID |
 | 409 | `IMMUTABLE_FIELD` | PUT attempted to change `source` or `reconstruction` |
 | 413 | `UPLOAD_TOO_LARGE` | Over size limit |
@@ -61,6 +62,9 @@ Multipart form: `blueprint` (file, required), `name` (string, optional, default 
   "image": { "url": "/api/projects/p_abc123/blueprint", "width": 1200, "height": 900, "mimeType": "image/png" }
 }
 ```
+
+### `GET /api/projects`
+Additive (prototype 2). `200` → `{ "projects": [ProjectEnvelope, ...] }`, newest first. Lets the editor offer existing projects instead of requiring a typed ID. Clients must tolerate `404 NOT_FOUND` from older servers.
 
 ### `GET /api/projects/{projectId}`
 `200` → same envelope as create, with `hasScene` updated.
@@ -104,9 +108,15 @@ Computes and caches an automatic scale from the uploaded image. Tries OCR dimens
 - `progress` runs from 0 to 1.
 - `sceneUrl` (`/api/projects/{id}/scene`) is set only after the scene is persisted, when the status is `succeeded`.
 - `error` is null unless the status is `failed`. On failure it has the shape `{ code, message, details }`, e.g. `RECONSTRUCTION_FAILED` with actionable text.
-- Jobs that were interrupted by a server restart are reported as `failed`.
+- Jobs that were interrupted by a server restart are reported as `failed`. Cancelled jobs are `failed` with `error.code = "JOB_CANCELLED"`.
 - A failed job never replaces the current scene.
 - The first reconstruction starts at editable revision 0. Each successful rerun increments the current editable revision, so a stale editor cannot overwrite the new result. The source snapshot remains revision 0.
+
+### `POST /api/jobs/{jobId}/cancel`
+Additive (prototype 2). Cancels a `queued` job immediately, or asks a `running` job to stop at its next progress step.
+- `202` → `{ "job": Job }`. A running job is returned with `"cancelRequested": true` and keeps `running` until it stops.
+- A cancelled job ends as `failed` with `error.code = "JOB_CANCELLED"`. Like any failed job, it never replaces the current scene.
+- `404 JOB_NOT_FOUND` for an unknown ID; `409 JOB_NOT_ACTIVE` if the job already succeeded or failed.
 
 ### `GET /api/projects/{projectId}/scene`
 `200` → the current editable `Scene` (bare object, not wrapped). `404 SCENE_NOT_READY` if none.
@@ -134,6 +144,8 @@ JPEG pixel coordinates and reported dimensions use the image's EXIF display orie
   - Rooms: fraction of the outline backed by drawn walls.
 
   The score covers detected geometry only. Fields marked `inferred` in `fieldOrigins` are not scored. The UI shows scores as high (≥ 0.8), medium (≥ 0.5) and low. Scores are fixed at reconstruction time and are not recomputed after user edits.
+- Doors may carry a provenance note starting with `Swing:`, read from the drawn swing arc, e.g. `Swing: hinge at the near edge (wall start side), opens to the left side of the wall.` "Left" is the normal `(−dz, dx)` of the wall direction `start → end`. Without such a note, the swing is unknown and editors draw a default leaf.
+- Reconstruction warnings starting with `Completeness:` report structural issues: wall ends that meet no other wall, and rooms with no detected door.
 - Assumed values such as heights and default thickness are marked in `fieldOrigins` (e.g. `"height": "inferred"`) and explained in `notes`.
 - User edits to an existing entity keep its `origin`, set `userEdited: true`, and set the changed fields to `"user"` in `fieldOrigins`. New user entities have `origin: "user"` and get a fresh ID.
 

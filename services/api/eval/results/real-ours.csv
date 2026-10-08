@@ -1,0 +1,2 @@
+case,augmentation,config,wall_iou,room_precision,room_recall,room_f1,room_mean_iou,layout_iou,dim_abs_err_m,dim_rel_err,corner_precision,corner_recall,corner_f1,door_precision,door_recall,door_f1,door_tp,door_pred,door_gt,window_precision,window_recall,window_f1,window_tp,window_pred,window_gt,opening_width_err_m,failed,seconds
+apartment_blueprint,real,ours,0.9441440488903433,1.0,1.0,1.0,0.9943896007572506,0.9979193542974387,5.181040781584064e-16,1.5906811690753162e-16,1.0,1.0,1.0,1.0,1.0,1.0,6,6,6,1.0,1.0,1.0,6,6,6,0.020000000000000018,0,1.2827914000081364

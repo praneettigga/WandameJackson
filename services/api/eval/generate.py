@@ -45,15 +45,20 @@ def _split(rect, depth, rng, min_side=2.4):
     return [rect], []
 
 
-def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool = True) -> Plan:
+def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool = True,
+             style: str = "solid", chamfer: bool = False) -> Plan:
+    """style: 'solid' (filled wall strokes) or 'outline' (double-line walls).
+    chamfer: cut the top-left outer corner with a 45° diagonal wall."""
     rng = random.Random(seed)
     W, D = round(rng.uniform(6, 12), 1), round(rng.uniform(5, 9), 1)
     t = round(rng.uniform(0.15, 0.25), 2)
     ox = oz = margin_m
     leaves, parts = _split((ox, oz, ox + W, oz + D), rng.randint(1, 3), rng)
-    outer = [((ox, oz), (ox + W, oz)), ((ox + W, oz), (ox + W, oz + D)),
-             ((ox + W, oz + D), (ox, oz + D)), ((ox, oz + D), (ox, oz))]
-    segments = outer + parts
+    c = 1.5 if chamfer else 0.0
+    outer = [((ox + c, oz), (ox + W, oz)), ((ox + W, oz), (ox + W, oz + D)),
+             ((ox + W, oz + D), (ox, oz + D)), ((ox, oz + D), (ox, oz + c))]
+    diagonal = [((ox, oz + c), (ox + c, oz))] if chamfer else []
+    segments = outer + diagonal + parts
 
     # Openings: one door per partition, an entrance door and 1-3 windows on the outer walls.
     openings: list[dict] = []
@@ -83,22 +88,34 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
     px = lambda m: int(round(m / mpp))  # noqa: E731
     img = np.full((px(D + 2 * margin_m), px(W + 2 * margin_m)), 255, np.uint8)
     tp = max(2, px(t))
-    for (ax, az), (bx, bz) in segments:
+    # Walls are drawn into a mask first so outline style can trace their boundary.
+    mask = np.zeros_like(img)
+    for (ax, az), (bx, bz) in outer + parts:
         # Extend by t/2 so corners are solid, like a real drawing.
         if ax == bx:
-            cv2.rectangle(img, (px(ax - t / 2), px(min(az, bz) - t / 2)), (px(ax + t / 2) - 1, px(max(az, bz) + t / 2) - 1), 0, -1)
+            cv2.rectangle(mask, (px(ax - t / 2), px(min(az, bz) - t / 2)), (px(ax + t / 2) - 1, px(max(az, bz) + t / 2) - 1), 255, -1)
         else:
-            cv2.rectangle(img, (px(min(ax, bx) - t / 2), px(az - t / 2)), (px(max(ax, bx) + t / 2) - 1, px(az + t / 2) - 1), 0, -1)
+            cv2.rectangle(mask, (px(min(ax, bx) - t / 2), px(az - t / 2)), (px(max(ax, bx) + t / 2) - 1, px(az + t / 2) - 1), 255, -1)
+    for (ax, az), (bx, bz) in diagonal:
+        cv2.line(mask, (px(ax), px(az)), (px(bx), px(bz)), 255, tp)
+    for o in openings:
+        (ax, az), (bx, bz) = o["seg"]
+        cx, cz = o["centre"]
+        h = o["width"] / 2
+        if az == bz:
+            cv2.rectangle(mask, (px(cx - h), px(cz - t / 2) - 1), (px(cx + h) - 1, px(cz + t / 2)), 0, -1)
+        else:
+            cv2.rectangle(mask, (px(cx - t / 2) - 1, px(cz - h)), (px(cx + t / 2), px(cz + h) - 1), 0, -1)
+    if style == "outline":
+        edge = cv2.subtract(mask, cv2.erode(mask, np.ones((5, 5), np.uint8)))
+        img[edge > 0] = 0
+    else:
+        img[mask > 0] = 0
     for o in openings:
         (ax, az), (bx, bz) = o["seg"]
         horizontal = az == bz
         cx, cz = o["centre"]
         h = o["width"] / 2
-        if horizontal:
-            p0, p1 = (px(cx - h), px(cz - t / 2)), (px(cx + h) - 1, px(cz + t / 2) - 1)
-        else:
-            p0, p1 = (px(cx - t / 2), px(cz - h)), (px(cx + t / 2) - 1, px(cz + h) - 1)
-        cv2.rectangle(img, p0, p1, 255, -1)
         if o["type"] == "window":
             for f in (-0.25, 0.25):
                 if horizontal:
@@ -108,6 +125,9 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
         else:
             # Door leaf and quarter swing arc on one side of the wall.
             side = rng.choice([-1, 1])
+            # Ground truth: the arc's world side (+1 = towards +z for horizontal walls, +x for vertical);
+            # the hinge is always at the jamb with the smaller coordinate.
+            o["swing_side"] = side
             if horizontal:
                 hinge = (px(cx - h), px(cz + side * t / 2))
                 tip = (hinge[0], hinge[1] + side * px(o["width"]))
@@ -128,9 +148,13 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
         cv2.putText(img, f"{W:.2f} m", (px(ox + W / 2) - 25, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, 0, 1)
 
     walls = [{"start": list(a), "end": list(b), "thickness": t} for a, b in segments]
-    rooms = [[[x0, z0], [x1, z0], [x1, z1], [x0, z1]] for x0, z0, x1, z1 in leaves]
-    ops = [{"type": o["type"], "centre": o["centre"], "width": o["width"]} for o in openings]
-    return Plan(img, mpp, walls, ops, rooms, {"seed": seed, "size": [W, D], "thickness": t})
+    rooms = [([[x0 + c, z0], [x1, z0], [x1, z1], [x0, z1], [x0, z0 + c]] if c and (x0, z0) == (ox, oz)
+              else [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]) for x0, z0, x1, z1 in leaves]
+    ops = [{"type": o["type"], "centre": o["centre"], "width": o["width"],
+            **({"swing_side": o["swing_side"], "horizontal": o["seg"][0][1] == o["seg"][1][1]} if o["type"] == "door" else {})}
+           for o in openings]
+    return Plan(img, mpp, walls, ops, rooms, {"seed": seed, "size": [W, D], "thickness": t,
+                                              "style": style, "chamfer": c})
 
 
 # ---- augmentations (GT stays exact) ---------------------------------------------------------
@@ -187,8 +211,16 @@ def jpeg(plan: Plan, quality: int) -> Plan:
 AUGMENTATIONS = {
     "clean": lambda p: p,
     "blur1.5": lambda p: blur(p, 1.5),
+    "blur3": lambda p: blur(p, 3.0),
     "jpeg30": lambda p: jpeg(p, 30),
+    "jpeg10": lambda p: jpeg(p, 10),
     "noise25": lambda p: noise(p, 25),
+    "noise60": lambda p: noise(p, 60),
     "skew3": lambda p: skew(p, 3.0),
     "half_res": lambda p: downscale(p, 0.5),
+}
+# Drawing styles change the rendering itself, so they regenerate the plan from the same seed.
+STYLES = {
+    "outline": {"style": "outline"},
+    "diagonal": {"chamfer": True},
 }

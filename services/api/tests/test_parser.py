@@ -140,3 +140,43 @@ def test_ablation_options_cover_every_stage():
     r = parse_blueprint(load_gray(CONTRACTS / "fixtures" / "room.png"), 0.02,
                         options=ParserOptions(opening_detection=False))
     assert r["openings"] == []
+
+
+def test_door_swing_side_and_hinge_match_the_drawn_symbol():
+    import math
+    from eval.generate import generate
+    checked = 0
+    for seed in range(6):
+        plan = generate(seed, clutter=False)
+        r = parse_blueprint(plan.image, plan.mpp)
+        walls = {w["id"]: w for w in r["walls"]}
+        for o in r["openings"]:
+            note = next((n for n in o["provenance"]["notes"] if n.startswith("Swing:")), None)
+            if o["type"] != "door" or note is None:
+                continue
+            w = walls[o["wallId"]]
+            L = math.dist(w["start"], w["end"])
+            f = (o["offset"] + o["width"] / 2) / L
+            c = [w["start"][0] + (w["end"][0] - w["start"][0]) * f, w["start"][1] + (w["end"][1] - w["start"][1]) * f]
+            gt = min((g for g in plan.openings if g["type"] == "door"), key=lambda g: math.dist(g["centre"], c))
+            if math.dist(gt["centre"], c) > 0.15:
+                continue
+            horizontal = w["start"][1] == w["end"][1]
+            # Parser walls run +x / +z; 'left' is (−dz, dx): +z for horizontal walls, −x for vertical ones.
+            left = "left side" in note
+            world = (1 if left else -1) if horizontal else (-1 if left else 1)
+            assert world == gt["swing_side"], (seed, note, gt)
+            assert "near edge" in note  # generator hinges are at the smaller coordinate
+            checked += 1
+    assert checked >= 5
+
+
+def test_completeness_warnings_flag_dangling_walls_and_doorless_rooms():
+    from roomshift_api.parser import completeness_warnings
+    walls = [{"id": "a", "start": [0, 0], "end": [4, 0], "thickness": 0.2},
+             {"id": "b", "start": [4, 0], "end": [4, 3], "thickness": 0.2}]
+    rooms = [{"id": "room-1", "polygon": [[0, 0], [4, 0], [4, 3], [0, 3]]}]
+    out = completeness_warnings(walls, [], rooms)
+    assert any("2 wall end(s)" in w for w in out) and any("room-1 has no detected door" in w for w in out)
+    door = {"type": "door", "wallId": "a", "offset": 1, "width": 0.9}
+    assert not any("no detected door" in w for w in completeness_warnings(walls, [door], rooms))

@@ -4,6 +4,7 @@ Examples (from services/api):
   python -m eval.run --n 30                              # our parser, synthetic set, all augmentations
   python -m eval.run --ablation --n 30                   # full pipeline vs each stage disabled
   python -m eval.run --parser baseline --n 30            # CubiCasa5K baseline (see eval/baseline/README.md)
+  python -m eval.run --parser both --n 30                # ours, baseline, and evidence-gated fusion
   python -m eval.run --set real --real-dir data/gt       # editor-annotated plans: name.png + name.scene.json
 
 Writes a per-case CSV and a markdown summary to --out (default eval/results/).
@@ -22,7 +23,7 @@ import numpy as np
 
 from roomshift_api.parser import ParseError, ParserOptions, parse_blueprint
 
-from .generate import AUGMENTATIONS, Plan, generate
+from .generate import AUGMENTATIONS, STYLES, Plan, generate
 from .metrics import evaluate
 
 HEADLINE = ["wall_iou", "layout_iou", "room_f1", "room_mean_iou", "corner_f1", "door_f1", "window_f1",
@@ -33,7 +34,8 @@ def synthetic_cases(n: int, augmentations: list[str]):
     for seed in range(n):
         base = generate(seed)
         for name in augmentations:
-            yield f"syn{seed:03d}", name, AUGMENTATIONS[name](base)
+            plan = generate(seed, **STYLES[name]) if name in STYLES else AUGMENTATIONS[name](base)
+            yield f"syn{seed:03d}", name, plan
 
 
 def real_cases(folder: Path):
@@ -108,11 +110,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--set", choices=["synthetic", "real"], default="synthetic")
     ap.add_argument("--n", type=int, default=20, help="number of synthetic layouts")
-    ap.add_argument("--aug", default=",".join(AUGMENTATIONS), help="comma-separated augmentations")
+    ap.add_argument("--aug", default=",".join([*AUGMENTATIONS, *STYLES]), help="comma-separated augmentations/styles")
     ap.add_argument("--real-dir", type=Path, default=Path("data/gt"))
     ap.add_argument("--parser", choices=["ours", "baseline", "both"], default="ours")
     ap.add_argument("--ablation", action="store_true", help="run every ParserOptions ablation of our parser")
     ap.add_argument("--out", type=Path, default=Path(__file__).parent / "results")
+    ap.add_argument("--fail-under", default="", help="CI gate, e.g. layout_iou=0.9,room_f1=0.85 (means over all cases)")
     args = ap.parse_args(argv)
 
     cases = list(synthetic_cases(args.n, args.aug.split(",")) if args.set == "synthetic" else real_cases(args.real_dir))
@@ -123,6 +126,19 @@ def main(argv=None):
     else:
         kinds = ["ours", "baseline"] if args.parser == "both" else [args.parser]
         configs = {k: predictor(k) for k in kinds}
+        if args.parser == "both":
+            from .fusion import fuse_walls
+            ours, model = configs["ours"], configs["baseline"]
+            last: dict = {}
+
+            def base(plan):
+                # Fusion reuses the baseline's prediction for the same plan instead of running it twice.
+                if last.get("plan") is not plan:
+                    last.update(plan=plan, pred=model(plan))
+                return last["pred"]
+
+            configs["baseline"] = base
+            configs["fused"] = lambda plan: fuse_walls(ours(plan), base(plan), plan.image, plan.mpp, "cubicasa5k")
     rows = run(cases, configs)
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -134,6 +150,15 @@ def main(argv=None):
     summary = summarise(rows)
     (args.out / f"{tag}.md").write_text(summary + "\n", encoding="utf8")
     print(summary)
+    failures = []
+    for item in filter(None, args.fail_under.split(",")):
+        metric, threshold = item.split("=")
+        vals = [r[metric] for r in rows if not math.isnan(r[metric])]
+        mean = sum(vals) / len(vals) if vals else float("nan")
+        if not mean >= float(threshold):
+            failures.append(f"{metric} {mean:.3f} < {threshold}")
+    if failures:
+        raise SystemExit("Evaluation regression: " + "; ".join(failures))
 
 
 if __name__ == "__main__":

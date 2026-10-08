@@ -23,13 +23,14 @@ Turn a blueprint into a simple, editable 3D room. A user can give one known meas
 - Furniture represented as editable, simple 3D objects.
 - Selection, transform controls, floor snapping, dimensions, and provenance.
 - Save/reload and JSON/GLB export.
+- Prototype 2: wall drawing and editing (move corners and walls, split, delete), door/window placement and sliding, and furniture snapping to walls. Snapping is zoom-adaptive (fixed screen-pixel tolerance, grid step from zoom). Rooms are rebuilt from the walls after each edit.
+- Prototype 2: completeness checks, local draft autosave, and an offline evaluation harness with ablations and a CubiCasa5K baseline.
 
 ## Explicitly out of scope
 
 - Video input or camera reconstruction.
 - Gaussian splats, NeRFs, or diffusion-based completion.
 - Natural-language editing.
-- Advanced wall drawing or reshaping in the editor.
 - Physics, gameplay, or a polished game-like experience.
 - Claims that inferred geometry was directly observed.
 

@@ -9,10 +9,11 @@ import {
   TransformControls,
 } from '@react-three/drei';
 import * as THREE from 'three';
-import { buildSceneGeometry, collides, disposeGeometry, pointInRoom } from './geometry';
+import { GeometryCache, buildSceneGeometry, collides, disposeGeometry, pointInRoom } from './geometry';
 import { useEditor } from './store';
 import { SNAP_PX, gridStepFor, snapToWalls, worldPerPixel } from './snapping';
 import { WallTools } from './WallTools';
+import { danglingEnds } from './wallGraph';
 import { resizedObject, type Scene, type V3 } from './scene';
 
 function MeasurePoint({
@@ -77,6 +78,30 @@ function MeasureOverlay({ points, hover }: { points: V3[]; hover: V3 | null }) {
   );
 }
 
+/** Red markers at wall ends that meet no other wall (completeness check). */
+function DanglingMarkers({ scene }: { scene: Scene }) {
+  const points = useMemo(() => danglingEnds(scene.walls), [scene.walls]);
+  return (
+    <>
+      {points.map((p, i) => (
+        <mesh key={i} position={[p[0], 0.06, p[1]]} renderOrder={12} raycast={() => null}>
+          <sphereGeometry args={[0.07, 12, 8]} />
+          <meshBasicMaterial color="#e5736a" depthTest={false} transparent opacity={0.85} />
+        </mesh>
+      ))}
+    </>
+  );
+}
+/** Exposes the camera to browser end-to-end tests (VITE_E2E builds only). */
+function E2EHook() {
+  const camera = useThree((s) => s.camera),
+    size = useThree((s) => s.size);
+  useEffect(() => {
+    if (import.meta.env.VITE_E2E === 'true')
+      (window as unknown as { __three: unknown }).__three = { camera, size, Vector3: THREE.Vector3 };
+  }, [camera, size]);
+  return null;
+}
 /** Keeps the store's grid step matched to the current zoom (distance to the orbit target). */
 function SnapScale() {
   const camera = useThree((s) => s.camera),
@@ -190,16 +215,25 @@ function FirstPerson({ scene }: { scene: Scene }) {
 }
 function World() {
   const state = useEditor();
-  const root = useMemo(
-    () =>
-      state.scene
-        ? buildSceneGeometry(state.scene, {
+  // Unchanged entities keep their geometry between edits; only changed ones are rebuilt.
+  const cache = useMemo(() => new GeometryCache(), []);
+  useEffect(() => () => cache.clear(), [cache]);
+  const root = useMemo(() => {
+    const next = state.scene
+      ? buildSceneGeometry(
+          state.scene,
+          {
             ceilings: state.ceilings || state.workspace === 'Explore',
             xray: state.xray,
             confidence: state.confidenceMap,
             selectedId: state.selectedId,
-          })
-        : new THREE.Group(),
+          },
+          cache,
+        )
+      : new THREE.Group();
+    cache.sweep();
+    return next;
+  },
     [
       state.scene,
       state.ceilings,
@@ -207,6 +241,7 @@ function World() {
       state.xray,
       state.confidenceMap,
       state.selectedId,
+      cache,
     ],
   );
   const ghost = useMemo(
@@ -216,7 +251,6 @@ function World() {
         : null,
     [state.sourceScene, state.compare, state.ceilings],
   );
-  useEffect(() => () => disposeGeometry(root), [root]);
   useEffect(
     () => () => {
       if (ghost) disposeGeometry(ghost);
@@ -333,7 +367,9 @@ function World() {
           )}
           <FrameCamera root={root} />
           <SnapScale />
+          <E2EHook />
           {state.scene && !state.measure && <WallTools scene={state.scene} />}
+          {state.scene && <DanglingMarkers scene={state.scene} />}
         </>
       )}
       {state.workspace === 'Explore' && state.scene && <FirstPerson scene={state.scene} />}

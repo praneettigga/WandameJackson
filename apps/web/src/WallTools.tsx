@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { Html, Line } from '@react-three/drei';
 import * as THREE from 'three';
@@ -43,6 +43,16 @@ type Drag =
   | { kind: 'wall'; wall: Wall; grab: V2 }
   | { kind: 'opening'; opening: Opening; wall: Wall };
 
+function useStateRef<T>(initial: T) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef(value);
+  const set = useCallback((next: T | ((prev: T) => T)) => {
+    ref.current = typeof next === 'function' ? (next as (prev: T) => T)(ref.current) : next;
+    setValue(ref.current);
+  }, []);
+  return [value, set, ref] as const;
+}
+
 function Handle({ position, color, onDown }: { position: V2; color: string; onDown: (e: ThreeEvent<PointerEvent>) => void }) {
   const ref = useRef<THREE.Mesh>(null);
   const height = useThree((s) => s.size.height);
@@ -77,11 +87,13 @@ export function WallTools({ scene }: { scene: Scene }) {
   const controls = useThree((s) => s.controls) as unknown as { enabled: boolean } | null;
   const tool = useEditor((s) => s.tool);
   const selectedId = useEditor((s) => s.selectedId);
-  const [hover, setHover] = useState<SnapResult | null>(null);
-  const [chain, setChain] = useState<V2[]>([]);
-  const [typed, setTyped] = useState('');
-  const [drag, setDrag] = useState<Drag | null>(null);
-  const [placement, setPlacement] = useState<{ wall: Wall; offset: number } | null>(null);
+  // Native event handlers read the refs, so a pointerup that arrives before React re-renders
+  // still sees the latest hover/placement (found by the browser tests).
+  const [hover, setHover, hoverRef] = useStateRef<SnapResult | null>(null);
+  const [chain, setChain, chainRef] = useStateRef<V2[]>([]);
+  const [typed, setTyped, typedRef] = useStateRef('');
+  const [drag, setDrag, dragRef] = useStateRef<Drag | null>(null);
+  const [placement, setPlacement, placementRef] = useStateRef<{ wall: Wall; offset: number } | null>(null);
   const keys = useRef({ alt: false, shift: false });
   const down = useRef<[number, number] | null>(null);
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
@@ -129,6 +141,7 @@ export function WallTools({ scene }: { scene: Scene }) {
 
   function place(point: V2) {
     const s = useEditor.getState();
+    const chain = chainRef.current;
     const anchor = chain.at(-1);
     if (!anchor) {
       setChain([point]);
@@ -147,6 +160,11 @@ export function WallTools({ scene }: { scene: Scene }) {
   useEffect(() => {
     const el = gl.domElement;
     const move = (e: PointerEvent) => {
+      const tool = useEditor.getState().tool;
+      const drag = dragRef.current,
+        hover = hoverRef.current,
+        placement = placementRef.current,
+        chain = chainRef.current;
       keys.current = { alt: e.altKey, shift: e.shiftKey };
       const hit = floor(e);
       if (!hit) return;
@@ -154,9 +172,24 @@ export function WallTools({ scene }: { scene: Scene }) {
         if (drag.kind === 'node') setHover(snap(hit.p, hit.tolerance, null, drag.exclude));
         else if (drag.kind === 'wall') setHover({ point: hit.p, kind: null, guides: [] });
         else {
-          const c = closestOnSegment(hit.p, drag.wall.start, drag.wall.end);
-          const offset = openingOffset(drag.wall, c.t, drag.opening.width, hit.tolerance, drag.opening.id);
-          setPlacement({ wall: drag.wall, offset });
+          // Slide along the host wall or onto a collinear wall that continues it past a junction.
+          const host = drag.wall;
+          const line = (w: Wall) => {
+            const cross = (q: V2) =>
+              (host.end[0] - host.start[0]) * (q[1] - host.start[1]) - (host.end[1] - host.start[1]) * (q[0] - host.start[0]);
+            const l = wallLength(host) || 1;
+            return Math.abs(cross(w.start)) / l < 1e-3 && Math.abs(cross(w.end)) / l < 1e-3;
+          };
+          const candidates = useEditor.getState().scene!.walls.filter((w) => w.id === host.id || line(w));
+          let best: { wall: Wall; t: number; d: number } | null = null;
+          for (const w of candidates) {
+            const c = closestOnSegment(hit.p, w.start, w.end);
+            const d = Math.hypot(c.point[0] - hit.p[0], c.point[1] - hit.p[1]);
+            if (wallLength(w) >= drag.opening.width && (!best || d < best.d - 1e-9)) best = { wall: w, t: c.t, d };
+          }
+          const target = best ?? { wall: host, t: closestOnSegment(hit.p, host.start, host.end).t };
+          const offset = openingOffset(target.wall, target.t, drag.opening.width, hit.tolerance, drag.opening.id);
+          setPlacement({ wall: target.wall, offset });
         }
         return;
       }
@@ -171,6 +204,12 @@ export function WallTools({ scene }: { scene: Scene }) {
     };
     const up = (e: PointerEvent) => {
       const s = useEditor.getState();
+      const tool = useEditor.getState().tool;
+      const drag = dragRef.current,
+        hover = hoverRef.current,
+        placement = placementRef.current,
+        chain = chainRef.current;
+
       if (drag) {
         const hit = floor(e);
         if (drag.kind === 'node' && hover) s.wallEdit((sc) => moveNode(sc, drag.from, hover.point));
@@ -181,8 +220,12 @@ export function WallTools({ scene }: { scene: Scene }) {
           if (s.snap && !e.altKey) offset = Math.round(offset / s.gridStep) * s.gridStep;
           if (Math.abs(offset) > 1e-6) s.wallEdit((sc) => moveWall(sc, drag.wall.id, offset));
         }
-        if (drag.kind === 'opening' && placement && Math.abs(placement.offset - drag.opening.offset) > 1e-6)
-          s.patch(drag.opening.id, { offset: Math.round(placement.offset * 1e4) / 1e4 });
+        if (drag.kind === 'opening' && placement) {
+          const offset = Math.round(placement.offset * 1e4) / 1e4;
+          if (placement.wall.id !== drag.opening.wallId)
+            s.patch(drag.opening.id, { wallId: placement.wall.id, offset });
+          else if (Math.abs(offset - drag.opening.offset) > 1e-6) s.patch(drag.opening.id, { offset });
+        }
         setDrag(null);
         setHover(null);
         setPlacement(null);
@@ -226,7 +269,7 @@ export function WallTools({ scene }: { scene: Scene }) {
       }
     };
     const leave = () => {
-      if (!drag) {
+      if (!dragRef.current) {
         setHover(null);
         setPlacement(null);
       }
@@ -248,6 +291,10 @@ export function WallTools({ scene }: { scene: Scene }) {
     const key = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
       keys.current = { alt: e.altKey, shift: e.shiftKey };
+      const tool = useEditor.getState().tool;
+      const chain = chainRef.current,
+        typed = typedRef.current,
+        hover = hoverRef.current;
       if (tool === 'select') return;
       if (e.key === 'Escape') {
         e.stopImmediatePropagation();

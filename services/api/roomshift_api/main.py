@@ -136,6 +136,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         storage.save_project(project)
         return project_envelope(project)
 
+    @app.get("/api/projects")
+    async def list_projects():
+        """Newest first. Additive to contract v0.1.0; the dev seed is included when enabled."""
+        projects = sorted(storage.all_projects(), key=lambda p: p["createdAt"], reverse=True)
+        return {"projects": [project_envelope(p) for p in projects]}
+
     @app.get("/api/projects/{project_id}")
     async def get_project(project_id: str):
         return project_envelope(need_project(project_id))
@@ -176,6 +182,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if job is None:
             raise ApiError(404, "JOB_NOT_FOUND", f"Job {job_id!r} does not exist.")
         return {"job": public_job(job)}
+
+    @app.post("/api/jobs/{job_id}/cancel", status_code=202)
+    async def cancel_job(job_id: str):
+        return {"job": public_job(runner.cancel(job_id))}
 
     @app.get("/api/projects/{project_id}/scene")
     async def get_scene(project_id: str):

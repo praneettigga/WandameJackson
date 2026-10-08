@@ -283,10 +283,19 @@ def _fill_outline_walls(ink: np.ndarray, mpp: float) -> np.ndarray:
     across_h = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((gap, 1), np.uint8))  # between horizontal strokes
     across_v = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((1, gap), np.uint8))  # between vertical strokes
     # Keep only fills that run along a wall: they must survive an opening along the wall direction.
-    long_k = max(3, int(round(0.5 / mpp)))
+    long_k = max(3, int(round(0.15 / mpp)))  # short piers between openings are ~0.2-0.3 m
     fill_h = cv2.morphologyEx(cv2.bitwise_and(across_h, cv2.bitwise_not(ink)), cv2.MORPH_OPEN, np.ones((1, long_k), np.uint8))
     fill_v = cv2.morphologyEx(cv2.bitwise_and(across_v, cv2.bitwise_not(ink)), cv2.MORPH_OPEN, np.ones((long_k, 1), np.uint8))
     return cv2.bitwise_or(ink, cv2.bitwise_or(fill_h, fill_v))
+
+
+NOISY_SIGMA = 8.0
+
+
+def noise_sigma(gray: np.ndarray) -> float:
+    """Robust pixel-noise estimate: MAD of the residual after a 3x3 median filter (0 for clean drawings)."""
+    resid = gray.astype(np.float32) - cv2.medianBlur(gray, 3).astype(np.float32)
+    return float(1.4826 * np.median(np.abs(resid - np.median(resid))))
 
 
 def skew_angle(gray: np.ndarray) -> float | None:
@@ -364,7 +373,7 @@ def _diagonal_segments(thick: np.ndarray, horiz: np.ndarray, vert: np.ndarray, l
                 break
         else:
             clusters.append({"theta": theta, "d": d, "n": n, "c": c, "pts": [(x0, y0), (x1, y1)]})
-    targets = [((ln.a0, ln.pos), (ln.a1, ln.pos)) if ln.orient == "h" else ((ln.pos, ln.a0), (ln.pos, ln.a1))
+    targets = [(((ln.a0, ln.pos), (ln.a1, ln.pos)) if ln.orient == "h" else ((ln.pos, ln.a0), (ln.pos, ln.a1)), ln)
                for ln in lines]
     out = []
     for cl in clusters:
@@ -378,8 +387,8 @@ def _diagonal_segments(thick: np.ndarray, horiz: np.ndarray, vert: np.ndarray, l
         joined = 0
         for which in (0, 1):
             t = t0 if which == 0 else t1
-            best = None
-            for (ax, ay), (bx, by) in targets:
+            best, best_ln = None, None
+            for ((ax, ay), (bx, by)), ln in targets:
                 ex, ey = bx - ax, by - ay
                 den = d[0] * ey - d[1] * ex
                 if abs(den) < 1e-9:
@@ -388,9 +397,17 @@ def _diagonal_segments(thick: np.ndarray, horiz: np.ndarray, vert: np.ndarray, l
                 u = ((ax - base[0]) * d[1] - (ay - base[1]) * d[0]) / den
                 L = math.hypot(ex, ey) or 1
                 if -T / L <= u <= 1 + T / L and abs(s_ - t) <= 3 * T and (best is None or abs(s_ - t) < abs(best - t)):
-                    best = s_
+                    best, best_ln = s_, ln
             if best is not None:
                 joined += 1
+                # If the meeting point is near the axis wall's own end, end that wall there too so the
+                # two walls share one corner (the H/V band stops short where the diagonal stroke begins).
+                px_, py_ = base[0] + d[0] * best, base[1] + d[1] * best
+                along = px_ if best_ln.orient == "h" else py_
+                for end in ("a0", "a1"):
+                    if abs(getattr(best_ln, end) - along) <= 3 * T:
+                        setattr(best_ln, end, along)
+                        break
                 if which == 0:
                     t0 = best
                 else:
@@ -401,6 +418,72 @@ def _diagonal_segments(thick: np.ndarray, horiz: np.ndarray, vert: np.ndarray, l
                       min(thick.shape[1] - 1, max(0, int(p0[0] + f * (p1[0] - p0[0]))))] > 0
                 for f in np.linspace(0, 1, 50)]
         out.append({"p0": p0, "p1": p1, "coverage": float(np.mean(hits)), "joined": joined})
+    return out
+
+
+def door_swing(ln: WallLine, g0: float, g1: float, ink: np.ndarray, thick_mask: np.ndarray, T: float) -> str | None:
+    """Read the swing symbol beside a door gap: which side of the wall the arc is on, and which jamb
+    the leaf line hangs from. Returns a note in the frontend's 'Swing:' format, or None.
+
+    Side naming follows the wall direction start→end: 'left' is the normal (−dz, dx)."""
+    thin = (ink > 0) & ~(thick_mask > 0)
+    t = thin if ln.orient == "h" else thin.T
+    a, b = int(g0), int(math.ceil(g1))
+    reach = max(2, b - a)
+    near, far = int(math.ceil(ln.pos + T / 2)), int(math.floor(ln.pos - T / 2))
+    sides = {"near": t[near:near + reach, a:b], "far": t[max(0, far - reach):max(0, far), a:b]}
+    density = {k: float(v.mean()) if v.size else 0.0 for k, v in sides.items()}
+    side = max(density, key=density.get)
+    if density[side] < 0.01:
+        return None
+    region = sides[side]
+    k = max(2, int(0.2 * (b - a)))
+    cols = region.sum(axis=0)
+    first, last = float(cols[:k].max(initial=0)), float(cols[-k:].max(initial=0))
+    if max(first, last) < 0.3 * reach:
+        return None
+    hinge = "near edge (wall start side)" if first >= last else "far edge (wall end side)"
+    # Horizontal walls run +x, so +rows (near) is the left normal; vertical walls run +y, so +columns
+    # (near) is the right side.
+    left = (side == "near") == (ln.orient == "h")
+    return f"Swing: hinge at the {hinge}, opens to the {'left' if left else 'right'} side of the wall."
+
+
+def completeness_warnings(walls: list[dict], openings: list[dict], rooms: list[dict]) -> list[str]:
+    """Structural checks on the result (metres): wall ends that meet nothing and rooms with no door."""
+    def seg_dist(p, a, b):
+        ax, ay, bx, by = *a, *b
+        dx, dy = bx - ax, by - ay
+        L2 = dx * dx + dy * dy or 1e-12
+        t = max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy) / L2))
+        return math.hypot(p[0] - ax - t * dx, p[1] - ay - t * dy)
+
+    out = []
+    dangling = 0
+    for w in walls:
+        for p in (w["start"], w["end"]):
+            if not any(o is not w and seg_dist(p, o["start"], o["end"]) <= max(w["thickness"], o["thickness"])
+                       for o in walls):
+                dangling += 1
+    if dangling:
+        out.append(f"Completeness: {dangling} wall end(s) do not meet another wall; a wall may be missing or broken by an unclassified gap.")
+    by_id = {w["id"]: w for w in walls}
+    centres = []
+    for o in openings:
+        w = by_id.get(o["wallId"])
+        if o["type"] != "door" or not w:
+            continue
+        L = math.dist(w["start"], w["end"]) or 1
+        f = (o["offset"] + o["width"] / 2) / L
+        centres.append(([w["start"][0] + (w["end"][0] - w["start"][0]) * f, w["start"][1] + (w["end"][1] - w["start"][1]) * f], w["thickness"]))
+    doorless = []
+    for r in rooms:
+        poly = r["polygon"]
+        edges = list(zip(poly, poly[1:] + poly[:1]))
+        if not any(seg_dist(c, a, b) <= t for c, t in centres for a, b in edges):
+            doorless.append(r["id"])
+    if doorless:
+        out.append(f"Completeness: {', '.join(doorless)} {'has' if len(doorless) == 1 else 'have'} no detected door; check for a missed door or an open passage.")
     return out
 
 
@@ -539,7 +622,9 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     _, ink = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     # Faint thin lines (glazing, after resampling) fall below Otsu; use a softer mask to read gap contents only.
     otsu = float(cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0])
-    soft_ink = ((blur < min(235.0, otsu + 0.6 * (255.0 - otsu))) * 255).astype(np.uint8) if opts.soft_gap_ink else ink
+    # Only on clean images: in a noisy scan the speckle passes the soft threshold and every gap looks filled.
+    soft_ok = opts.soft_gap_ink and noise_sigma(gray) < NOISY_SIGMA
+    soft_ink = ((blur < min(235.0, otsu + 0.6 * (255.0 - otsu))) * 255).astype(np.uint8) if soft_ok else ink
     frac = float((ink > 0).mean())
     if frac < 0.0005:
         raise ParseError("No drawing was found in the image (it is almost blank).")
@@ -643,6 +728,9 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
             if kind == "door":
                 o_h, o_b = min(DOOR_HEIGHT, height), 0.0
                 notes = ["Empty door-sized gap in a wall line interpreted as a door; height assumed."]
+                swing = door_swing(ln, g0, g1, soft_ink, thick, T)
+                if swing:
+                    notes.append(swing)
                 fo = {"height": "inferred", "bottom": "inferred"}
             else:
                 o_b = min(WINDOW_BOTTOM, height / 3)
@@ -690,6 +778,7 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
         })
     if not rooms:
         warnings.append("No enclosed rooms were detected; walls were reconstructed without floors.")
+    warnings.extend(completeness_warnings(walls, openings, rooms))
     if not openings:
         warnings.append("No doors or windows were detected.")
     progress(0.9)

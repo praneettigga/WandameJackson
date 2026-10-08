@@ -6,6 +6,29 @@ export type ProjectEnvelope = {
   project: { id: string; name: string; createdAt: string; hasScene: boolean };
   image: { url: string; width: number; height: number; mimeType: 'image/png' | 'image/jpeg' };
 };
+export type CaptureKind = 'video' | 'photo-set';
+export type CaptureEnvelope = {
+  project: ProjectEnvelope['project'];
+  image: null;
+  source: { kind: CaptureKind };
+  captureJobId: string | null;
+  inputManifestUrl: string | null;
+};
+export type CaptureInput = {
+  schemaVersion: '1.0.0';
+  projectId: string;
+  frames: {
+    id: string;
+    url: string;
+    sourceId: string;
+    timestampSeconds: number | null;
+    width: number;
+    height: number;
+  }[];
+  originals: { id: string; filename: string }[];
+  rejected: { sourceId: string; timestampSeconds: number | null; reason: string }[];
+  warnings: string[];
+};
 export type ScaleCalibration = Scene['source']['calibration'];
 export type ReconstructionRequest = {
   calibration?: { pointA: V2; pointB: V2; distanceMeters: number };
@@ -24,6 +47,9 @@ export type Job = {
   updatedAt: string;
   /** Set once a cancel was requested for a running job; it ends as failed/JOB_CANCELLED. */
   cancelRequested?: boolean;
+  kind?: 'capture-preparation';
+  stage?: string;
+  inputManifestUrl?: string | null;
 };
 export class ApiError extends Error {
   constructor(
@@ -40,6 +66,11 @@ export interface RoomshiftApi {
   readonly mock: boolean;
   health(): Promise<{ status: 'ok'; schemaVersion: '0.1.0' }>;
   createProject(file: File, name?: string): Promise<ProjectEnvelope>;
+  createCapture(kind: CaptureKind, files: File[]): Promise<CaptureEnvelope & { job: Job }>;
+  listCaptures(): Promise<CaptureEnvelope[]>;
+  getCapture(id: string): Promise<CaptureEnvelope>;
+  getCaptureInput(id: string): Promise<CaptureInput>;
+  prepareCapture(id: string): Promise<{ job: Job }>;
   getProject(id: string): Promise<ProjectEnvelope>;
   listProjects(): Promise<{ projects: ProjectEnvelope[] }>;
   cancelJob(id: string): Promise<{ job: Job }>;
@@ -99,14 +130,50 @@ export class HttpApi implements RoomshiftApi {
     if (name) body.append('name', name);
     return this.request<ProjectEnvelope>('/api/projects', { method: 'POST', body });
   }
-  getProject(id: string) {
-    return this.request<ProjectEnvelope>(`/api/projects/${encodeURIComponent(id)}`);
+  async getProject(id: string) {
+    const value = await this.request<ProjectEnvelope | CaptureEnvelope>(
+      `/api/projects/${encodeURIComponent(id)}`,
+    );
+    if (value.image === null) throw new Error('Open this capture in Mode 2: Photos & video.');
+    return value as ProjectEnvelope;
   }
-  listProjects() {
-    return this.request<{ projects: ProjectEnvelope[] }>('/api/projects');
+  async listProjects() {
+    const result = await this.request<{ projects: (ProjectEnvelope | CaptureEnvelope)[] }>(
+      '/api/projects',
+    );
+    return { projects: result.projects.filter((p): p is ProjectEnvelope => p.image !== null) };
+  }
+  createCapture(kind: CaptureKind, files: File[]) {
+    const body = new FormData();
+    body.append('kind', kind);
+    files.forEach((file) => body.append('files', file));
+    return this.request<CaptureEnvelope & { job: Job }>(
+      '/api/captures',
+      { method: 'POST', body },
+      300_000,
+    );
+  }
+  async listCaptures() {
+    const result = await this.request<{ projects: (ProjectEnvelope | CaptureEnvelope)[] }>(
+      '/api/projects',
+    );
+    return result.projects.filter((p): p is CaptureEnvelope => p.image === null);
+  }
+  getCapture(id: string) {
+    return this.request<CaptureEnvelope>(`/api/projects/${encodeURIComponent(id)}`);
+  }
+  getCaptureInput(id: string) {
+    return this.request<CaptureInput>(`/api/projects/${encodeURIComponent(id)}/capture-input`);
+  }
+  prepareCapture(id: string) {
+    return this.request<{ job: Job }>(`/api/projects/${encodeURIComponent(id)}/prepare`, {
+      method: 'POST',
+    });
   }
   cancelJob(id: string) {
-    return this.request<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+    return this.request<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+    });
   }
   async getScale(id: string) {
     try {
@@ -180,6 +247,21 @@ export class MockApi implements RoomshiftApi {
   }
   async health() {
     return { status: 'ok', schemaVersion: '0.1.0' } as const;
+  }
+  async createCapture(_kind: CaptureKind, _files: File[]): Promise<CaptureEnvelope & { job: Job }> {
+    throw new Error('Photo/video preparation requires the local API. Disable mock mode.');
+  }
+  async listCaptures(): Promise<CaptureEnvelope[]> {
+    return [];
+  }
+  async getCapture(_id: string): Promise<CaptureEnvelope> {
+    throw new Error('No captures in mock mode.');
+  }
+  async getCaptureInput(_id: string): Promise<CaptureInput> {
+    throw new Error('No captures in mock mode.');
+  }
+  async prepareCapture(_id: string): Promise<{ job: Job }> {
+    throw new Error('No captures in mock mode.');
   }
   async createProject(_file: File, _name?: string) {
     return this.getProject(fixture.id);
@@ -315,7 +397,8 @@ export async function pollJob(
         job.error?.details,
       );
     if (job.status === 'succeeded') {
-      if (!job.sceneUrl) throw new Error('The completed job has no persisted scene URL.');
+      if (job.kind === 'capture-preparation' ? !job.inputManifestUrl : !job.sceneUrl)
+        throw new Error('The completed job has no persisted result URL.');
       return job;
     }
     if (Date.now() >= deadline)

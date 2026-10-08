@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+import hashlib
+import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -46,7 +48,10 @@ class ReconstructIn(BaseModel):
 def project_envelope(p: dict) -> dict:
     return {
         "project": {"id": p["id"], "name": p["name"], "createdAt": p["createdAt"], "hasScene": p.get("hasScene", False)},
-        "image": p["image"],
+        "image": p.get("image"),
+        "source": p.get("source", {"kind": "blueprint"}),
+        "captureJobId": p.get("captureJobId"),
+        "inputManifestUrl": p.get("inputManifestUrl"),
     }
 
 
@@ -113,6 +118,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise ApiError(404, "PROJECT_NOT_FOUND", f"Project {project_id!r} does not exist.")
         return p
 
+    def need_blueprint(p: dict):
+        if p.get("source", {}).get("kind", "blueprint") != "blueprint":
+            raise ApiError(400, "INVALID_SOURCE", "This endpoint requires a blueprint. Photo/video mesh reconstruction is not available yet.")
+
     # --- routes ---------------------------------------------------------
     @app.get("/api/health")
     async def health():
@@ -136,6 +145,82 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         storage.save_project(project)
         return project_envelope(project)
 
+    @app.post("/api/captures", status_code=201)
+    async def create_capture(kind: str = Form(...), files: list[UploadFile] = File(...), name: str = Form(default="")):
+        if kind not in {"video", "photo-set"}:
+            raise ApiError(400, "VALIDATION_ERROR", "Choose video or photo-set.")
+        if (kind == "video" and len(files) != 1) or (kind == "photo-set" and not 20 <= len(files) <= 40):
+            raise ApiError(400, "VALIDATION_ERROR", "Upload one 30–60 second video or 20–40 photos in capture order.")
+        pid = "p_" + uuid.uuid4().hex[:12]
+        root = storage.project_dir(pid)
+        originals = []
+        total = 0
+        try:
+            (root / "originals").mkdir(parents=True)
+            for i, upload in enumerate(files):
+                target = root / "originals" / f"source_{i:04d}"
+                size = 0
+                digest = hashlib.sha256()
+                with target.open("wb") as out:
+                    while chunk := await upload.read(1024 * 1024):
+                        size += len(chunk)
+                        total += len(chunk)
+                        limit = 512 * 1024 * 1024 if kind == "video" else settings.max_upload_bytes
+                        if size > limit or total > 512 * 1024 * 1024:
+                            raise ApiError(413, "UPLOAD_TOO_LARGE", "Capture limit is 512 MB total; each photo must fit the blueprint upload limit (20 MB by default).")
+                        digest.update(chunk)
+                        out.write(chunk)
+                if not size:
+                    raise ApiError(400, "VALIDATION_ERROR", "Capture files cannot be empty.")
+                if kind == "video":
+                    with target.open("rb") as header:
+                        if header.read(12)[4:8] != b"ftyp":
+                            raise ApiError(415, "UNSUPPORTED_MEDIA_TYPE", "Use an MP4 or MOV video with an ftyp container header.")
+                if kind == "photo-set":
+                    await run_in_threadpool(inspect_image, target.read_bytes(), settings.max_image_side)
+                originals.append({"id": f"source_{i:04d}", "filename": (upload.filename or "capture")[:200],
+                                  "path": target.relative_to(root).as_posix(), "bytes": size, "sha256": digest.hexdigest()})
+            project = {"id": pid, "name": (name.strip() or "Room capture")[:200], "createdAt": now_iso(),
+                       "hasScene": False, "source": {"kind": kind, "originals": originals}}
+            storage.save_project(project)
+            job = runner.submit_capture(project)
+            return {**project_envelope(storage.get_project(pid)), "job": public_job(job)}
+        except BaseException:
+            shutil.rmtree(root, ignore_errors=True)
+            raise
+        finally:
+            for upload in files:
+                await upload.close()
+
+    @app.post("/api/projects/{project_id}/prepare", status_code=202)
+    async def prepare(project_id: str):
+        p = need_project(project_id)
+        if p.get("source", {}).get("kind", "blueprint") == "blueprint":
+            raise ApiError(400, "INVALID_SOURCE", "Preparation requires photos or a video.")
+        return {"job": public_job(runner.submit_capture(p))}
+
+    @app.get("/api/projects/{project_id}/capture-input")
+    async def capture_input(project_id: str):
+        p = need_project(project_id)
+        if not p.get("inputManifestPath"):
+            raise ApiError(404, "INPUT_NOT_READY", "No accepted reconstruction input exists yet.")
+        manifest = json.loads((storage.project_dir(project_id) / p["inputManifestPath"]).read_text())
+        for frame in manifest["frames"]:
+            frame["url"] = f"/api/projects/{project_id}/capture-artifacts/{frame['path']}"
+        return manifest
+
+    @app.get("/api/projects/{project_id}/capture-artifacts/{artifact_path:path}")
+    async def capture_artifact(project_id: str, artifact_path: str):
+        p = need_project(project_id)
+        root = storage.project_dir(project_id)
+        allowed = {o["path"] for o in p.get("source", {}).get("originals", [])}
+        if p.get("inputManifestPath"):
+            manifest = json.loads((root / p["inputManifestPath"]).read_text())
+            allowed.update(f["path"] for f in manifest["frames"])
+        if artifact_path not in allowed:
+            raise ApiError(404, "NOT_FOUND", "Capture artifact does not exist.")
+        return FileResponse(root / artifact_path)
+
     @app.get("/api/projects")
     async def list_projects():
         """Newest first. Additive to contract v0.1.0; the dev seed is included when enabled."""
@@ -149,11 +234,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/projects/{project_id}/blueprint")
     async def get_blueprint(project_id: str):
         p = need_project(project_id)
+        need_blueprint(p)
         return FileResponse(storage.blueprint_path(p), media_type=p["image"]["mimeType"])
 
     @app.get("/api/projects/{project_id}/scale")
     async def automatic_scale(project_id: str):
         p = need_project(project_id)
+        need_blueprint(p)
         if not p.get("automaticCalibration"):
             cal = await run_in_threadpool(estimate_scale, await run_in_threadpool(load_gray, storage.blueprint_path(p)))
             with storage.project_lock(project_id):
@@ -165,6 +252,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/projects/{project_id}/reconstruct", status_code=202)
     async def reconstruct(project_id: str, body: ReconstructIn):
         p = need_project(project_id)
+        need_blueprint(p)
         if p.get("synthetic"):
             raise ApiError(400, "VALIDATION_ERROR", "The synthetic demo project cannot be reconstructed; upload a real blueprint.")
         c = body.calibration

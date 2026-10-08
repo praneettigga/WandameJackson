@@ -26,6 +26,7 @@ import { useEditor } from './store';
 import { confidenceColors, download, exportGlb, originColors, originLabels } from './geometry';
 import { ConfidenceChip, Inspector } from './Inspector';
 import { Viewport } from './Viewport';
+import { CaptureWorkspace } from './CaptureWorkspace';
 
 class ViewportBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -231,6 +232,7 @@ function Calibration({
 
 export default function App() {
   const state = useEditor();
+  const [inputMode, setInputMode] = useState<'blueprint' | 'capture'>('blueprint');
   const [project, setProject] = useState<ProjectEnvelope | null>(null);
   const [points, setPoints] = useState<V2[]>([]),
     [distance, setDistance] = useState('2');
@@ -489,7 +491,7 @@ export default function App() {
           <span className="brand-mark">▱</span>ROOMSHIFT<span className="version">/ 0.1</span>
         </a>
         <div className="project-title">
-          {state.scene?.name ?? project?.project.name ?? 'Untitled space'}
+          {inputMode === 'capture' ? 'Room capture' : state.scene?.name ?? project?.project.name ?? 'Untitled space'}
           {state.dirty && <span title="Unsaved changes" className="dirty-dot" />}
         </div>
         <div className="header-actions">
@@ -573,7 +575,16 @@ export default function App() {
           </button>
         </div>
       )}
-      <main className="editor-layout">
+      <div className="input-mode" role="group" aria-label="Input mode">
+        {(['blueprint', 'capture'] as const).map((mode) => (
+          <button key={mode} aria-pressed={inputMode === mode} disabled={disabled}
+            onClick={() => { if (mode !== inputMode && discard()) { setInputMode(mode); state.load(null); } }}>
+            {mode === 'blueprint' ? 'Mode 1 · Blueprint' : 'Mode 2 · Photos & video'}
+          </button>
+        ))}
+      </div>
+      {inputMode === 'capture' && <CaptureWorkspace />}
+      <main className="editor-layout" style={inputMode === 'capture' ? { display: 'none' } : undefined}>
         <aside className="left-panel panel">
           {state.workspace === 'Reconstruct' ? (
             <>
@@ -1290,7 +1301,7 @@ export default function App() {
         <span>
           {state.scene
             ? `${state.scene.rooms.length} rooms / ${state.scene.walls.length} walls / ${state.scene.objects.length} objects`
-            : 'Single floor / Metric / Y up'}
+            : inputMode === 'capture' ? 'Capture preparation / No metric scale' : 'Single floor / Metric / Y up'}
           <b>·</b>ROOMSHIFT PROTOTYPE
         </span>
       </footer>

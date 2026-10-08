@@ -8,17 +8,19 @@ from __future__ import annotations
 
 import logging
 import queue
+import shutil
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .captures import prepare_capture
 from .auto_scale import estimate_scale
 from .config import SCHEMA_VERSION
 from .errors import ApiError
 from .images import load_gray
 from .parser import PARSER_NAME, PARSER_VERSION, ParseError, parse_blueprint
-from .storage import Storage
+from .storage import Storage, read_json
 from .validation import validate_scene
 
 log = logging.getLogger("roomshift.jobs")
@@ -48,6 +50,17 @@ class JobRunner:
     def start(self) -> None:
         for job in self.storage.all_jobs():
             if job["status"] in ACTIVE:
+                if job.get("kind") == "capture-preparation":
+                    project = self.storage.get_project(job["projectId"])
+                    relative = f"captures/{job['id']}/manifest.json"
+                    if project and project.get("inputManifestPath") == relative:
+                        manifest = read_json(self.storage.project_dir(project["id"]) / relative)
+                        if manifest and manifest.get("jobId") == job["id"]:
+                            self._update(job, status="succeeded", stage="ready", progress=1.0, error=None,
+                                         inputManifestUrl=project["inputManifestUrl"], selectedViews=len(manifest["frames"]))
+                            continue  # Publication completed just before the process stopped.
+                    if project and project.get("inputManifestPath") != relative:
+                        shutil.rmtree(self.storage.project_dir(project["id"]) / "captures" / job["id"], ignore_errors=True)
                 self._update(job, status="failed", error={
                     "code": "RECONSTRUCTION_FAILED",
                     "message": "The server restarted before this job finished. Submit the reconstruction again.",
@@ -83,6 +96,44 @@ class JobRunner:
             self._active[project["id"]] = job["id"]
         self._queue.put(job["id"])
         return job
+
+    def submit_capture(self, project: dict) -> dict:
+        # Queue metadata and project pointer before exposing the job to the worker.
+        with self._guard:
+            if project["id"] in self._active:
+                raise ApiError(409, "JOB_IN_PROGRESS", "Capture preparation is already active.")
+            job = {"id": "j_" + uuid.uuid4().hex[:16], "projectId": project["id"],
+                   "kind": "capture-preparation", "stage": "queued", "status": "queued",
+                   "progress": 0.0, "sceneUrl": None, "inputManifestUrl": None, "error": None,
+                   "createdAt": now_iso(), "updatedAt": now_iso()}
+            self.storage.save_job(job)
+            with self.storage.project_lock(project["id"]):
+                current = self.storage.get_project(project["id"])
+                current["captureJobId"] = job["id"]
+                self.storage.save_project(current)
+            self._active[project["id"]] = job["id"]
+        self._queue.put(job["id"])
+        return job
+
+    def _prepare(self, job: dict) -> None:
+        project = self.storage.get_project(job["projectId"])
+        def progress(value, stage):
+            if job["id"] in self._cancel:
+                raise Cancelled()
+            self._update(job, progress=value, stage=stage)
+        manifest = prepare_capture(self.storage.project_dir(project["id"]), project, job["id"], progress)
+        with self._guard:
+            if job["id"] in self._cancel:
+                shutil.rmtree(self.storage.project_dir(project["id"]) / "captures" / job["id"], ignore_errors=True)
+                raise Cancelled()
+            with self.storage.project_lock(project["id"]):
+                current = self.storage.get_project(project["id"])
+                current["inputManifestPath"] = f"captures/{job['id']}/manifest.json"
+                url = f"/api/projects/{project['id']}/capture-input"
+                current["inputManifestUrl"] = url
+                self.storage.save_project(current)
+            self._update(job, status="succeeded", stage="ready", progress=1.0,
+                         inputManifestUrl=url, selectedViews=len(manifest["frames"]))
 
     def cancel(self, job_id: str) -> dict:
         """Cancel a queued job immediately; ask a running job to stop at its next progress step.
@@ -120,6 +171,8 @@ class JobRunner:
                 self._run(job)
             except Cancelled:
                 self._update(job, status="failed", error={"code": "JOB_CANCELLED", "message": CANCELLED_MESSAGE, "details": None})
+            except ApiError as e:
+                self._update(job, status="failed", error=e.body()["error"])
             except ParseError as e:
                 self._update(job, status="failed", error={"code": "RECONSTRUCTION_FAILED", "message": str(e), "details": None})
             except Exception as e:  # never let one job kill the worker
@@ -127,11 +180,18 @@ class JobRunner:
                 self._update(job, status="failed", error={"code": "INTERNAL_ERROR", "message": f"Reconstruction crashed: {e}", "details": None})
             finally:
                 with self._guard:
-                    self._active.pop(job["projectId"], None)
+                    if self._active.get(job["projectId"]) == job_id:
+                        self._active.pop(job["projectId"], None)
                     self._cancel.discard(job_id)
 
     def _run(self, job: dict) -> None:
-        self._update(job, status="running", progress=0.05)
+        with self._guard:
+            latest = self.storage.get_job(job["id"])
+            if latest["status"] != "queued":
+                return
+            self._update(job, status="running", progress=0.05)
+        if job.get("kind") == "capture-preparation":
+            return self._prepare(job)
         project = self.storage.get_project(job["projectId"])
         req = job["_request"]
         cal = req["calibration"]

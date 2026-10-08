@@ -1264,3 +1264,21 @@ body:has(.explore-overlay) canvas {
 .snap-menu-panel small {
   color: #819095;
 }
+
+.input-mode { display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); }
+.input-mode button[aria-pressed="true"] { color: #f3bd63; border-color: #b48849; }
+.capture-workspace { display: grid; grid-template-columns: 320px minmax(0, 1fr); min-height: 0; flex: 1; overflow: hidden; }
+.capture-controls, .capture-results { overflow: auto; padding: 20px; }
+.capture-controls input, .capture-controls select { max-width: 100%; }
+.capture-guidance { padding-left: 20px; line-height: 1.6; }
+.capture-frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; margin: 20px 0; }
+.capture-frames figure { margin: 0; min-width: 0; }
+.capture-frames img { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: #151719; }
+.capture-frames figcaption { overflow-wrap: anywhere; font-size: 12px; }
+@media (max-width: 700px) { .capture-workspace { grid-template-columns: 1fr; overflow: auto; } .capture-controls, .capture-results { overflow: visible; } }
+.capture-workspace h2 { font-size: 20px; font-weight: 600; margin: 0 0 10px; }
+.capture-results > p { margin: 0 0 16px; color: #a8b2b5; }
+.capture-guidance { list-style: disc; margin: 12px 0 20px; }
+.capture-controls details { margin: 12px 0; }
+.capture-controls details li { overflow-wrap: anywhere; margin: 8px 0; }
+.capture-controls details button { padding: 2px 8px; margin-left: 4px; }

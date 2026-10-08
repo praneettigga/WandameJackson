@@ -152,3 +152,43 @@ JPEG pixel coordinates and reported dimensions use the image's EXIF display orie
 ## Fixture / dev seed
 
 `fixtures/room.scene.json` is synthetic (`source.synthetic: true`, parser `fixture`). The backend serves it only when an explicit, documented dev seed option is enabled, as project `demo-room`. It is never used as a fallback for a failed parse. Frontend mock mode uses it with a `MOCK DATA` badge.
+
+## Mode 2 additive ingestion contract (Milestone 1)
+
+The frozen Mode 1 Scene remains unchanged. Project envelopes now include `source`
+with `kind: "blueprint" | "video" | "photo-set"`. Legacy projects default to
+`blueprint`. Blueprint `image` remains unchanged; capture projects have `image:
+null`, `captureJobId` and `inputManifestUrl` (null until prepared). Capture source
+metadata contains ordered `originals` with `id`, `filename`, project-relative
+`path`, `bytes`, and `sha256`. `/api/projects` returns both kinds; clients must
+branch on source kind before using blueprint endpoints.
+
+- `POST /api/captures`: multipart `kind`, repeated `files`, optional `name`.
+  Returns 201 with capture ProjectEnvelope plus `job`. Requires one MP4/MOV or
+  20–40 PNG/JPEGs. Upload validation failures create no project. Deeper media and
+  quality checks run asynchronously and report failures on the job.
+- `POST /api/projects/{id}/prepare`: retry capture preparation; returns 202
+  `{job}` or 409 `JOB_IN_PROGRESS`. Originals remain unchanged.
+- `GET /api/projects/{id}/capture-input`: latest accepted manifest or 404
+  `INPUT_NOT_READY`. Schema v1.0.0, `kind: reconstruction-input`, `projectId`,
+  `jobId`, `sourceKind`, `originals`, `frames`, `rejected`, `overlapEdges`,
+  `processing`, `warnings`. Frame records include stable `id`, project-relative
+  `path`, HTTP `url`, `sourceId`, `timestampSeconds`, `sourceTimestampSeconds`,
+  normalized `width`/`height`, `sharpness`, `sha256`. Rejected records identify
+  original source/time and `reason`. Overlap edges use zero-based frame indexes
+  and measured `inliers`. Processing records pin algorithm version and thresholds.
+- `GET /api/projects/{id}/capture-artifacts/{path}`: allowlisted original files
+  and latest accepted frames only. Arbitrary project files are never served.
+
+Preparation reuses job polling/cancellation. Jobs add `kind: capture-preparation`,
+`stage`, `inputManifestUrl`, and (on success) `selectedViews`. Stages: `queued`,
+`decoding`, `quality_checks`, `overlap_checks`, `saving_input`, `ready`.
+Successful preparation has `sceneUrl: null`, and the project still has
+`hasScene: false`. Consumers must use the result URL appropriate to the job kind.
+Errors include `INSUFFICIENT_VIEWS`, `LOW_OVERLAP`, `INVALID_DURATION`,
+`INVALID_VIDEO`, `INVALID_PHOTO`, `SOURCE_CHANGED`, `MEDIA_TOOLS_MISSING`,
+`MEDIA_TIMEOUT`, and `JOB_CANCELLED`, with actionable messages. Blueprint,
+scale and blueprint-reconstruct endpoints reject capture sources with 400
+`INVALID_SOURCE`. No GPU reconstruction endpoint is implemented by this milestone.
+
+See [ingestion behavior and limits](../docs/mode2-ingestion.md).

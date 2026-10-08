@@ -23,6 +23,11 @@ from .validation import validate_scene
 
 log = logging.getLogger("roomshift.jobs")
 ACTIVE = {"queued", "running"}
+CANCELLED_MESSAGE = "The reconstruction was cancelled. The previous scene (if any) is unchanged."
+
+
+class Cancelled(Exception):
+    """Raised inside a running job when the user asked to cancel it."""
 
 
 def now_iso() -> str:
@@ -37,6 +42,7 @@ class JobRunner:
         self._active: dict[str, str] = {}  # projectId -> jobId
         self._guard = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._cancel: set[str] = set()
 
     # --- lifecycle --------------------------------------------------------
     def start(self) -> None:
@@ -78,6 +84,24 @@ class JobRunner:
         self._queue.put(job["id"])
         return job
 
+    def cancel(self, job_id: str) -> dict:
+        """Cancel a queued job immediately; ask a running job to stop at its next progress step.
+        A cancelled job ends as `failed` with error code JOB_CANCELLED and never touches the scene."""
+        with self._guard:
+            job = self.storage.get_job(job_id)
+            if job is None:
+                raise ApiError(404, "JOB_NOT_FOUND", f"Job {job_id!r} does not exist.")
+            if job["status"] not in ACTIVE:
+                raise ApiError(409, "JOB_NOT_ACTIVE", f"Job {job_id!r} already {job['status']}.")
+            if job["status"] == "queued":
+                self._update(job, status="failed", error={"code": "JOB_CANCELLED", "message": CANCELLED_MESSAGE, "details": None})
+                self._active.pop(job["projectId"], None)
+            else:
+                self._cancel.add(job_id)
+                job["cancelRequested"] = True
+                self.storage.save_job(job)
+            return job
+
     # --- worker -----------------------------------------------------------
     def _update(self, job: dict, **fields) -> None:
         job.update(fields)
@@ -90,10 +114,12 @@ class JobRunner:
             if job_id is None:
                 return
             job = self.storage.get_job(job_id)
-            if job is None:
-                continue
+            if job is None or job["status"] != "queued":
+                continue  # cancelled while queued
             try:
                 self._run(job)
+            except Cancelled:
+                self._update(job, status="failed", error={"code": "JOB_CANCELLED", "message": CANCELLED_MESSAGE, "details": None})
             except ParseError as e:
                 self._update(job, status="failed", error={"code": "RECONSTRUCTION_FAILED", "message": str(e), "details": None})
             except Exception as e:  # never let one job kill the worker
@@ -102,6 +128,7 @@ class JobRunner:
             finally:
                 with self._guard:
                     self._active.pop(job["projectId"], None)
+                    self._cancel.discard(job_id)
 
     def _run(self, job: dict) -> None:
         self._update(job, status="running", progress=0.05)
@@ -115,6 +142,8 @@ class JobRunner:
         if cal is None:
             cal = estimate_scale(gray)
         def progress(p: float) -> None:
+            if job["id"] in self._cancel:
+                raise Cancelled()
             self._update(job, progress=round(0.05 + 0.85 * p, 3))
 
         result = parse_blueprint(gray, cal["metersPerPixel"], req["wallHeight"], req["wallThickness"], progress)
@@ -153,6 +182,8 @@ class JobRunner:
             "openings": result["openings"],
             "objects": result["objects"],
         }
+        if job["id"] in self._cancel:
+            raise Cancelled()
         problems = validate_scene(scene, self.schema_path)
         if problems:
             raise ParseError(f"Reconstruction produced an invalid scene ({problems[0]['path']}: {problems[0]['message']}); nothing was saved.")

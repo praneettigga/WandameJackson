@@ -37,6 +37,11 @@ function httpFixtureService() {
           201,
         );
       }
+      if (path === '/api/projects') return json(await backend.listProjects());
+      if (path.startsWith('/api/jobs/') && path.endsWith('/cancel')) {
+        expect(init?.method).toBe('POST');
+        return json(await backend.cancelJob(path.split('/').at(-2)!), 202);
+      }
       if (path.startsWith('/api/jobs/')) return json(await backend.getJob(path.split('/').at(-1)!));
       const [, , , id, route] = path.split('/');
       if (route === 'reconstruct') {
@@ -99,6 +104,19 @@ for (const mode of ['mock', 'http'] as const)
       await expect(api.saveScene('demo-room', saved)).rejects.toMatchObject({
         code: 'IMMUTABLE_FIELD',
       });
+    });
+    it('lists projects and cancels an active job without replacing the scene', async () => {
+      const api = make();
+      expect((await api.listProjects()).projects.map((p) => p.project.id)).toEqual(['demo-room']);
+      const before = await api.getScene('demo-room');
+      const { job } = await api.reconstruct('demo-room', input);
+      const cancelled = (await api.cancelJob(job.id)).job;
+      expect(cancelled).toMatchObject({ status: 'failed', error: { code: 'JOB_CANCELLED' } });
+      await expect(pollJob(api, cancelled, () => {}, { intervalMs: 0 })).rejects.toMatchObject({
+        code: 'JOB_CANCELLED',
+      });
+      await expect(api.cancelJob(job.id)).rejects.toMatchObject({ status: 409, code: 'JOB_NOT_ACTIVE' });
+      expect(await api.getScene('demo-room')).toEqual(before);
     });
     it('returns structured unknown-project errors', async () => {
       await expect(make().getScene('unknown')).rejects.toMatchObject({

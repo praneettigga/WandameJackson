@@ -58,6 +58,8 @@ describe('application integration without WebGL', () => {
     fireEvent.change(screen.getByLabelText('Width'), { target: { value: '1.6' } });
     fireEvent.blur(screen.getByLabelText('Width'));
     expect(useEditor.getState().scene!.objects[0].dimensions[0]).toBe(1.6);
+    expect(screen.queryByRole('button', { name: 'Add Chair' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Seating/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Add Chair' }));
     expect(useEditor.getState().scene!.objects).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));

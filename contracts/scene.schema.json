@@ -52,7 +52,21 @@
       "required": ["origin", "confidence", "source", "userEdited", "fieldOrigins", "notes"],
       "properties": {
         "origin": { "$ref": "#/$defs/Origin" },
-        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "null when no real score exists." },
+        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "Heuristic evidence strength of the detected geometry (not a calibrated probability). Parser scores are the geometric mean of confidenceFactors. Assumed fields (see fieldOrigins) are not scored. null when no score exists (fixture, user-created)." },
+        "confidenceFactors": {
+          "type": "array",
+          "description": "Optional measured signals behind confidence, so users can see why a score is high or low.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "score", "detail"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1 },
+              "score": { "type": "number", "minimum": 0, "maximum": 1 },
+              "detail": { "type": "string" }
+            }
+          }
+        },
         "source": { "type": "string", "description": "Producer, e.g. opencv-fallback@0.1.0, fixture, user, component-library." },
         "userEdited": { "type": "boolean" },
         "fieldOrigins": {

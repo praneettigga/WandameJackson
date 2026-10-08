@@ -1,24 +1,143 @@
 import { useEffect, useState } from 'react';
-import { entityById, floorSnap, wallLength, type V3 } from './scene';
+import {
+  confidenceLevel,
+  entityById,
+  fieldOrigin,
+  floorSnap,
+  inferredFields,
+  wallLength,
+  type Entity,
+  type Origin,
+  type V2,
+  type V3,
+} from './scene';
 import { useEditor } from './store';
-import { originColors } from './geometry';
+import { moveNode, splitWall } from './wallGraph';
+import { confidenceColors, originColors, originDescriptions, originLabels } from './geometry';
+
+export function OriginTag({ origin }: { origin: Origin }) {
+  return (
+    <span
+      className="origin-tag"
+      title={originDescriptions[origin]}
+      style={{ color: originColors[origin], borderColor: originColors[origin] }}
+    >
+      {originLabels[origin]}
+    </span>
+  );
+}
+
+export function ConfidenceChip({ confidence }: { confidence: number | null }) {
+  if (confidence === null) return null;
+  const level = confidenceLevel(confidence);
+  return (
+    <span
+      className="confidence-chip"
+      style={{ color: confidenceColors[level], borderColor: confidenceColors[level] }}
+      title={`${level} confidence: heuristic evidence score from the parser`}
+    >
+      {level === 'low' && '△ '}
+      {Math.round(confidence * 100)}%
+    </span>
+  );
+}
+
+function Meter({ value, label }: { value: number; label?: string }) {
+  return (
+    <div
+      className={label ? 'meter' : 'meter small'}
+      role={label ? 'meter' : undefined}
+      aria-label={label}
+      aria-valuemin={label ? 0 : undefined}
+      aria-valuemax={label ? 100 : undefined}
+      aria-valuenow={label ? Math.round(value * 100) : undefined}
+    >
+      <i
+        style={{
+          width: `${value * 100}%`,
+          background: confidenceColors[confidenceLevel(value)],
+        }}
+      />
+    </div>
+  );
+}
+
+function ConfidencePanel({ entity }: { entity: Entity }) {
+  const { confidence, confidenceFactors, origin, userEdited } = entity.provenance;
+  const level = confidenceLevel(confidence);
+  const unscored = inferredFields(entity);
+  return (
+    <section className="confidence-panel">
+      <h4>
+        CONFIDENCE <span className="capitalize">{level === 'none' ? '' : level}</span>
+      </h4>
+      <div className="kv confidence">
+        <span>Detection score</span>
+        <b style={{ color: confidenceColors[level] }}>
+          {confidence === null
+            ? 'Not calibrated / unavailable'
+            : `${Math.round(confidence * 100)}%`}
+        </b>
+      </div>
+      {confidence !== null && <Meter value={confidence} label="Detection confidence" />}
+      <p className="hint">
+        {confidence !== null
+          ? "How strongly the drawing supports this element's position and shape. A heuristic score from measured signals, not a calibrated probability."
+          : origin === 'user'
+            ? 'Placed by you, so nothing about it was inferred.'
+            : origin === 'generated'
+              ? 'Synthetic or procedural data; no detection took place.'
+              : 'The producer did not report a score for this element.'}
+      </p>
+      {confidenceFactors?.map((f) => (
+        <div className="factor" key={f.label}>
+          <div className="kv">
+            <span>{f.label}</span>
+            <b style={{ color: confidenceColors[confidenceLevel(f.score)] }}>
+              {Math.round(f.score * 100)}%
+            </b>
+          </div>
+          <Meter value={f.score} />
+          <p className="factor-detail">{f.detail}</p>
+        </div>
+      ))}
+      {unscored.length > 0 && (
+        <p className="note inferred-note">
+          <b>Not read from the drawing:</b> {unscored.join(', ')}. These values are assumed or
+          derived, so the score does not cover them. Check them against the real space.
+        </p>
+      )}
+      {userEdited && confidence !== null && (
+        <p className="hint">
+          The score describes the original reconstruction. Fields you edited are tagged{' '}
+          <OriginTag origin="user" />.
+        </p>
+      )}
+    </section>
+  );
+}
 
 function NumberField({
   label,
   value,
   onCommit,
   step = 0.1,
+  origin,
 }: {
   label: string;
   value: number;
   onCommit: (value: number) => void;
   step?: number;
+  origin?: Origin;
 }) {
   const [draft, setDraft] = useState(String(Number(value.toFixed(4))));
   useEffect(() => setDraft(String(Number(value.toFixed(4)))), [value]);
   return (
     <label className="number-field">
-      <span>{label}</span>
+      <span>
+        {label}
+        {origin && <OriginTag origin={origin} />}
+      </span>
       <input
         aria-label={label}
         type="number"
@@ -79,6 +198,10 @@ export function Inspector() {
             <div>
               <h3>{'name' in entity ? entity.name : 'type' in entity ? entity.type : 'Wall'}</h3>
               <code>{entity.id}</code>
+              <div className="entity-badges">
+                <OriginTag origin={entity.provenance.origin} />
+                <ConfidenceChip confidence={entity.provenance.confidence} />
+              </div>
             </div>
           </div>
           <section>
@@ -97,7 +220,10 @@ export function Inspector() {
                     }}
                   />
                 </label>
-                <div className="field-label">Position · bottom-face centre</div>
+                <div className="field-label">
+                  Position · bottom-face centre{' '}
+                  <OriginTag origin={fieldOrigin(entity, 'position')} />
+                </div>
                 <div className="vector-fields">
                   {['X', 'Y', 'Z'].map((axis, i) => (
                     <NumberField
@@ -116,9 +242,12 @@ export function Inspector() {
                   label="Rotation Y · degrees"
                   value={(entity.rotationY * 180) / Math.PI}
                   step={15}
+                  origin={fieldOrigin(entity, 'rotationY')}
                   onCommit={(n) => patch('rotationY', (n * Math.PI) / 180)}
                 />
-                <div className="field-label">Dimensions</div>
+                <div className="field-label">
+                  Dimensions <OriginTag origin={fieldOrigin(entity, 'dimensions')} />
+                </div>
                 <div className="vector-fields">
                   {['Width', 'Height', 'Depth'].map((axis, i) => (
                     <NumberField
@@ -154,16 +283,68 @@ export function Inspector() {
                 <NumberField
                   label="Wall height"
                   value={entity.height}
+                  origin={fieldOrigin(entity, 'height')}
                   onCommit={(n) => patch('height', n)}
                 />
                 <NumberField
                   label="Wall thickness"
                   value={entity.thickness}
+                  origin={fieldOrigin(entity, 'thickness')}
                   step={0.01}
                   onCommit={(n) => patch('thickness', n)}
                 />
+                <div className="field-label">
+                  Centerline <OriginTag origin={fieldOrigin(entity, 'start')} />
+                </div>
+                {(['start', 'end'] as const).map((end) => (
+                  <div className="vector-fields" key={end}>
+                    {['X', 'Z'].map((axis, i) => (
+                      <NumberField
+                        key={axis}
+                        label={`${end === 'start' ? 'Start' : 'End'} ${axis}`}
+                        value={entity[end][i]}
+                        step={state.gridStep}
+                        onCommit={(n) => {
+                          const to: V2 = [...entity[end]];
+                          to[i] = n;
+                          state.wallEdit((scene) => moveNode(scene, entity[end], to));
+                        }}
+                      />
+                    ))}
+                  </div>
+                ))}
+                <NumberField
+                  label="Length"
+                  value={wallLength(entity)}
+                  step={state.gridStep}
+                  onCommit={(n) => {
+                    const l = wallLength(entity);
+                    if (n <= 0) return useEditor.setState({ error: 'Length must be positive.' });
+                    const to: V2 = [
+                      entity.start[0] + ((entity.end[0] - entity.start[0]) / l) * n,
+                      entity.start[1] + ((entity.end[1] - entity.start[1]) / l) * n,
+                    ];
+                    state.wallEdit((scene) => moveNode(scene, entity.end, to));
+                  }}
+                />
+                <div className="button-row">
+                  <button
+                    onClick={() =>
+                      state.wallEdit((scene) => {
+                        splitWall(scene, entity.id, [
+                          (entity.start[0] + entity.end[0]) / 2,
+                          (entity.start[1] + entity.end[1]) / 2,
+                        ]);
+                      })
+                    }
+                  >
+                    Split
+                  </button>
+                  <button onClick={state.remove}>Delete</button>
+                </div>
                 <p className="hint">
-                  Centerline topology is fixed. Changes must preserve opening fit.
+                  Drag the amber end handles or the cyan middle handle in the viewport. Rooms are
+                  rebuilt from the walls; doors and windows keep their position.
                 </p>
               </>
             )}
@@ -178,12 +359,17 @@ export function Inspector() {
                     key={key}
                     label={`Opening ${key}`}
                     value={entity[key]}
+                    origin={fieldOrigin(entity, key)}
                     onCommit={(n) => patch(key, n)}
                   />
                 ))}
                 <p className="hint">
-                  Offset starts at wall.start. Doors must have a bottom of 0 m.
+                  Offset starts at wall.start. Doors must have a bottom of 0 m. Drag the handle in
+                  the viewport to slide it along the wall.
                 </p>
+                <button className="wide" onClick={state.remove}>
+                  Delete opening
+                </button>
               </>
             )}
             {'polygon' in entity && (
@@ -191,6 +377,7 @@ export function Inspector() {
                 <NumberField
                   label="Ceiling height"
                   value={entity.height}
+                  origin={fieldOrigin(entity, 'height')}
                   onCommit={(n) => patch('height', n)}
                 />
                 <div className="kv">
@@ -201,6 +388,7 @@ export function Inspector() {
               </>
             )}
           </section>
+          <ConfidencePanel entity={entity} />
           <section>
             <h4>
               PROVENANCE{' '}
@@ -211,19 +399,12 @@ export function Inspector() {
             </h4>
             <div className="kv">
               <span>Origin</span>
-              <b className="capitalize">{entity.provenance.origin}</b>
+              <OriginTag origin={entity.provenance.origin} />
             </div>
+            <p className="hint">{originDescriptions[entity.provenance.origin]}</p>
             <div className="kv">
               <span>Producer</span>
               <code>{entity.provenance.source}</code>
-            </div>
-            <div className="kv confidence">
-              <span>Confidence</span>
-              <b>
-                {entity.provenance.confidence === null
-                  ? 'Not calibrated / unavailable'
-                  : `${(entity.provenance.confidence * 100).toFixed(1)}%`}
-              </b>
             </div>
             <div className="kv">
               <span>User edited</span>
@@ -234,7 +415,7 @@ export function Inspector() {
               Object.entries(entity.provenance.fieldOrigins).map(([field, origin]) => (
                 <div className="kv" key={field}>
                   <code>{field}</code>
-                  <span style={{ color: originColors[origin] }}>{origin}</span>
+                  <OriginTag origin={origin} />
                 </div>
               ))
             ) : (

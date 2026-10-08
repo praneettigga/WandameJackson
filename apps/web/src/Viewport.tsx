@@ -2,6 +2,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import {
   Grid,
+  Html,
   Line,
   OrbitControls,
   PointerLockControls,
@@ -17,8 +18,115 @@ import {
 } from './geometry';
 import { useEditor, editorScenes } from './store';
 import { floorsOf, placements, type Placement } from './assembly';
+import { GeometryCache, buildSceneGeometry, collides, disposeGeometry, pointInRoom } from './geometry';
+import { useEditor } from './store';
+import { useLibrary } from './library';
+import { SNAP_PX, gridStepFor, snapToWalls, worldPerPixel } from './snapping';
+import { WallTools } from './WallTools';
+import { danglingEnds } from './wallGraph';
 import { resizedObject, type Scene, type V3 } from './scene';
 
+function MeasurePoint({
+  position,
+  label,
+  ghost,
+}: {
+  position: V3;
+  label: string;
+  ghost?: boolean;
+}) {
+  return (
+    <group position={position}>
+      <mesh renderOrder={10}>
+        <sphereGeometry args={[0.035]} />
+        <meshBasicMaterial
+          color="#f3bd63"
+          depthTest={false}
+          transparent={ghost}
+          opacity={ghost ? 0.6 : 1}
+        />
+      </mesh>
+      <Html center zIndexRange={[20, 0]} style={{ pointerEvents: 'none' }}>
+        <div className={ghost ? 'measure-point ghost' : 'measure-point'}>{label}</div>
+      </Html>
+    </group>
+  );
+}
+function MeasureOverlay({ points, hover }: { points: V3[]; hover: V3 | null }) {
+  const ends: V3[] = points.length === 1 && hover ? [points[0], hover] : points;
+  const a = ends[0] && new THREE.Vector3(...ends[0]),
+    b = ends[1] && new THREE.Vector3(...ends[1]);
+  return (
+    <>
+      {points.map((p, i) => (
+        <MeasurePoint key={i} position={p} label={i === 0 ? 'A' : 'B'} />
+      ))}
+      {points.length === 1 && hover && <MeasurePoint position={hover} label="B" ghost />}
+      {a && b && (
+        <>
+          <Line
+            points={[a, b]}
+            color="#f3bd63"
+            lineWidth={2}
+            dashed={points.length < 2}
+            dashSize={0.08}
+            gapSize={0.05}
+            depthTest={false}
+            renderOrder={9}
+          />
+          <Html
+            position={a.clone().lerp(b, 0.5)}
+            center
+            zIndexRange={[20, 0]}
+            style={{ pointerEvents: 'none' }}
+          >
+            <div className="measure-label">{a.distanceTo(b).toFixed(3)} m</div>
+          </Html>
+        </>
+      )}
+    </>
+  );
+}
+
+/** Red markers at wall ends that meet no other wall (completeness check). */
+function DanglingMarkers({ scene }: { scene: Scene }) {
+  const points = useMemo(() => danglingEnds(scene.walls), [scene.walls]);
+  return (
+    <>
+      {points.map((p, i) => (
+        <mesh key={i} position={[p[0], 0.06, p[1]]} renderOrder={12} raycast={() => null}>
+          <sphereGeometry args={[0.07, 12, 8]} />
+          <meshBasicMaterial color="#e5736a" depthTest={false} transparent opacity={0.85} />
+        </mesh>
+      ))}
+    </>
+  );
+}
+/** Exposes the camera to browser end-to-end tests (VITE_E2E builds only). */
+function E2EHook() {
+  const camera = useThree((s) => s.camera),
+    size = useThree((s) => s.size);
+  useEffect(() => {
+    if (import.meta.env.VITE_E2E === 'true')
+      (window as unknown as { __three: unknown }).__three = { camera, size, Vector3: THREE.Vector3 };
+  }, [camera, size]);
+  return null;
+}
+/** Keeps the store's grid step matched to the current zoom (distance to the orbit target). */
+function SnapScale() {
+  const camera = useThree((s) => s.camera),
+    controls = useThree((s) => s.controls) as unknown as { target?: THREE.Vector3 } | null,
+    height = useThree((s) => s.size.height);
+  useFrame(() => {
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+    const target = controls?.target ?? new THREE.Vector3();
+    const wpp = worldPerPixel(camera.position.distanceTo(target), camera.fov, height);
+    const current = useEditor.getState().gridStep;
+    const next = gridStepFor(wpp, current);
+    if (next !== current) useEditor.setState({ gridStep: next });
+  });
+  return null;
+}
 function FrameCamera({ root }: { root: THREE.Group }) {
   const camera = useThree((s) => s.camera),
     controls = useThree((s) => s.controls);
@@ -154,8 +262,19 @@ function World() {
     () =>
       state.assembly
         ? buildAssemblyGeometry(state.assembly, editorScenes(state), view, {
+  // Custom-scan meshes load asynchronously; placements rebuild once their mesh arrives or is removed.
+  const libraryRevision = useLibrary((s) => s.revision);
+  // Unchanged entities keep their geometry between edits; only changed ones are rebuilt.
+  const cache = useMemo(() => new GeometryCache(), []);
+  useEffect(() => () => cache.clear(), [cache]);
+  const root = useMemo(() => {
+    const next = state.scene
+      ? buildSceneGeometry(
+          state.scene,
+          {
             ceilings: state.ceilings || state.workspace === 'Explore',
             xray: state.xray,
+            confidence: state.confidenceMap,
             selectedId: state.selectedId,
             activeProjectId: state.activeProjectId,
           })
@@ -177,6 +296,22 @@ function World() {
       state.workspace,
       state.xray,
       state.selectedId,
+          },
+          cache,
+        )
+      : new THREE.Group();
+    cache.sweep();
+    return next;
+  },
+    [
+      state.scene,
+      state.ceilings,
+      state.workspace,
+      state.xray,
+      state.confidenceMap,
+      state.selectedId,
+      cache,
+      libraryRevision,
     ],
   );
   const ghost = useMemo(
@@ -184,7 +319,7 @@ function World() {
       state.sourceScene && state.compare
         ? buildSceneGeometry(state.sourceScene, { ghost: true, ceilings: state.ceilings })
         : null,
-    [state.sourceScene, state.compare, state.ceilings],
+    [state.sourceScene, state.compare, state.ceilings, libraryRevision],
   );
   if (ghost && activePlacement) {
     const display = state.assembly
@@ -202,13 +337,24 @@ function World() {
     },
     [ghost],
   );
+  const camera = useThree((s) => s.camera),
+    height = useThree((s) => s.size.height);
   const selected = state.scene?.objects.find((o) => o.id === state.selectedId);
   const activeRoot = activeFloor ? root.getObjectByName(`floor:${activeFloor.id}`) : root;
   const target = selected ? activeRoot?.getObjectByName(selected.id) : undefined;
   const dragging = useRef(false);
+  const [hover, setHover] = useState<V3 | null>(null);
+  useEffect(() => {
+    if (!state.measure || state.measures.length !== 1) setHover(null);
+  }, [state.measure, state.measures.length]);
+  function move(event: ThreeEvent<PointerEvent>) {
+    if (!state.measure || state.measures.length !== 1 || state.workspace === 'Explore') return;
+    event.stopPropagation();
+    setHover([event.point.x, event.point.y, event.point.z]);
+  }
   function click(event: ThreeEvent<MouseEvent>) {
     event.stopPropagation();
-    if (dragging.current || state.workspace === 'Explore') return;
+    if (dragging.current || state.workspace === 'Explore' || state.tool !== 'select') return;
     if (state.measure) {
       const p = event.point;
       useEditor.setState({
@@ -224,7 +370,12 @@ function World() {
       <ambientLight intensity={0.9} />
       <hemisphereLight args={['#e1ecef', '#5c635c', 1.5]} />
       <directionalLight position={[3, 9, 5]} intensity={2.2} />
-      <primitive object={root} onClick={click} />
+      <primitive
+        object={root}
+        onClick={click}
+        onPointerMove={move}
+        onPointerOut={() => setHover(null)}
+      />
       {ghost && <primitive object={ghost} raycast={() => null} />}
       {state.workspace !== 'Explore' && (
         <>
@@ -239,13 +390,13 @@ function World() {
               0,
             ]}
             args={[100, 100]}
-            cellSize={0.1}
-            sectionSize={1}
+            cellSize={state.gridStep}
+            sectionSize={state.gridStep * 10}
             cellColor="#343d41"
             sectionColor="#4e595e"
             cellThickness={0.4}
             sectionThickness={0.8}
-            fadeDistance={35}
+            fadeDistance={Math.max(35, state.gridStep * 400)}
             infiniteGrid
           />
           <OrbitControls
@@ -264,15 +415,40 @@ function World() {
               showX={state.mode !== 'rotate'}
               showY
               showZ={state.mode !== 'rotate'}
-              translationSnap={state.snap ? 0.1 : null}
+              translationSnap={state.snap ? state.gridStep : null}
               rotationSnap={state.snap ? Math.PI / 12 : null}
               scaleSnap={state.snap ? 0.1 : null}
               onMouseDown={() => {
                 dragging.current = true;
               }}
+              onObjectChange={() => {
+                // Live flush-to-wall snapping while moving furniture.
+                if (state.mode !== 'translate' || !state.snap || !state.scene || !dragging.current) return;
+                if (!(camera instanceof THREE.PerspectiveCamera)) return;
+                const wpp = worldPerPixel(camera.position.distanceTo(target.position), camera.fov, height);
+                const hit = snapToWalls(
+                  [target.position.x, target.position.z],
+                  target.rotation.y,
+                  [selected.dimensions[0], selected.dimensions[2]],
+                  state.scene.walls,
+                  SNAP_PX * wpp,
+                  state.wallAlign,
+                );
+                if (hit) {
+                  target.position.x = hit.position[0];
+                  target.position.z = hit.position[1];
+                  target.rotation.y = hit.rotationY;
+                }
+              }}
               onMouseUp={() => {
-                if (state.mode === 'translate')
-                  state.patch(selected.id, { position: target.position.toArray() });
+                if (state.mode === 'translate') {
+                  const position = target.position.toArray();
+                  const rotationY = target.rotation.y;
+                  state.patch(
+                    selected.id,
+                    Math.abs(rotationY - selected.rotationY) > 1e-6 ? { position, rotationY } : { position },
+                  );
+                }
                 else if (state.mode === 'rotate') {
                   const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(target.quaternion);
                   state.patch(selected.id, { rotationY: Math.atan2(forward.x, forward.z) });
@@ -288,6 +464,10 @@ function World() {
             />
           )}
           <FrameCamera root={root} />
+          <SnapScale />
+          <E2EHook />
+          {state.scene && !state.measure && <WallTools scene={state.scene} />}
+          {state.scene && <DanglingMarkers scene={state.scene} />}
         </>
       )}
       {state.workspace === 'Explore' && state.scene && (
@@ -302,6 +482,8 @@ function World() {
       {state.measures.length === 2 && (
         <Line points={state.measures} color="#f3bd63" lineWidth={2} />
       )}
+      {state.workspace === 'Explore' && state.scene && <FirstPerson scene={state.scene} />}
+      {state.measure && <MeasureOverlay points={state.measures} hover={hover} />}
     </>
   );
 }
@@ -328,14 +510,19 @@ export function Viewport() {
     memberScenes = useEditor((s) => s.scenes);
   const hasScene = Boolean(scene || (assembly && Object.keys(memberScenes).length));
   const measure = useEditor((s) => s.measure),
-    compare = useEditor((s) => s.compare);
+    compare = useEditor((s) => s.compare),
+    snap = useEditor((s) => s.snap),
+    gridStep = useEditor((s) => s.gridStep),
+    tool = useEditor((s) => s.tool),
+    notice = useEditor((s) => s.notice);
   return (
     <div className="viewport">
       <Canvas
         camera={{ position: [8, 7, 9], fov: 48, near: 0.02, far: 500 }}
         dpr={[1, 2]}
         onPointerMissed={() => {
-          if (!useEditor.getState().measure) useEditor.getState().select(null);
+          const s = useEditor.getState();
+          if (!s.measure && s.tool === 'select') s.select(null);
         }}
       >
         <Suspense fallback={null}>
@@ -356,6 +543,14 @@ export function Viewport() {
           </span>
         </div>
       )}
+      {notice && (
+        <div className="wall-notice" role="status">
+          {notice}
+          <button aria-label="Dismiss" onClick={() => useEditor.setState({ notice: null })}>
+            ×
+          </button>
+        </div>
+      )}
       {compare && <div className="compare-label">CYAN WIREFRAME · ORIGINAL RECONSTRUCTION</div>}
       {workspace === 'Explore' && (
         <div className="explore-overlay" style={{ visibility: locked ? 'hidden' : 'visible' }}>
@@ -366,20 +561,25 @@ export function Viewport() {
           <span>Eye level 1.65 m · Simple wall and furniture collision</span>
         </div>
       )}
-      {measure && (
-        <div className="measure-readout">
-          {measures.length === 2
-            ? `${new THREE.Vector3(...measures[0]).distanceTo(new THREE.Vector3(...measures[1])).toFixed(3)} m`
-            : 'Click two surface points to measure'}
-          <small>3D straight-line distance</small>
-        </div>
-      )}
       <div className="viewport-bottom">
         <span>
           {workspace === 'Explore'
             ? 'WALK / 2 m/s'
-            : 'LMB select · Drag to orbit · RMB pan · Scroll zoom'}
+            : measure
+              ? measures.length === 1
+                ? 'MEASURE · Click to place point B · Esc to exit'
+                : 'MEASURE · Click a surface to place point A · Esc to exit'
+              : tool === 'wall'
+                ? 'WALL · Click to place points · Type a length + Enter · Shift = 90° · Alt = no snap · Esc to finish'
+                : tool === 'door' || tool === 'window'
+                  ? `${tool.toUpperCase()} · Click a wall to place · Alt = no snap · Esc to exit`
+                  : 'LMB select · Drag to orbit · RMB pan · Scroll zoom · Drag handles to edit walls'}
         </span>
+        {workspace !== 'Explore' && (
+          <span className="snap-readout" title="Grid and snap step adapt to zoom">
+            {snap ? `SNAP ${gridStep < 0.1 ? gridStep.toFixed(2) : gridStep} m` : 'SNAP OFF'}
+          </span>
+        )}
         <span>
           X <i className="axis-x">━</i> Y <i className="axis-y">━</i> Z <i className="axis-z">━</i>
         </span>

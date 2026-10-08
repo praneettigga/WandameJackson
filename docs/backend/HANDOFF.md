@@ -4,6 +4,26 @@
 
 Implements the frozen contract `contracts/api-contract.md` + `contracts/scene.schema.json` (v0.1.0) exactly. No contract files were changed.
 
+## Prototype 2 update (supersedes statements below where they conflict)
+
+- **Parser stages.** Each one can be switched off through `ParserOptions` for ablations (`ParserOptions.ablations()`):
+  - `deskew`: Hough dominant angle, rotate, parse, then map the results back to original pixels.
+  - `outline_walls`: fill double-line walls with directional closings. Only accepted when it clearly thickens the drawing.
+  - `diagonal_walls`: Hough on thick ink not explained by H/V walls, clustered into centrelines and extended to meet walls.
+  - `pier_split`: short solid piers inside a gap separate adjacent doors and windows.
+  - `soft_gap_ink`: a softer threshold for faint glazing lines in gaps. It switches off automatically on noisy images (MAD noise σ ≥ 8), where speckle would read as glazing.
+  
+  Thin-line removal now uses an elliptical kernel, so diagonal strokes survive.
+- **Door swing.** Doors with a drawn arc get a `Swing:` provenance note (side and hinge jamb; the convention is in the API contract).
+- **Completeness.** `completeness_warnings` adds `Completeness:` warnings for wall ends that meet nothing and rooms with no detected door.
+- **API (additive).** `GET /api/projects` lists projects, newest first. `POST /api/jobs/{id}/cancel` cancels a queued job at once, or a running job at its next progress step. The job ends `failed`/`JOB_CANCELLED` and never touches the scene.
+- **Evaluation** (`eval/`):
+  - The generator produces plans with exact ground truth and augmentations; the metrics are wall IoU, room F1/IoU, layout IoU, corner F1, door/window F1 and dimension error.
+  - `python -m eval.run` supports `--ablation`, `--parser both` and `--fail-under`, which is the CI gate.
+  - The CubiCasa5K adapter is `eval/baseline/cubicasa.py`. Its model weights are CC BY-NC 4.0 and are kept out of git under `.baseline/`.
+  - `eval/fusion.py` adds baseline walls only when the drawing's ink supports them.
+  - Results are in `docs/eval/RESULTS.md`.
+
 ## Commands
 
 ```powershell
@@ -77,7 +97,7 @@ Provenance on each element type:
 | Walls | `evidence` | thickness `evidence`, or `user` if supplied; height `inferred`, or `user` if supplied | |
 | Openings | `inferred` | height/bottom `inferred` (door 2.1 m; window sill 0.9 m, height 1.2 m) | |
 | Rooms | `inferred` | | |
-| All of the above | | | `confidence: null`, explanatory `notes` |
+| All of the above | | | heuristic `confidence` with `confidenceFactors` (see API contract), explanatory `notes` |
 
 Objects are always `[]`, because furniture is not extracted.
 

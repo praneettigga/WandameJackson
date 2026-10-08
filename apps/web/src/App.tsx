@@ -1,7 +1,16 @@
-import { Component, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { api, pollJob, type Job, type ProjectEnvelope, type ScaleCalibration } from './api';
 import {
-  components,
+  Component,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from 'react';
+import { api, pollJob, type Job, type ProjectEnvelope } from './api';
+import type { ScaleCalibration } from './api';
+import {
+  confidenceLevel,
   entities,
   exportSceneJson,
   geometryWarnings,
@@ -14,7 +23,15 @@ import { BlueprintWizard, AssemblyControls, FloorViews } from './AssemblyPanel';
 import { floorsOf, exportAssemblyJson, layoutErrors, type Floor } from './assembly';
 import { download, exportGlb, exportAssemblyGlb, originColors } from './geometry';
 import { Inspector } from './Inspector';
+import { completeness } from './completeness';
+import { snapKindLabels, type SnapKind } from './snapping';
+import { clearDraft, restorableDraft, writeDraft } from './draft';
+import { useEditor } from './store';
+import { confidenceColors, download, exportGlb, originColors, originLabels } from './geometry';
+import { ConfidenceChip, Inspector } from './Inspector';
 import { Viewport } from './Viewport';
+import { ComponentLibrary } from './ComponentLibrary';
+import { loadLibrary } from './library';
 
 class ViewportBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -91,17 +108,33 @@ function Calibration({
   project,
   points,
   setPoints,
+  distance,
   manual,
   disabled,
 }: {
   project: ProjectEnvelope;
   points: V2[];
   setPoints: (p: V2[]) => void;
+  distance: string;
   manual: boolean;
   disabled: boolean;
 }) {
   const [imageError, setImageError] = useState(false);
+  const [hover, setHover] = useState<V2 | null>(null);
   useEffect(() => setImageError(false), [project]);
+  const toImage = (e: ReactMouseEvent<HTMLDivElement>) =>
+    imagePoint(
+      e.clientX,
+      e.clientY,
+      e.currentTarget.getBoundingClientRect(),
+      project.image.width,
+      project.image.height,
+    );
+  const w = project.image.width;
+  const ghost = points.length === 1 ? hover : null;
+  const ends = ghost ? [points[0], ghost] : points.length === 2 ? points : null;
+  const marks: [V2, string, boolean][] = points.map((p, i) => [p, i === 0 ? 'A' : 'B', false]);
+  if (ghost) marks.push([ghost, 'B', true]);
   return (
     <div className="calibration-view">
       <div className="viewport-label">
@@ -110,16 +143,14 @@ function Calibration({
       <div
         className="calibration-image"
         onClick={(e) => {
-          const p = imagePoint(
-            e.clientX,
-            e.clientY,
-            e.currentTarget.getBoundingClientRect(),
-            project.image.width,
-            project.image.height,
-          );
-          if (p && manual && !disabled && !imageError)
+          const p = toImage(e);
+          if (p && manual && !disabled && !imageError) {
             setPoints(points.length >= 2 ? [p] : [...points, p]);
+            setHover(null);
+          }
         }}
+        onMouseMove={(e) => setHover(points.length === 1 && !imageError ? toImage(e) : null)}
+        onMouseLeave={() => setHover(null)}
       >
         <img
           src={api.imageUrl(project.image.url)}
@@ -131,36 +162,53 @@ function Calibration({
           preserveAspectRatio="xMidYMid meet"
           aria-hidden="true"
         >
-          {points.length === 2 && (
-            <line
-              x1={points[0][0]}
-              y1={points[0][1]}
-              x2={points[1][0]}
-              y2={points[1][1]}
-              stroke="#e99f39"
-              strokeWidth={project.image.width / 400}
-            />
+          {ends && (
+            <>
+              <line
+                x1={ends[0][0]}
+                y1={ends[0][1]}
+                x2={ends[1][0]}
+                y2={ends[1][1]}
+                stroke="#e99f39"
+                strokeWidth={w / 400}
+                strokeDasharray={ghost ? `${w / 120} ${w / 200}` : undefined}
+              />
+              <text
+                x={(ends[0][0] + ends[1][0]) / 2}
+                y={(ends[0][1] + ends[1][1]) / 2 - w / 50}
+                textAnchor="middle"
+                fontSize={w / 50}
+                fontWeight="bold"
+                fill="#f0c487"
+                stroke="#171a1c"
+                strokeWidth={w / 250}
+                paintOrder="stroke"
+              >
+                {Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]).toFixed(1)} px
+                {!ghost && distance && Number(distance) > 0 ? ` = ${Number(distance)} m` : ''}
+              </text>
+            </>
           )}
-          {points.map(([x, y], i) => (
-            <g key={i}>
+          {marks.map(([[x, y], label, isGhost], i) => (
+            <g key={i} opacity={isGhost ? 0.65 : 1}>
               <circle
                 cx={x}
                 cy={y}
-                r={project.image.width / 65}
+                r={w / 65}
                 fill="#f3bd63"
                 stroke="#24292b"
-                strokeWidth={project.image.width / 600}
+                strokeWidth={w / 600}
               />
               <text
                 x={x}
                 y={y}
                 textAnchor="middle"
                 dominantBaseline="central"
-                fontSize={project.image.width / 55}
+                fontSize={w / 55}
                 fontWeight="bold"
                 fill="#171a1c"
               >
-                {i === 0 ? 'A' : 'B'}
+                {label}
               </text>
             </g>
           ))}
@@ -222,6 +270,34 @@ export default function App() {
     [rightWidth, setRightWidth] = useState(286);
   const [notice, setNotice] = useState(''),
     [showBlueprint, setShowBlueprint] = useState(true);
+  const [draftOffer, setDraftOffer] = useState<ReturnType<typeof restorableDraft>>(null);
+  const [projects, setProjects] = useState<ProjectEnvelope[]>([]);
+  const refreshProjects = () =>
+    api
+      .listProjects()
+      .then((r) => setProjects(r.projects))
+      .catch(() => setProjects([])); // older backends have no list endpoint; the ID field still works
+  useEffect(() => {
+    void refreshProjects();
+  }, []);
+  // Autosave: mirror unsaved edits to a local draft (debounced); clear it once saved or discarded.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = useEditor.subscribe((s, prev) => {
+      if (s.scene && s.dirty && s.scene !== prev.scene) {
+        clearTimeout(timer);
+        const scene = s.scene;
+        timer = setTimeout(() => writeDraft(scene), 800);
+      } else if (prev.dirty && !s.dirty && prev.scene) {
+        clearTimeout(timer);
+        clearDraft(prev.scene.id);
+      }
+    });
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+    };
+  }, []);
   const polling = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const error = (e: unknown) =>
@@ -284,6 +360,7 @@ export default function App() {
     const envelope = await api.getProject(id);
     const scene = envelope.project.hasScene ? await api.getScene(id) : null;
     state.load(scene);
+    setDraftOffer(scene ? restorableDraft(scene) : null);
     setJob(null);
     setShowBlueprint(true);
     setHeight('');
@@ -308,6 +385,17 @@ export default function App() {
   }
   useEffect(() => {
     void refreshApiHealth().catch(() => setHealth('API offline'));
+    api
+      .health()
+      .then((result) =>
+        setHealth(
+          result.status === 'ok' && result.schemaVersion === '0.1.0'
+            ? 'API connected'
+            : 'API version mismatch',
+        ),
+      )
+      .catch(() => setHealth('API offline'));
+    void loadLibrary();
     if (api.mock) void guarded(() => loadProject('demo-room'));
     return () => polling.current?.abort();
     // Startup only; subsequent loads are explicit to protect local edits.
@@ -489,6 +577,7 @@ export default function App() {
           workspace: s.workspace === 'Explore' ? 'Edit' : s.workspace,
           selectedId: null,
           measure: false,
+          tool: 'select',
         });
         return;
       }
@@ -503,6 +592,12 @@ export default function App() {
       if (e.key.toLowerCase() === 'g') useEditor.setState({ mode: 'translate', measure: false });
       if (e.key.toLowerCase() === 'r') useEditor.setState({ mode: 'rotate', measure: false });
       if (e.key.toLowerCase() === 's') useEditor.setState({ mode: 'scale', measure: false });
+      const tools = { w: 'wall', d: 'door', n: 'window' } as const;
+      const tool = tools[e.key.toLowerCase() as keyof typeof tools];
+      if (tool && s.scene) {
+        useEditor.setState({ tool: s.tool === tool ? 'select' : tool, measure: false });
+        return;
+      }
       if (e.key.toLowerCase() === 'f') {
         e.preventDefault();
         useEditor.setState({ frame: s.frame + 1 });
@@ -540,6 +635,19 @@ export default function App() {
         ]
       : []),
   ];
+  const warnings = state.scene
+    ? [...state.scene.reconstruction.warnings, ...geometryWarnings(state.scene)]
+    : [];
+  const scored = state.scene
+    ? entities(state.scene).filter((e) => e.provenance.confidence !== null)
+    : [];
+  const issues = state.scene ? completeness(state.scene) : [];
+  const review = scored
+    .filter((e) => confidenceLevel(e.provenance.confidence) === 'low')
+    .sort((a, b) => a.provenance.confidence! - b.provenance.confidence!);
+  const inferredCount = state.scene
+    ? entities(state.scene).filter((e) => e.provenance.origin === 'inferred').length
+    : 0;
   const disabled = working || state.busy;
   const renderBlueprint = state.workspace === 'Reconstruct' && project && showBlueprint;
   async function reconstruct() {
@@ -647,6 +755,47 @@ export default function App() {
         </div>
       </nav>
       <ErrorBanner />
+      {draftOffer && state.scene?.id === draftOffer.draft.scene.id && (
+        <div className="draft-banner" role="status">
+          <b>Unsaved draft</b>
+          <span>
+            {draftOffer.stale
+              ? `Local edits from ${new Date(draftOffer.draft.savedAt).toLocaleString()} are based on revision ${draftOffer.draft.baseRevision}, but the server now has revision ${state.scene.revision}. Restoring them would conflict; download them as JSON instead.`
+              : `Local edits from ${new Date(draftOffer.draft.savedAt).toLocaleString()} were not saved.`}
+          </span>
+          {draftOffer.stale ? (
+            <button
+              onClick={() =>
+                download(
+                  JSON.stringify(draftOffer.draft.scene, null, 2),
+                  'application/json',
+                  `${draftOffer.draft.scene.id}-draft.scene.json`,
+                )
+              }
+            >
+              Download draft
+            </button>
+          ) : (
+            <button
+              className="primary small"
+              onClick={() => {
+                useEditor.setState({ scene: draftOffer.draft.scene, dirty: true, past: [], future: [] });
+                setDraftOffer(null);
+              }}
+            >
+              Restore
+            </button>
+          )}
+          <button
+            onClick={() => {
+              clearDraft(draftOffer.draft.scene.id);
+              setDraftOffer(null);
+            }}
+          >
+            Discard
+          </button>
+        </div>
+      )}
       <main className="editor-layout">
         <aside className="left-panel panel">
           {state.assembly && (
@@ -908,8 +1057,22 @@ export default function App() {
                   <div className="job-progress" role="status">
                     <progress value={job.progress} max={1} />
                     <span>
-                      {job.status} · {Math.round(job.progress * 100)}%
+                      {job.cancelRequested ? 'cancelling' : job.status} ·{' '}
+                      {Math.round(job.progress * 100)}%
                     </span>
+                    {(job.status === 'queued' || job.status === 'running') && !job.cancelRequested && (
+                      <button
+                        className="small"
+                        onClick={() =>
+                          void api
+                            .cancelJob(job.id)
+                            .then((r) => setJob(r.job))
+                            .catch(error)
+                        }
+                      >
+                        Cancel
+                      </button>
+                    )}
                   </div>
                 )}
               </section>
@@ -949,34 +1112,17 @@ export default function App() {
                                 ? `${entity.type} / ${entity.id}`
                                 : entity.id}
                           </span>
-                          <i style={{ background: originColors[entity.provenance.origin] }} />
+                          <ConfidenceChip confidence={entity.provenance.confidence} />
+                          <i
+                            title={originLabels[entity.provenance.origin]}
+                            style={{ background: originColors[entity.provenance.origin] }}
+                          />
                         </button>
                       ))}
                     </div>
                   ))}
               </div>
-              <section className="library">
-                <h4>
-                  COMPONENT LIBRARY <span>LOCAL</span>
-                </h4>
-                <p className="hint">Procedural furniture · click to add</p>
-                <div className="component-grid">
-                  {components.map((c, i) => (
-                    <button
-                      key={c.id}
-                      aria-label={`Add ${c.name}`}
-                      disabled={!state.scene || disabled}
-                      onClick={() => state.add(c.id)}
-                    >
-                      <span>{['⑂', '⊓', '▰', '▱', '▤'][i]}</span>
-                      {c.name}
-                      <small>
-                        {c.dimensions[0]} × {c.dimensions[2]} m
-                      </small>
-                    </button>
-                  ))}
-                </div>
-              </section>
+              <ComponentLibrary disabled={disabled} />
             </>
           )}
           <section className="project-section">
@@ -985,9 +1131,19 @@ export default function App() {
               Project ID
               <input
                 value={projectId}
+                list="project-list"
                 placeholder="Project ID from the API"
+                onFocus={() => void refreshProjects()}
                 onChange={(e) => setProjectId(e.target.value)}
               />
+              <datalist id="project-list">
+                {projects.map((p) => (
+                  <option key={p.project.id} value={p.project.id}>
+                    {p.project.name} · {new Date(p.project.createdAt).toLocaleDateString()}
+                    {p.project.hasScene ? '' : ' · not reconstructed'}
+                  </option>
+                ))}
+              </datalist>
             </label>
             <div className="button-row">
               <button
@@ -1049,9 +1205,46 @@ export default function App() {
                 title="Measure two surface points"
                 className={state.measure ? 'active' : ''}
                 disabled={!state.scene || state.workspace === 'Explore'}
-                onClick={() => useEditor.setState({ measure: !state.measure, measures: [] })}
+                onClick={() =>
+                  useEditor.setState({ measure: !state.measure, measures: [], tool: 'select' })
+                }
               >
                 ⌁<span>Measure</span>
+              </button>
+            </div>
+            <div className="tool-group" aria-label="Architecture tools">
+              {(
+                [
+                  ['wall', '▭', 'Wall', 'W'],
+                  ['door', '◫', 'Door', 'D'],
+                  ['window', '▤', 'Window', 'N'],
+                ] as const
+              ).map(([tool, icon, label, key]) => (
+                <button
+                  key={tool}
+                  title={`${label} tool (${key}) · snaps to walls; snap distance adapts to zoom`}
+                  aria-label={`${label} tool`}
+                  disabled={!state.scene || state.workspace === 'Explore'}
+                  className={state.tool === tool ? 'active' : ''}
+                  onClick={() =>
+                    useEditor.setState({
+                      tool: state.tool === tool ? 'select' : tool,
+                      measure: false,
+                      workspace: 'Edit',
+                    })
+                  }
+                >
+                  {icon}
+                  <span>{label}</span>
+                </button>
+              ))}
+              <button
+                title="Furniture turns its back to a wall when it snaps flush"
+                className={state.wallAlign ? 'active' : ''}
+                disabled={!state.scene}
+                onClick={() => useEditor.setState({ wallAlign: !state.wallAlign })}
+              >
+                ⊥<span>Align</span>
               </button>
             </div>
             <div className="tool-group">
@@ -1074,10 +1267,32 @@ export default function App() {
               <button
                 className={state.snap ? 'active' : ''}
                 onClick={() => useEditor.setState({ snap: !state.snap })}
-                title="0.1 m translation grid; 15° rotation; 0.1 scale steps"
+                title="Zoom-adaptive translation grid (see SNAP readout); 15° rotation; 0.1 scale steps"
               >
-                ⌗<span>0.1 m</span>
+                ⌗<span>Snap</span>
               </button>
+              <details className="snap-menu">
+                <summary title="Choose snap targets" aria-label="Snap targets">
+                  ▾
+                </summary>
+                <div className="snap-menu-panel">
+                  <small>Snap distance is 10 px on screen, so it adapts to zoom.</small>
+                  {(Object.keys(snapKindLabels) as SnapKind[]).map((kind) => (
+                    <label key={kind}>
+                      <input
+                        type="checkbox"
+                        checked={state.snapSettings[kind]}
+                        onChange={(e) =>
+                          useEditor.setState({
+                            snapSettings: { ...state.snapSettings, [kind]: e.target.checked },
+                          })
+                        }
+                      />
+                      {snapKindLabels[kind]}
+                    </label>
+                  ))}
+                </div>
+              </details>
             </div>
           </div>
           <div className="viewport-host">
@@ -1092,6 +1307,7 @@ export default function App() {
                       : []
                 }
                 setPoints={setPoints}
+                distance={distance}
                 manual={scaleMode === 'manual'}
                 disabled={disabled}
               />
@@ -1106,9 +1322,27 @@ export default function App() {
               <input
                 type="checkbox"
                 checked={state.xray}
-                onChange={(e) => useEditor.setState({ xray: e.target.checked })}
+                onChange={(e) =>
+                  useEditor.setState({
+                    xray: e.target.checked,
+                    confidenceMap: e.target.checked ? false : state.confidenceMap,
+                  })
+                }
               />
               Provenance X-Ray
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={state.confidenceMap}
+                onChange={(e) =>
+                  useEditor.setState({
+                    confidenceMap: e.target.checked,
+                    xray: e.target.checked ? false : state.xray,
+                  })
+                }
+              />
+              Confidence map
             </label>
             <label>
               <input
@@ -1139,7 +1373,24 @@ export default function App() {
                 {Object.entries(originColors).map(([label, color]) => (
                   <span key={label}>
                     <i style={{ background: color }} />
-                    {label}
+                    {originLabels[label as keyof typeof originLabels]}
+                  </span>
+                ))}
+              </div>
+            )}
+            {state.confidenceMap && (
+              <div className="origin-legend">
+                {(
+                  [
+                    ['high', '≥ 80%'],
+                    ['medium', '50–79%'],
+                    ['low', '< 50%'],
+                    ['none', 'not scored'],
+                  ] as const
+                ).map(([level, range]) => (
+                  <span key={level}>
+                    <i style={{ background: confidenceColors[level] }} />
+                    {level === 'none' ? range : `${level} ${range}`}
                   </span>
                 ))}
               </div>
@@ -1150,10 +1401,50 @@ export default function App() {
               <span>REVIEW & OUTPUT</span>
               <span>
                 {warnings.length} {warnings.length === 1 ? 'notice' : 'notices'}
+                {issues.length > 0 && ` · ${issues.length} completeness ${issues.length === 1 ? 'check' : 'checks'}`}
               </span>
             </div>
             <div className="dock-body">
               <div className="warnings">
+                {scored.length > 0 && (
+                  <div className="confidence-summary">
+                    <p>
+                      <span>◔</span>
+                      {(['high', 'medium', 'low'] as const)
+                        .map(
+                          (level) =>
+                            `${scored.filter((e) => confidenceLevel(e.provenance.confidence) === level).length} ${level}`,
+                        )
+                        .join(' · ')}{' '}
+                      confidence · {inferredCount} inferred{' '}
+                      {inferredCount === 1 ? 'element' : 'elements'}. Scores are heuristic evidence
+                      strengths, not probabilities.
+                    </p>
+                    {review.length > 0 && (
+                      <div className="review-list">
+                        <span>Needs review:</span>
+                        {review.map((e) => (
+                          <button key={e.id} onClick={() => state.select(e.id)}>
+                            {e.id} <ConfidenceChip confidence={e.provenance.confidence} />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {issues.length > 0 && (
+                  <div className="completeness" aria-label="Completeness checks">
+                    {issues.map((issue, i) => (
+                      <p key={i} className={`issue ${issue.severity}`}>
+                        <span>{issue.severity === 'warning' ? '◆' : '◇'}</span>
+                        {issue.message}
+                        {issue.entityId && (
+                          <button onClick={() => state.select(issue.entityId)}>Show</button>
+                        )}
+                      </p>
+                    ))}
+                  </div>
+                )}
                 {warnings.length ? (
                   warnings.map((warning, i) => (
                     <p key={i}>
@@ -1207,6 +1498,29 @@ export default function App() {
                     disabled ||
                     (Boolean(state.assembly) && exportScope === 'floor' && !state.scene)
                   }
+                  disabled={!state.scene || disabled}
+                  title="Download this scene with its blueprint image as an evaluation ground-truth pair (name.png + name.scene.json)"
+                  onClick={() =>
+                    void guarded(async () => {
+                      if (!state.scene) return;
+                      const scene = state.scene;
+                      const image = await fetch(api.imageUrl(scene.source.imageUrl)).then((r) => {
+                        if (!r.ok) throw new Error(`Could not download the blueprint (HTTP ${r.status}).`);
+                        return r.blob();
+                      });
+                      const ext = scene.source.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+                      download(image, scene.source.mimeType, `${scene.id}.${ext}`);
+                      download(exportSceneJson(scene), 'application/json', `${scene.id}.scene.json`);
+                      setNotice(
+                        'Ground-truth pair downloaded. Put both files in services/api/data/gt and run python -m eval.run --set real.',
+                      );
+                    })
+                  }
+                >
+                  ↓ GT pair
+                </button>
+                <button
+                  disabled={!state.scene || disabled}
                   onClick={() =>
                     void guarded(async () => {
                       if (state.assembly) {

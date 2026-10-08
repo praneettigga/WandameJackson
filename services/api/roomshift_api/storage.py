@@ -85,6 +85,14 @@ class Storage:
         d = self.project_dir(project_id)
         return read_json(d / "project.json") if d else None
 
+    def all_projects(self) -> list[dict]:
+        out = []
+        for d in self.projects_dir.iterdir():
+            p = read_json(d / "project.json") if d.is_dir() else None
+            if p:
+                out.append(p)
+        return out
+
     def save_project(self, project: dict) -> None:
         atomic_write_json(self.projects_dir / project["id"] / "project.json", project)
 

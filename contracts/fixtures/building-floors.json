@@ -1,0 +1,71 @@
+{
+  "description": "Four aligned synthetic floors of one building, ordered bottom to top.",
+  "generator": "services/api/eval/generate_building_floors.py",
+  "imageSize": [
+    1400,
+    1000
+  ],
+  "metersPerPixel": 0.01,
+  "wallCenterlineBoundsPixels": [
+    100,
+    100,
+    1300,
+    900
+  ],
+  "footprintMeters": [
+    12,
+    8
+  ],
+  "calibration": {
+    "pointA": [
+      100,
+      70
+    ],
+    "pointB": [
+      1300,
+      70
+    ],
+    "distanceMeters": 12
+  },
+  "assemblySettings": {
+    "offset": [
+      0,
+      0
+    ],
+    "rotation": 0,
+    "wallHeight": 2.8,
+    "storyHeight": 3.0
+  },
+  "invariants": [
+    "canvas",
+    "scale",
+    "origin",
+    "orientation",
+    "exterior walls and openings",
+    "stair shaft",
+    "lift shaft"
+  ],
+  "floors": [
+    {
+      "file": "floor-1.png",
+      "floor": 1,
+      "parsedRooms": 13
+    },
+    {
+      "file": "floor-2.png",
+      "floor": 2,
+      "parsedRooms": 14
+    },
+    {
+      "file": "floor-3.png",
+      "floor": 3,
+      "parsedRooms": 16
+    },
+    {
+      "file": "floor-4.png",
+      "floor": 4,
+      "parsedRooms": 10
+    }
+  ],
+  "notes": "Use the same calibration on every floor. Stair/lift symbols are visual context; the parser reconstructs their enclosing walls, not functional vertical connections."
+}

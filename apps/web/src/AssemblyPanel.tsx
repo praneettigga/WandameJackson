@@ -206,7 +206,7 @@ export function BlueprintWizard({
                   <div>
                     <b>{row.file.name}</b>
                     <small>{completeLabel(uploaded[i])}</small>
-                    <label className="field">
+                    <label className="field building-assignment">
                       Building
                       <select
                         disabled={busy}

@@ -1404,6 +1404,23 @@ body:has(.explore-overlay) canvas {
   color: #90ac9f;
   margin: 5px 0;
 }
+.building-assignment {
+  max-width: 360px;
+}
+.building-assignment select {
+  min-width: 260px;
+  background: #1c2428;
+  border: 1px solid #d4a865;
+  color: #d8e0df;
+  border-radius: 3px;
+  padding: 9px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.building-assignment select:focus {
+  outline: 1px solid #d4a865;
+  outline-offset: 0;
+}
 .floor-order {
   display: grid;
   align-content: center;

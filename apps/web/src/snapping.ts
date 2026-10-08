@@ -255,15 +255,17 @@ export function snapOpeningOffset(
   const max = Math.max(0, wallLength - width);
   const clamp = (v: number) => Math.min(max, Math.max(0, v));
   if (!enabled) return { offset: clamp(raw), kind: null };
-  const targets: { offset: number; kind: OpeningSnap['kind'] }[] = [
-    { offset: Math.min(clearance, max), kind: 'end' },
-    { offset: Math.max(0, max - clearance), kind: 'end' },
-    { offset: max / 2, kind: 'centre' },
-    ...neighbours.flatMap((n) => [
-      { offset: n.offset + n.width, kind: 'neighbour' as const },
-      { offset: n.offset - width, kind: 'neighbour' as const },
-    ]),
-  ].filter((t) => t.offset >= -1e-9 && t.offset <= max + 1e-9);
+  const neighbourTargets: { offset: number; kind: 'neighbour' }[] = neighbours.flatMap((n) => [
+    { offset: n.offset + n.width, kind: 'neighbour' },
+    { offset: n.offset - width, kind: 'neighbour' },
+  ]);
+  const allTargets: { offset: number; kind: OpeningSnap['kind'] }[] = [
+    { offset: Math.min(clearance, max), kind: 'end' as const },
+    { offset: Math.max(0, max - clearance), kind: 'end' as const },
+    { offset: max / 2, kind: 'centre' as const },
+    ...neighbourTargets,
+  ];
+  const targets = allTargets.filter((t) => t.offset >= -1e-9 && t.offset <= max + 1e-9);
   let best: (typeof targets)[number] | null = null;
   for (const t of targets)
     if (Math.abs(t.offset - raw) <= tolerance && (!best || Math.abs(t.offset - raw) < Math.abs(best.offset - raw))) best = t;

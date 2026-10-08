@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roomshift.local/contracts/scene.schema.json",
+  "title": "ROOMSHIFT Scene",
+  "description": "Authoritative semantic scene, schema version 0.1.0. Units are metres, Y is up. V2 = [x, z] on the floor plane; V3 = [x, y, z]. x = pixelX * metersPerPixel, z = pixelY * metersPerPixel (pixel origin top-left of the original image). No hidden recentering.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "name", "revision", "units", "upAxis", "source", "reconstruction", "rooms", "walls", "openings", "objects"],
+  "properties": {
+    "schemaVersion": { "const": "0.1.0" },
+    "id": { "$ref": "#/$defs/Id", "description": "Project ID. Must match the URL project ID." },
+    "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "revision": { "type": "integer", "minimum": 0, "description": "Incremented by the server on every successful PUT. Clients send the revision they loaded." },
+    "units": { "const": "meters" },
+    "upAxis": { "const": "Y" },
+    "source": { "$ref": "#/$defs/Source" },
+    "reconstruction": { "$ref": "#/$defs/Reconstruction" },
+    "rooms": { "type": "array", "items": { "$ref": "#/$defs/Room" } },
+    "walls": { "type": "array", "items": { "$ref": "#/$defs/Wall" } },
+    "openings": { "type": "array", "items": { "$ref": "#/$defs/Opening" } },
+    "objects": { "type": "array", "items": { "$ref": "#/$defs/SceneObject" } }
+  },
+  "$defs": {
+    "Id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:-]+$" },
+    "Positive": { "type": "number", "exclusiveMinimum": 0 },
+    "NonNegative": { "type": "number", "minimum": 0 },
+    "V2": {
+      "type": "array",
+      "prefixItems": [{ "type": "number" }, { "type": "number" }],
+      "minItems": 2, "maxItems": 2,
+      "description": "[x, z] in metres"
+    },
+    "V3": {
+      "type": "array",
+      "prefixItems": [{ "type": "number" }, { "type": "number" }, { "type": "number" }],
+      "minItems": 3, "maxItems": 3,
+      "description": "[x, y, z] in metres"
+    },
+    "PixelPoint": {
+      "type": "array",
+      "prefixItems": [{ "type": "number", "minimum": 0 }, { "type": "number", "minimum": 0 }],
+      "minItems": 2, "maxItems": 2,
+      "description": "[pixelX, pixelY] in original-image pixels, origin top-left"
+    },
+    "Origin": {
+      "enum": ["evidence", "inferred", "generated", "user"],
+      "description": "evidence = read directly from the drawing; inferred = derived by reconstruction logic or defaults; generated = synthetic/procedural (fixture, component library); user = created by the user."
+    },
+    "Provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "confidence", "source", "userEdited", "fieldOrigins", "notes"],
+      "properties": {
+        "origin": { "$ref": "#/$defs/Origin" },
+        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "null when no real score exists." },
+        "source": { "type": "string", "description": "Producer, e.g. opencv-fallback@0.1.0, fixture, user, component-library." },
+        "userEdited": { "type": "boolean" },
+        "fieldOrigins": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/Origin" },
+          "description": "Per-field origin, keyed by field name (e.g. height, thickness, position, dimensions)."
+        },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "Calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pointA", "pointB", "distanceMeters", "metersPerPixel"],
+      "properties": {
+        "pointA": { "$ref": "#/$defs/PixelPoint" },
+        "pointB": { "$ref": "#/$defs/PixelPoint" },
+        "distanceMeters": { "$ref": "#/$defs/Positive" },
+        "metersPerPixel": { "$ref": "#/$defs/Positive", "description": "distanceMeters / euclidean pixel distance(pointA, pointB)" }
+      }
+    },
+    "Source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["imageUrl", "imageWidth", "imageHeight", "mimeType", "synthetic", "calibration"],
+      "properties": {
+        "imageUrl": { "type": "string", "pattern": "^/", "description": "Root-relative URL; clients resolve it against the API base URL." },
+        "imageWidth": { "type": "integer", "minimum": 1 },
+        "imageHeight": { "type": "integer", "minimum": 1 },
+        "mimeType": { "enum": ["image/png", "image/jpeg"] },
+        "synthetic": { "type": "boolean", "description": "true only for the committed demo fixture / dev seed." },
+        "calibration": { "$ref": "#/$defs/Calibration" }
+      }
+    },
+    "Reconstruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parser", "createdAt", "defaults", "warnings"],
+      "properties": {
+        "parser": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "checkpoint", "license"],
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": "string" },
+            "checkpoint": { "type": ["string", "null"] },
+            "license": { "type": ["string", "null"] }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "defaults": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["wallHeight", "wallThickness"],
+          "properties": {
+            "wallHeight": { "$ref": "#/$defs/Positive" },
+            "wallThickness": { "$ref": "#/$defs/Positive" }
+          }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "Room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "polygon", "height", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "name": { "type": "string" },
+        "polygon": {
+          "type": "array", "minItems": 3, "items": { "$ref": "#/$defs/V2" },
+          "description": "Open simple polygon at y = 0; the first point is NOT repeated."
+        },
+        "height": { "$ref": "#/$defs/Positive", "description": "Ceiling height. Ceilings are derived at render time, never stored as entities." },
+        "provenance": { "$ref": "#/$defs/Provenance" }
+      }
+    },
+    "Wall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "start", "end", "height", "thickness", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "start": { "$ref": "#/$defs/V2", "description": "Centerline start. Shared walls appear once." },
+        "end": { "$ref": "#/$defs/V2", "description": "Centerline end; must differ from start." },
+        "height": { "$ref": "#/$defs/Positive" },
+        "thickness": { "$ref": "#/$defs/Positive" },
+        "provenance": { "$ref": "#/$defs/Provenance" }
+      }
+    },
+    "Opening": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "wallId", "offset", "width", "height", "bottom", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "enum": ["door", "window"] },
+        "wallId": { "$ref": "#/$defs/Id" },
+        "offset": { "$ref": "#/$defs/NonNegative", "description": "Distance along the centerline from wall.start to the opening's near edge. offset + width <= wall length." },
+        "width": { "$ref": "#/$defs/Positive" },
+        "height": { "$ref": "#/$defs/Positive", "description": "bottom + height <= wall.height" },
+        "bottom": { "$ref": "#/$defs/NonNegative", "description": "Sill height above the floor. Doors use 0." },
+        "provenance": { "$ref": "#/$defs/Provenance" }
+      }
+    },
+    "SceneObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "category", "componentId", "position", "rotationY", "dimensions", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "name": { "type": "string" },
+        "category": { "type": "string", "description": "chair, table, sofa, bed, cabinet, other" },
+        "componentId": { "type": ["string", "null"], "description": "Procedural component such as table.basic; null for a generic box." },
+        "position": { "$ref": "#/$defs/V3", "description": "Centre of the object's BOTTOM face. Floor-snapped means position[1] = 0." },
+        "rotationY": { "type": "number", "description": "Radians about +Y." },
+        "dimensions": {
+          "type": "array",
+          "prefixItems": [{ "$ref": "#/$defs/Positive" }, { "$ref": "#/$defs/Positive" }, { "$ref": "#/$defs/Positive" }],
+          "minItems": 3, "maxItems": 3,
+          "description": "[width (x), height (y), depth (z)] in metres. Scale is never persisted."
+        },
+        "provenance": { "$ref": "#/$defs/Provenance" }
+      }
+    }
+  }
+}

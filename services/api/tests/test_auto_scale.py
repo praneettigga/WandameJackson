@@ -59,10 +59,13 @@ def test_dimension_geometry_and_original_pixel_scale(monkeypatch):
     assert cal['pointA'][0] == pytest.approx(150, abs=2)
 
 
-def test_number_without_extension_marks_is_not_a_scale(monkeypatch):
+def test_number_without_an_associated_dimension_span_is_not_a_scale(monkeypatch):
     image, label = dimensioned_plan()
     image[90:195, 145:155] = 255
     image[90:195, 645:655] = 255
+    image[118:123, :] = 255
+    # An underline that does not align with the outside walls is not evidence.
+    cv2.line(image, (250, 120), (550, 120), 0, 2)
     stub_labels(monkeypatch, label)
     assert estimate_scale(image)['method'] == 'wall-thickness'
 
@@ -167,3 +170,21 @@ def test_real_ocr_units(text, meters):
     cal = estimate_scale(image)
     assert cal['method'] == 'printed-dimension', cal
     assert cal['metersPerPixel'] == pytest.approx(meters / 500, rel=.02)
+
+
+def test_overall_dimension_without_ticks_matches_outer_walls(monkeypatch):
+    # Same notation as the uploaded apartment: dimension above the outside walls.
+    image = np.full((700, 1000), 255, np.uint8)
+    cv2.rectangle(image, (100, 100), (900, 600), 0, 14)
+    cv2.line(image, (100, 80), (900, 80), 0, 2)
+    label = Label('8.0 m', 470, 51, 60, 20, 99)
+    stub_labels(monkeypatch, label, image.shape)
+    cal = estimate_scale(image)
+    assert cal['method'] == 'printed-dimension'
+    assert cal['distanceMeters'] == 8
+    assert cal['metersPerPixel'] == pytest.approx(.01, rel=.01)
+    # An arbitrary short underline above the drawing must not set scale.
+    image[78:83, :] = 255
+    cv2.line(image, (350, 80), (650, 80), 0, 2)
+    stub_labels(monkeypatch, label, image.shape)
+    assert estimate_scale(image)['method'] == 'wall-thickness'

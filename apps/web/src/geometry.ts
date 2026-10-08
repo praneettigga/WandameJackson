@@ -14,6 +14,7 @@ import {
   wallLength,
   wallSegments,
 } from './scene';
+import { customTemplate } from './library';
 
 export const originColors = {
   evidence: '#62bcb2',
@@ -82,12 +83,61 @@ function box(
   parent.add(mesh);
   return mesh;
 }
+const pickRay = new THREE.Ray(),
+  pickInverse = new THREE.Matrix4(),
+  pickPoint = new THREE.Vector3();
+/** Scans can carry millions of triangles; picking against their bounds keeps hover and clicks cheap. */
+function boundsRaycast(mesh: THREE.Mesh, raycaster: THREE.Raycaster, hits: THREE.Intersection[]) {
+  const geometry = mesh.geometry;
+  if (!geometry.boundingBox) geometry.computeBoundingBox();
+  pickRay.copy(raycaster.ray).applyMatrix4(pickInverse.copy(mesh.matrixWorld).invert());
+  if (!pickRay.intersectBox(geometry.boundingBox!, pickPoint)) return;
+  pickPoint.applyMatrix4(mesh.matrixWorld);
+  const distance = raycaster.ray.origin.distanceTo(pickPoint);
+  if (distance >= raycaster.near && distance <= raycaster.far)
+    hits.push({ distance, point: pickPoint.clone(), object: mesh });
+}
+function highlighted(source: THREE.Material) {
+  const m = source.clone();
+  m.userData = {};
+  if ('emissive' in m && m.emissive instanceof THREE.Color) {
+    m.emissive.set('#b97e24');
+    (m as THREE.MeshStandardMaterial).emissiveIntensity = 0.24;
+  } else if ('color' in m && m.color instanceof THREE.Color) m.color.lerp(new THREE.Color('#e8a64a'), 0.35);
+  return m;
+}
+/** A placed custom scan: shares the library template's geometry, stretched to the object's dimensions. */
+function scanInstance(object: SceneObject, template: THREE.Object3D, options: RenderOptions) {
+  const instance = template.clone();
+  instance.scale.set(...object.dimensions);
+  const flat =
+    options.ghost || options.xray || options.confidence ? material(object, '#bba184', options) : null;
+  const selected = object.id === options.selectedId;
+  instance.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    node.userData = { entityId: object.id };
+    node.raycast = (raycaster, hits) => boundsRaycast(node, raycaster, hits);
+    node.castShadow = true;
+    node.receiveShadow = true;
+    if (flat) node.material = flat;
+    else if (selected)
+      node.material = Array.isArray(node.material)
+        ? node.material.map(highlighted)
+        : highlighted(node.material);
+  });
+  return instance;
+}
 function furniture(object: SceneObject, options: RenderOptions) {
   const group = new THREE.Group();
   group.name = object.id;
   group.userData.entityId = object.id;
   group.position.set(...object.position);
   group.rotation.y = object.rotationY;
+  const scan = customTemplate(object.componentId);
+  if (scan) {
+    group.add(scanInstance(object, scan, options));
+    return group;
+  }
   const [w, h, d] = object.dimensions;
   const wood = material(object, '#bba184', options),
     fabric = material(object, '#718783', options),
@@ -388,11 +438,14 @@ export function buildSceneGeometry(scene: Scene, options: RenderOptions = {}, ca
   }
   for (const object of scene.objects)
     root.add(
-      get(`object|${flags}|${sel(object.id)}|${JSON.stringify(object)}`, () => {
-        const group = furniture(object, options);
-        group.userData = { ...meta(object, 'furniture'), category: object.category, componentId: object.componentId };
-        return group;
-      }),
+      get(
+        `object|${flags}|${sel(object.id)}|${customTemplate(object.componentId)?.uuid ?? ''}|${JSON.stringify(object)}`,
+        () => {
+          const group = furniture(object, options);
+          group.userData = { ...meta(object, 'furniture'), category: object.category, componentId: object.componentId };
+          return group;
+        },
+      ),
     );
   if (options.ghost)
     root.traverse((node) => {
@@ -404,10 +457,11 @@ export function disposeGeometry(root: THREE.Object3D) {
   const materials = new Set<THREE.Material>();
   root.traverse((node) => {
     if (node instanceof THREE.Mesh) {
-      node.geometry.dispose();
-      (Array.isArray(node.material) ? node.material : [node.material]).forEach((m) =>
-        materials.add(m),
-      );
+      // Custom-scan geometry and materials belong to the library template and outlive any placement.
+      if (!node.geometry.userData.shared) node.geometry.dispose();
+      (Array.isArray(node.material) ? node.material : [node.material]).forEach((m) => {
+        if (!m.userData.shared) materials.add(m);
+      });
     }
   });
   materials.forEach((m) => m.dispose());

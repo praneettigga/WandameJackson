@@ -266,30 +266,38 @@ export function editEntity<T extends Entity>(entity: T, patch: Partial<T>): T {
   } as T;
 }
 
-export const components: { id: string; name: string; dimensions: V3 }[] = [
+/** Anything that can be placed from the component library: built-in procedural furniture or a custom scan. */
+export type ComponentSpec = {
+  id: string;
+  name: string;
+  dimensions: V3;
+  category?: string;
+  source?: string;
+  note?: string;
+};
+export const components: ComponentSpec[] = [
   { id: 'chair.basic', name: 'Chair', dimensions: [0.5, 0.85, 0.5] },
   { id: 'table.basic', name: 'Table', dimensions: [1.2, 0.75, 0.8] },
   { id: 'sofa.basic', name: 'Sofa', dimensions: [2, 0.85, 0.9] },
   { id: 'bed.basic', name: 'Bed', dimensions: [1.6, 0.65, 2] },
   { id: 'cabinet.basic', name: 'Cabinet', dimensions: [0.9, 1.8, 0.45] },
 ];
-export function createObject(componentId: string, position: V3 = [0, 0, 0]): SceneObject {
-  const c = components.find((c) => c.id === componentId)!;
+export function createObject(c: ComponentSpec, position: V3 = [0, 0, 0]): SceneObject {
   return {
     id: crypto.randomUUID(),
     name: c.name,
-    category: c.name.toLowerCase(),
-    componentId,
+    category: c.category ?? c.name.toLowerCase(),
+    componentId: c.id,
     position,
     rotationY: 0,
     dimensions: [...c.dimensions],
     provenance: {
       origin: 'user',
-      source: 'component-library',
+      source: c.source ?? 'component-library',
       confidence: null,
       userEdited: false,
       fieldOrigins: { position: 'user', dimensions: 'user', componentId: 'user' },
-      notes: ['Added by the user from the local procedural component library.'],
+      notes: [c.note ?? 'Added by the user from the local procedural component library.'],
     },
   };
 }

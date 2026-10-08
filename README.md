@@ -35,7 +35,7 @@ Upload a blueprint to assign its scale automatically. The app prefers readable p
 
 For the exact fixture demonstration, upload `contracts/fixtures/room.png` as a normal image, choose **Manual reference**, and mark points 100 pixels apart and enter 2 m (the supplied fixture uses [50,50] and [150,50]). Leave wall height blank to use the labelled 2.7 m assumption. The real parser should return a 4 × 3 m room, four walls, a door, and a window.
 
-Add a sofa or table from the component library, move/rotate/resize it, then snap it to the floor. Moving furniture near a wall snaps it flush. Inspect provenance, save, reload, and export JSON and GLB. Enable **Ceilings** to include the ceiling in the GLB. Pick earlier projects from the Project field's list.
+Add a sofa or table from the component library (open a folder such as **Seating**, then click an item), move/rotate/resize it, then snap it to the floor. **Add custom component** imports your own scan or model (GLB, self-contained glTF, OBJ, PLY mesh or STL, up to 50 MB) into the **Custom** folder; confirm its units and up axis so it comes in at real size. Custom files are kept in this browser only: saved scenes store the component's ID and size, so other devices show it as a same-size box. Moving furniture near a wall snaps it flush. Inspect provenance, save, reload, and export JSON and GLB. Enable **Ceilings** to include the ceiling in the GLB. Pick earlier projects from the Project field's list.
 
 ## Editing walls, doors and windows
 

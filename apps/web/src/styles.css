@@ -739,35 +739,210 @@ code {
 .tree-item.selected > span:first-child {
   color: #d9b376;
 }
-.component-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 7px;
-  margin-top: 13px;
-}
-.component-grid button {
-  padding: 10px 6px 8px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  font-size: 10px;
-  background: #293338;
-  border-color: #3d4a50;
-}
-.component-grid button > span {
-  font-family: monospace;
-  color: #b3bfb8;
-  font-size: 34px;
-  line-height: 35px;
-  margin-bottom: 4px;
-}
-.component-grid button > small {
-  font-size: 8px;
-  color: #83949a;
-  margin-top: 4px;
-}
 .library .hint {
   margin-top: -5px;
+}
+.lib-tree,
+.lib-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.lib-tree {
+  margin: 10px -8px 0;
+}
+.lib-tree button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: #c3ccce;
+}
+.lib-tree button:hover:not(:disabled) {
+  background: #2f383d;
+}
+.lib-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.lib-chevron {
+  display: flex;
+  color: #6f828a;
+  transition: transform 0.15s;
+}
+.lib-chevron .lib-icon {
+  width: 11px;
+  height: 11px;
+  stroke-width: 1.8;
+}
+.lib-folder[aria-expanded='true'] .lib-chevron {
+  transform: rotate(90deg);
+}
+.lib-folder-icon {
+  display: flex;
+}
+.lib-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-count {
+  background: #1e282d;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #79909b;
+  font-size: 9px;
+}
+.lib-tree .lib-children {
+  margin: 1px 0 3px 15px;
+  padding-left: 5px;
+  border-left: 1px solid #364247;
+}
+.lib-tree .lib-item {
+  color: #aebbbf;
+}
+.lib-item > .lib-icon {
+  color: #879fa9;
+}
+.lib-item small {
+  font-size: 9px;
+  color: #74888f;
+  font-variant-numeric: tabular-nums;
+}
+.lib-custom {
+  display: flex;
+  align-items: center;
+}
+.lib-custom .lib-item {
+  min-width: 0;
+}
+.lib-tree .lib-remove {
+  width: auto;
+  flex-shrink: 0;
+  padding: 4px;
+  color: #8c9da4;
+  opacity: 0;
+}
+.lib-custom:hover .lib-remove,
+.lib-tree .lib-remove:focus-visible {
+  opacity: 1;
+}
+.lib-tree .lib-remove:hover:not(:disabled) {
+  color: #f0a59d;
+  background: #3a2c2b;
+}
+@media (hover: none) {
+  .lib-tree .lib-remove {
+    opacity: 1;
+  }
+}
+.lib-empty {
+  padding: 5px 8px;
+  font-size: 10px;
+  font-style: italic;
+  color: #6f828a;
+}
+.lib-tree .lib-add {
+  margin-top: 6px;
+  border: 1px dashed #4a585f;
+  color: #e3b878;
+}
+.lib-tree .lib-add:hover:not(:disabled) {
+  border-color: #b28b52;
+  background: #2c2a24;
+  color: #f5c784;
+}
+.lib-import {
+  margin-top: 12px;
+  padding: 10px;
+  background: #20272a;
+  border: 1px solid #3d4b50;
+  border-radius: 4px;
+}
+.lib-import-file {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: #d6c09c;
+}
+.lib-import-file span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-import-file small {
+  font-size: 9px;
+  color: #74888f;
+}
+.lib-import-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.lib-import-row .field {
+  margin-top: 0;
+}
+.lib-import select {
+  background: #1c2428;
+  border: 1px solid #435058;
+  color: #d8e0df;
+  border-radius: 3px;
+  padding: 6px;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-size: 11px;
+}
+.lib-import select:focus {
+  outline: 1px solid #d4a865;
+  outline-offset: 0;
+}
+.lib-size {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: #1c2326;
+  border: 1px solid #3d4b50;
+}
+.lib-size span {
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: #879a9f;
+}
+.lib-size b {
+  font-family: ui-monospace, monospace;
+  font-weight: 500;
+  color: #e4bd84;
+}
+.library .lib-import .hint {
+  margin: 8px 0 10px;
+}
+.lib-message,
+.lib-error {
+  font-size: 10px;
+  line-height: 1.6;
+  color: #8c9da4;
+  margin: 10px 0 0;
+}
+.lib-error {
+  color: #eaa39c;
 }
 .inspector-empty {
   padding: 34px 25px;

@@ -198,7 +198,7 @@ See [ingestion behavior and limits](../docs/mode2-ingestion.md).
 - `GET /api/reconstruction/capabilities`: `{ready, code, message, device?}` from
   an isolated worker probe. Missing environment/checkpoint/CUDA returns `ready:false`.
 - `POST /api/projects/{id}/reconstruct-mesh`: optional JSON
-  `{ "maxViews": 12 }` (12, 20, 32, or 40; defaults to 12). Requires accepted
+  `{ "maxViews": 20 }` (12, 20, 32, or 40; defaults to 20). Requires accepted
   capture input. Returns 202 `{job}`; active same-project jobs return 409.
 - `GET /api/projects/{id}/mesh`: latest successful reconstruction manifest, or
   404 `MESH_NOT_READY`. Adds `meshUrl` and `diagnosticUrl` to manifest v1.0.0.

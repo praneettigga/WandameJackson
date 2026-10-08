@@ -49,7 +49,7 @@ class ReconstructIn(BaseModel):
 
 class MeshReconstructIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    maxViews: Literal[12, 20, 32, 40] = 12
+    maxViews: Literal[12, 20, 32, 40] = 20
 
 
 def project_envelope(p: dict) -> dict:

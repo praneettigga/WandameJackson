@@ -11,7 +11,16 @@ WORLD_TO_VIEWER = np.diag([1., -1., -1., 1.])
 
 
 def consistent_depths(depths, confidence, intrinsics, extrinsics, valid_pixels, progress,
-                      relative_tolerance=.04, confidence_quantile=.25):
+                      relative_tolerance=.08, confidence_quantile=.10, discontinuity=.12,
+                      single_view_quantile=.70, min_view_support=.10):
+    """Keep pixels with multi-view depth agreement.
+
+    Room walls are often seen from one direction only. In a view whose cameras
+    already agree with the others (at least ``min_view_support`` of its pixels are
+    supported), unsupported pixels in that view's top confidence band
+    (``single_view_quantile``) are also kept, so single-observation surfaces are not
+    erased. A view that contradicts every other view gains nothing.
+    """
     n, h, w = depths.shape
     if n < 2 or intrinsics.shape != (n, 3, 3) or extrinsics.shape != (n, 4, 4):
         raise ValueError('Camera and depth dimensions do not agree.')
@@ -32,11 +41,11 @@ def consistent_depths(depths, confidence, intrinsics, extrinsics, valid_pixels, 
         # Never integrate silhouettes/depth discontinuities into bridging triangles.
         dx = np.abs(np.diff(depths[i], axis=1, prepend=depths[i, :, :1]))
         dy = np.abs(np.diff(depths[i], axis=0, prepend=depths[i, :1, :]))
-        good[i] &= (dx < .05 * depths[i]) & (dy < .05 * depths[i])
+        good[i] &= (dx < discontinuity * depths[i]) & (dy < discontinuity * depths[i])
     yy, xx = np.mgrid[:h, :w]
     pixels = np.stack([xx.ravel(), yy.ravel(), np.ones(h*w)])
     result = np.zeros_like(depths, dtype=np.float32)
-    counts = []
+    counts, single = [], []
     for i in range(n):
         progress(.40 + .20 * i/n, 'filtering_depth')
         ids = np.flatnonzero(good[i].ravel())
@@ -58,24 +67,32 @@ def consistent_depths(depths, confidence, intrinsics, extrinsics, valid_pixels, 
             sampled = depths[j, v[k], u[k]]
             agrees = good[j, v[k], u[k]] & (np.abs(sampled - z[k]) <= relative_tolerance * z[k])
             supported[k[agrees]] = True
-        result[i].ravel()[ids[supported]] = depths[i].ravel()[ids[supported]]
         counts.append(int(supported.sum()))
+        keep = supported.copy()
+        if single_view_quantile < 1 and len(ids) and supported.mean() >= min_view_support:
+            scores = confidence[i].ravel()[ids]
+            keep |= scores >= np.quantile(scores, single_view_quantile)
+        result[i].ravel()[ids[keep]] = depths[i].ravel()[ids[keep]]
+        single.append(int((keep & ~supported).sum()))
     if sum(counts) < 1000:
         raise ValueError('Too little consistent surface evidence. Retake with more overlapping, textured views.')
-    return result, {'supportedPixels': counts, 'supportedFraction': float(np.count_nonzero(result) / result.size),
+    return result, {'supportedPixels': counts, 'singleViewPixels': single,
+                    'supportedFraction': float(np.count_nonzero(result) / result.size),
                     'relativeDepthTolerance': relative_tolerance, 'confidenceQuantileRemoved': confidence_quantile,
-                    'retainedDepthQuantiles': [.005, .995]}
+                    'depthDiscontinuity': discontinuity, 'singleViewConfidenceQuantile': single_view_quantile,
+                    'minViewSupport': min_view_support, 'retainedDepthQuantiles': [.005, .995]}
 
 
-def fuse_mesh(depths, rgb, intrinsics, extrinsics, progress):
+def fuse_mesh(depths, rgb, intrinsics, extrinsics, progress, voxel_divisor=192.0, truncation_voxels=3.0,
+              smoothing_iterations=10, max_triangles=250_000, min_component_fraction=.02):
     import open3d as o3d
     nonzero = depths[depths > 0]
     if not len(nonzero):
         raise ValueError('No supported depths to fuse.')
     median = float(np.median(nonzero))
-    voxel = median / 256.0
+    voxel = median / voxel_divisor
     volume = o3d.pipelines.integration.ScalableTSDFVolume(
-        voxel_length=voxel, sdf_trunc=voxel * 4,
+        voxel_length=voxel, sdf_trunc=voxel * truncation_voxels,
         color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8)
     n, h, w = depths.shape
     for i in range(n):
@@ -92,6 +109,21 @@ def fuse_mesh(depths, rgb, intrinsics, extrinsics, progress):
     mesh.remove_degenerate_triangles()
     mesh.remove_duplicated_triangles()
     mesh.remove_duplicated_vertices()
+    extracted = len(mesh.triangles)
+    if len(mesh.triangles):
+        # Floaters: drop components small relative to the main surface, not just tiny ones.
+        labels, counts, _ = mesh.cluster_connected_triangles()
+        counts = np.asarray(counts)
+        mesh.remove_triangles_by_mask(counts[np.asarray(labels)] < max(20, min_component_fraction * counts.max()))
+        mesh.remove_unreferenced_vertices()
+    if len(mesh.triangles) and smoothing_iterations:
+        # Taubin smoothing removes TSDF stair-step noise without shrinking the room.
+        mesh = mesh.filter_smooth_taubin(number_of_iterations=smoothing_iterations)
+    if max_triangles and len(mesh.triangles) > max_triangles:
+        mesh = mesh.simplify_quadric_decimation(target_number_of_triangles=max_triangles)
+        mesh.remove_degenerate_triangles()
+        mesh.remove_duplicated_triangles()
+        mesh.remove_unreferenced_vertices()
     if len(mesh.triangles):
         # Validate at the exported precision: distinct float64 TSDF vertices can
         # collapse to the same float32 position in GLB and create zero-area faces.
@@ -107,7 +139,10 @@ def fuse_mesh(depths, rgb, intrinsics, extrinsics, progress):
     # No Poisson reconstruction, hole filling, convex hull, or unseen-region completion.
     mesh.transform(WORLD_TO_VIEWER)
     mesh.compute_vertex_normals()
-    return mesh, {'voxelLength': voxel, 'sdfTruncation': voxel * 4,
+    return mesh, {'voxelLength': voxel, 'sdfTruncation': voxel * truncation_voxels,
+                  'voxelDivisor': voxel_divisor, 'smoothingIterations': smoothing_iterations,
+                  'maxTriangles': max_triangles, 'minComponentFraction': min_component_fraction,
+                  'extractedTriangles': extracted,
                   'vertices': len(mesh.vertices), 'triangles': len(mesh.triangles)}
 
 

@@ -48,6 +48,28 @@ def test_disagreeing_depths_do_not_become_a_mesh():
         consistent_depths(depth, confidence[:2], k[:2], e[:2], valid[:2], lambda *_: None)
 
 
+def test_single_view_surfaces_kept_only_in_consistent_views():
+    depth, confidence, k, e, valid, _ = plane()
+    # A confident strip only view 0 sees (e.g. a wall corner) must survive...
+    depth[0, :, :8] = 1.2
+    confidence[0, :, :8] = 9
+    filtered, evidence = consistent_depths(depth, confidence, k, e, valid, lambda *_: None)
+    assert (filtered[0, 5:-5, 1:7] > 0).all()
+    assert evidence['singleViewPixels'][0] > 0
+    # ...but disabling the fallback restores strict multi-view support.
+    strict, _ = consistent_depths(depth, confidence, k, e, valid, lambda *_: None, single_view_quantile=1)
+    assert not (strict[0, 5:-5, 1:7] > 0).any()
+
+
+def test_small_floaters_removed_and_triangles_bounded():
+    depth, confidence, k, e, valid, rgb = plane()
+    filtered, _ = consistent_depths(depth, confidence, k, e, valid, lambda *_: None)
+    filtered[0, 2:5, 2:5] = .7  # isolated speck far in front of the wall
+    mesh, stats = fuse_mesh(filtered, rgb, k, e, lambda *_: None, max_triangles=2000)
+    assert stats['triangles'] <= 2000
+    assert np.asarray(mesh.vertices)[:, 2].max() < -1.5
+
+
 def test_invalid_cameras_and_nonfinite_mesh_rejected(tmp_path):
     depth, confidence, k, e, valid, _ = plane()
     k[0, 0, 0] = np.nan

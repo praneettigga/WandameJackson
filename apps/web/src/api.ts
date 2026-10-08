@@ -199,7 +199,7 @@ export class HttpApi implements RoomshiftApi {
   reconstructionCapabilities() {
     return this.request<WorkerCapabilities>('/api/reconstruction/capabilities', undefined, 40_000);
   }
-  reconstructMesh(id: string, maxViews = 12) {
+  reconstructMesh(id: string, maxViews = 20) {
     return this.request<{ job: Job }>(`/api/projects/${encodeURIComponent(id)}/reconstruct-mesh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

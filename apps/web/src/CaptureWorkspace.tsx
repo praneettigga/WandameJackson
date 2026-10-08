@@ -13,7 +13,7 @@ import { CaptureGuide } from './CaptureGuide';
 import { MeshViewport } from './MeshViewport';
 
 export function CaptureWorkspace() {
-  const [viewBudget, setViewBudget] = useState(12);
+  const [viewBudget, setViewBudget] = useState(20);
   const [mesh, setMesh] = useState<MeshResult | null>(null);
   const [capabilities, setCapabilities] = useState<WorkerCapabilities | null>(null);
   const [view, setView] = useState<'source' | 'mesh'>('source');

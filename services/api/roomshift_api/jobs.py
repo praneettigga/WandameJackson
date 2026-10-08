@@ -128,7 +128,7 @@ class JobRunner:
         self._queue.put(job["id"])
         return job
 
-    def submit_mesh(self, project: dict, max_views: int = 12) -> dict:
+    def submit_mesh(self, project: dict, max_views: int = 20) -> dict:
         with self._guard:
             if project["id"] in self._active:
                 raise ApiError(409, "JOB_IN_PROGRESS", "This project already has an active job.")

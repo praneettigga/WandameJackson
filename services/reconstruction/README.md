@@ -69,8 +69,8 @@ FastAPI. API shutdown also cancels an active reconstruction process.
 ## In the app
 
 Select **Mode 2 · Photos & video**. Upload/prepare, review the source filmstrip,
-then select a view budget and **Reconstruct mesh**. The default is 12 views for
-lower memory use; 20, 32, and all (up to 40) are also available. Views are selected
+then select a view budget and **Reconstruct mesh**. The default is 20 views for
+room coverage; 12 (lowest memory), 32, and all (up to 40) are also available. Views are selected
 uniformly in capture order including both endpoints. The chosen indices are
 recorded. Fewer views may reduce coverage; there is no silent OOM fallback or
 point-cloud substitute. Worker readiness can be refreshed after changing setup.
@@ -80,21 +80,43 @@ A successful mesh opens in the orbit viewer with fit and wireframe controls.
 the reconstruction manifest and diagnostic PLY. Failed reruns retain the previous
 mesh and its export. Prepared input and mesh results survive reload separately.
 
+## Offline geometry tuning
+
+Set `ROOMSHIFT_DUMP_NPZ=/path/capture.npz` for one worker run to cache the raw
+VGGT depth, confidence and cameras. Then iterate on CPU without the GPU or model:
+
+```bash
+services/reconstruction/.venv/bin/python services/reconstruction/tune.py capture.npz \
+  --out tuned.glb --tolerance .08 --voxel-divisor 192 --smoothing 10
+```
+
+`--single-view-quantile 1` disables the single-view fallback. Pass the previous
+defaults (`--tolerance .04 --confidence-quantile .25 --discontinuity .05
+--single-view-quantile 1 --voxel-divisor 256 --truncation-voxels 4 --smoothing 0
+--max-triangles 0 --min-component-fraction 0`) to reproduce a Milestone 2 mesh
+for comparison.
+
 ## Geometry and coordinate contract
 
 VGGT infers cameras and depths jointly in one arbitrary-scale frame. Square pad
 preprocessing (518 pixels) records content bounds; padding is excluded from depth
-support. Lowest-quartile model confidence and depth discontinuities are masked.
+support. The lowest 10% of model confidence per view and depth discontinuities
+(over 12% neighbour jump) are masked.
 The transformer uses BF16 on supported GPUs (FP16 otherwise); camera/depth heads
 retain FP32. This avoids keeping duplicate FP32 transformer weights during inference.
 Depth-head execution uses two-frame chunks without reducing the selected views.
-Remaining pixels need depth agreement in another selected view (4% relative
-threshold). This is a heuristic, not calibrated confidence. Intrinsics belong to
+Remaining pixels need depth agreement in another selected view (8% relative
+threshold). In views where at least 10% of pixels agree (so the camera fits the
+others), unsupported pixels in that view's top 30% confidence are also kept so
+walls seen from one direction are not erased. This is a heuristic, not calibrated
+confidence. Intrinsics belong to
 the padded inference images, not the original photo dimensions.
 
 Open3D receives float depths with `depth_scale=1` and world-to-camera extrinsics.
-Voxel size is median supported depth / 256, truncation four voxels. Small isolated
-triangle components are removed. No Poisson fill, hull, or generated unseen region
+Voxel size is median supported depth / 192, truncation three voxels. Components
+smaller than 2% of the largest are removed as floaters, then Taubin smoothing (10
+iterations, no shrinkage) and quadric decimation to at most 250k triangles are
+applied. No Poisson fill, hull, or generated unseen region
 is used. Colors are exported as linear glTF vertex colors. Empty, non-finite,
 degenerate, colorless, or malformed mesh results fail publication.
 

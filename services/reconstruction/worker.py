@@ -14,7 +14,7 @@ import sys
 import time
 import traceback
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 VGGT_REVISION = 'a288dd0f14786c93483e45524328726ab7b1b4ce'
 
 
@@ -137,6 +137,9 @@ def reconstruct(request, output):
     torch.cuda.empty_cache()
     yy, xx = np.mgrid[:518, :518]
     valid = np.stack([(xx >= b[0]+1) & (xx < b[2]-1) & (yy >= b[1]+1) & (yy < b[3]-1) for b in bounds.numpy()])
+    if os.environ.get('ROOMSHIFT_DUMP_NPZ'):
+        # Raw model outputs for offline geometry tuning (tune.py); never served.
+        np.savez_compressed(os.environ['ROOMSHIFT_DUMP_NPZ'], depth=depth, conf=conf, k=k, e=e, rgb=rgb, valid=valid)
     depth, evidence = consistent_depths(depth, conf, k, e, valid, progress)
     mesh, stats = fuse_mesh(depth, rgb, k, e, progress)
     progress(.88, 'exporting_mesh')

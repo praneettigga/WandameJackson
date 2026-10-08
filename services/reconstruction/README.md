@@ -1,5 +1,56 @@
 # Local room reconstruction worker
 
+Mode 2 now uses **[Meshroom](https://github.com/alicevision/Meshroom) / AliceVision**
+photogrammetry (`meshroom_worker.py`): Structure-from-Motion, depth maps, meshing and
+texturing. The texture is baked into vertex colors and exported in the same GLB/manifest
+contract as before, so calibration, viewer and export are unchanged. Meshroom is MPL-2.0;
+there is no model checkpoint or licence step.
+
+## Meshroom setup (default engine)
+
+1. Download a Meshroom release for your OS (2023.3 or newer) from
+   <https://github.com/alicevision/Meshroom/releases> and unzip it to
+   `services/reconstruction/meshroom/`, or anywhere and set
+   `ROOMSHIFT_MESHROOM_BIN=<folder containing meshroom_batch(.exe)>`.
+   Depth maps need an NVIDIA GPU with CUDA.
+2. Create the small helper environment (no PyTorch):
+
+   ```bash
+   uv venv --python 3.12 services/reconstruction/.venv
+   uv pip install --python services/reconstruction/.venv/Scripts/python.exe -r services/reconstruction/requirements-meshroom.txt
+   services/reconstruction/.venv/Scripts/python.exe services/reconstruction/meshroom_worker.py --check
+   ```
+
+3. Photogrammetry takes minutes, not seconds. The API's default budget is
+   `ROOMSHIFT_RECONSTRUCTION_TIMEOUT=3600`. Use the **All selected views** budget (default)
+   for best coverage. Views Meshroom cannot place are recorded as `registered: false`; at
+   least three must register.
+
+Set `ROOMSHIFT_RECONSTRUCTION_ENGINE=vggt` to use the previous VGGT worker (below).
+
+## Demo presets (pre-baked videos)
+
+For demos, bake known videos offline with high-quality settings (denser frames,
+full-resolution depth maps, 8k texture), then serve them instantly when that exact file is
+uploaded:
+
+```bash
+python services/reconstruction/bake_demo.py demo1.mp4 living_room --frames 80
+# Optional: open the app on the uncalibrated result, pick points, then bake the calibration in:
+python services/reconstruction/bake_demo.py demo1.mp4 living_room --skip-meshroom     --reference 0.1,0,0.2,1.9,0,0.2,3.5 --floor 0,0,0,1,0,0,0,0,1
+```
+
+Outputs go to `services/reconstruction/demo/<name>/` (git-ignored; copy them to the demo
+machine), and the video's SHA-256 is recorded in `demo/presets.json`. Start the API with
+`ROOMSHIFT_DEMO_PRESETS=1`. Uploading a matching video prepares frames as usual, then
+**Reconstruct mesh** replays the Meshroom stages over `ROOMSHIFT_DEMO_DELAY` seconds
+(default 30) and publishes the baked mesh, already calibrated. Any other upload runs
+Meshroom live. The manifest records `provenance.precomputed: true`.
+
+---
+
+# Previous VGGT worker (`ROOMSHIFT_RECONSTRUCTION_ENGINE=vggt`)
+
 Milestone 2 adds a separate VGGT/CUDA process, depth consistency filtering,
 Open3D TSDF fusion, colored triangle GLB/PLY export, a mesh viewer, and failure-safe
 publication. This is an experimental pipeline. Passing API/synthetic geometry

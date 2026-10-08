@@ -14,13 +14,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .mesh_worker import run_worker
+from .mesh_worker import WORKER_DIR, demo_preset, run_worker
 from .captures import prepare_capture
 from .auto_scale import estimate_scale
 from .config import SCHEMA_VERSION
 from .errors import ApiError
 from .images import load_gray
 from .parser import PARSER_NAME, PARSER_VERSION, ParseError, parse_blueprint
+from .mesh_calibration import save_calibration
 from .storage import Storage, read_json
 from .validation import validate_scene
 
@@ -128,7 +129,7 @@ class JobRunner:
         self._queue.put(job["id"])
         return job
 
-    def submit_mesh(self, project: dict, max_views: int = 20) -> dict:
+    def submit_mesh(self, project: dict, max_views: int = 40) -> dict:
         with self._guard:
             if project["id"] in self._active:
                 raise ApiError(409, "JOB_IN_PROGRESS", "This project already has an active job.")
@@ -157,6 +158,9 @@ class JobRunner:
         capture_input["frames"] = [frames[i] for i in indices]
         capture_input["reconstructionSelection"] = {"maxViews": job["maxViews"], "availableViews": len(frames),
                                                     "selectedIndices": indices, "strategy": "uniform in capture order, including endpoints"}
+        preset = demo_preset(self.storage.get_project(job["projectId"]))
+        if preset:
+            capture_input["demoPreset"] = preset
         def cancelled():
             return job["id"] in self._cancel or self._stopping.is_set()
         def progress(value, stage):
@@ -173,7 +177,17 @@ class JobRunner:
                 project["meshManifestUrl"] = f"/api/projects/{job['projectId']}/mesh"
                 project["hasMesh"] = True
                 self.storage.save_project(project)
+            if preset:
+                self._apply_demo_calibration(job, preset)
             self._update(job, status="succeeded", stage="ready", progress=1., meshManifestUrl=project["meshManifestUrl"])
+
+    def _apply_demo_calibration(self, job: dict, preset: str):
+        """Open a demo mesh already scaled/floor-aligned with the calibration recorded at bake time."""
+        spec = read_json(WORKER_DIR / "demo" / preset / "calibration.json")
+        if spec:
+            save_calibration(self.storage, job["projectId"], {"jobId": job["id"], "expectedRevision": None,
+                                                              "reference": spec.get("reference"), "floor": spec.get("floor"),
+                                                              "rotationDegrees": spec.get("rotationDegrees", [0, 0, 0])})
 
     def _prepare(self, job: dict) -> None:
         project = self.storage.get_project(job["projectId"])

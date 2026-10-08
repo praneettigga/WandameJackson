@@ -23,7 +23,7 @@ def seed_capture(client):
 def synthetic_worker(tmp_path, monkeypatch):
     path = tmp_path / 'worker'
     path.mkdir()
-    script = path / 'worker.py'
+    script = path / 'meshroom_worker.py'
     script.write_text('''import json, sys, pathlib
 import numpy as np
 sys.path.insert(0, %r)
@@ -151,3 +151,60 @@ def test_view_budget_retains_capture_endpoints(client, synthetic_worker):
     cameras = client.get(job['meshManifestUrl']).json()['cameras']
     assert len(cameras) == 20 and cameras[0]['frameId'] == 'frame_0' and cameras[-1]['frameId'] == 'frame_39'
     assert client.post(f'/api/projects/{pid}/reconstruct-mesh', json={'maxViews': 4}).status_code == 400
+
+
+def test_unregistered_views_are_allowed_but_need_three_placed(client, synthetic_worker):
+    pid, _ = seed_capture(client)
+    script = synthetic_worker.read_text()
+    synthetic_worker.write_text(script.replace("cameras=[", "cameras=[{'frameId':f['id'],'registered':False} if i%2 else ").replace(
+        "for f in source['frames']]", "for i,f in enumerate(source['frames'])]"))
+    job = wait_job(client, submit(client, pid)['id'])
+    assert job['status'] == 'succeeded', job
+    synthetic_worker.write_text(script.replace("cameras=[", "cameras=[{'frameId':f['id'],'registered':False} if i>1 else ").replace(
+        "for f in source['frames']]", "for i,f in enumerate(source['frames'])]"))
+    assert wait_job(client, submit(client, pid)['id'])['error']['code'] == 'INVALID_MESH'
+
+
+def test_demo_preset_serves_baked_mesh_already_calibrated(client, tmp_path, monkeypatch):
+    import hashlib
+    import json
+    import shutil
+    import numpy as np
+    sys.path.insert(0, str(REPO_ROOT / 'services/reconstruction'))
+    from geometry import write_glb
+    worker = tmp_path / 'demo-worker'
+    preset = worker / 'demo/living_room'
+    preset.mkdir(parents=True)
+    shutil.copy(REPO_ROOT / 'services/reconstruction/meshroom_worker.py', worker)
+    v = np.array([[x/10, 0, y/10] for y in range(11) for x in range(11)])
+    t = [[a, a+11, a+1] for y in range(10) for x in range(10) for a in [y*11+x]]
+    t += [[a+1, a+11, a+12] for y in range(10) for x in range(10) for a in [y*11+x]]
+    write_glb(preset/'mesh.glb', v, t, np.ones_like(v)*.5, np.tile([0, 1, 0], (len(v), 1)))
+    (preset/'diagnostic.ply').write_text('ply\n')
+    camera = {'registered': True, 'worldToCamera': np.eye(4).tolist(), 'cameraToWorld': np.eye(4).tolist(), 'intrinsics': np.eye(3).tolist()}
+    (preset/'manifest.json').write_text(json.dumps({'cameras': [camera]*60, 'statistics': {'triangles': 200}}))
+    (preset/'calibration.json').write_text(json.dumps({'reference': {'pointA': [0, 0, 0], 'pointB': [1, 0, 0], 'distanceMeters': 4},
+                                                       'floor': None, 'rotationDegrees': [0, 0, 0]}))
+    video = b'demo video bytes'
+    (worker/'demo/presets.json').write_text(json.dumps([{'name': 'living_room', 'sha256': hashlib.sha256(video).hexdigest()}]))
+    monkeypatch.setattr('roomshift_api.mesh_worker.WORKER_DIR', worker)
+    monkeypatch.setattr('roomshift_api.jobs.WORKER_DIR', worker)
+    monkeypatch.setenv('ROOMSHIFT_RECONSTRUCTION_PYTHON', sys.executable)
+    monkeypatch.setenv('ROOMSHIFT_MESHROOM_BIN', str(tmp_path / 'no-meshroom'))
+    monkeypatch.setenv('ROOMSHIFT_DEMO_DELAY', '0')
+    pid, _ = seed_capture(client)
+    storage = client.app.state.storage
+    p = storage.get_project(pid)
+    p['source'] = {'kind': 'video', 'originals': [{'id': 'o1', 'sha256': hashlib.sha256(video).hexdigest()}]}
+    storage.save_project(p)
+
+    # Presets are off by default: the live path runs and Meshroom is missing.
+    assert wait_job(client, submit(client, pid)['id'])['error']['code'] == 'WORKER_NOT_CONFIGURED'
+    monkeypatch.setenv('ROOMSHIFT_DEMO_PRESETS', '1')
+    job = wait_job(client, submit(client, pid)['id'])
+    assert job['status'] == 'succeeded', job
+    result = client.get(job['meshManifestUrl']).json()
+    assert result['units'] == 'meters' and result['calibration']['scale'] == 4
+    assert result['provenance']['precomputed'] and result['provenance']['model'] == 'Meshroom/AliceVision'
+    assert [c['frameId'] for c in result['cameras']] == [f'frame_{i}' for i in range(12)]
+    assert client.get(result['meshUrl']).content[:4] == b'glTF'

@@ -13,7 +13,7 @@ import { CaptureGuide } from './CaptureGuide';
 import { CalibratedMesh } from './CalibratedMesh';
 
 export function CaptureWorkspace() {
-  const [viewBudget, setViewBudget] = useState(20);
+  const [viewBudget, setViewBudget] = useState(40);
   const [mesh, setMesh] = useState<MeshResult | null>(null);
   const [capabilities, setCapabilities] = useState<WorkerCapabilities | null>(null);
   const [view, setView] = useState<'source' | 'mesh'>('source');
@@ -409,10 +409,10 @@ export function CaptureWorkspace() {
                 disabled={busy}
                 onChange={(e) => setViewBudget(Number(e.target.value))}
               >
-                <option value={12}>12 · lower VRAM</option>
+                <option value={12}>12 · fastest</option>
                 <option value={20}>20 views</option>
                 <option value={32}>32 views</option>
-                <option value={40}>All selected views</option>
+                <option value={40}>All selected views (best)</option>
               </select>
             </label>
             <button

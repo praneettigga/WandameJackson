@@ -50,7 +50,7 @@ class ReconstructIn(BaseModel):
 
 class MeshReconstructIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    maxViews: Literal[12, 20, 32, 40] = 20
+    maxViews: Literal[12, 20, 32, 40] = 40
 
 
 class MeshReferenceIn(BaseModel):

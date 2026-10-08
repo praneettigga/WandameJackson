@@ -15,6 +15,23 @@ from .errors import ApiError
 from .storage import atomic_write_json, read_json
 
 WORKER_DIR = REPO_ROOT / 'services/reconstruction'
+DEFAULT_TIMEOUT = '3600'
+
+
+def worker_script():
+    # Meshroom is the default engine; ROOMSHIFT_RECONSTRUCTION_ENGINE=vggt keeps the old worker for comparison.
+    engine = os.environ.get('ROOMSHIFT_RECONSTRUCTION_ENGINE', 'meshroom')
+    return WORKER_DIR / ('worker.py' if engine == 'vggt' else 'meshroom_worker.py')
+
+
+def demo_preset(project):
+    """Name of an offline-baked demo mesh whose source video matches this capture, if enabled."""
+    if os.environ.get('ROOMSHIFT_DEMO_PRESETS') != '1':
+        return None
+    presets = read_json(WORKER_DIR / 'demo/presets.json') or []
+    hashes = {o.get('sha256') for o in project.get('source', {}).get('originals', [])}
+    return next((p['name'] for p in presets if p['sha256'] in hashes
+                 and (WORKER_DIR / 'demo' / p['name'] / 'mesh.glb').is_file()), None)
 
 
 def worker_python():
@@ -24,7 +41,7 @@ def worker_python():
 
 def capability_report():
     try:
-        result = subprocess.run([worker_python(), str(WORKER_DIR / 'worker.py'), '--check'],
+        result = subprocess.run([worker_python(), str(worker_script()), '--check'],
                                 capture_output=True, text=True, timeout=30)
         return json.loads(result.stdout)
     except (OSError, subprocess.TimeoutExpired, ValueError):
@@ -102,7 +119,13 @@ def validate_result(output, project_id, job_id, input_manifest):
     cameras = manifest.get('cameras', [])
     if manifest.get('inputJobId') != input_manifest['jobId'] or len(cameras) != len(frames):
         raise ApiError(422, 'INVALID_MESH', 'Camera provenance does not match the accepted capture.')
+    if sum(camera.get('registered', True) for camera in cameras) < 3:
+        raise ApiError(422, 'INVALID_MESH', 'Too few views could be placed. Capture with more overlap and texture.')
     for camera, frame in zip(cameras, frames):
+        if camera.get('registered', True) is False:
+            if camera.get('frameId') != frame['id']:
+                raise ApiError(422, 'INVALID_MESH', 'Invalid camera coordinate data.')
+            continue
         try:
             w2c, c2w = np.asarray(camera['worldToCamera']), np.asarray(camera['cameraToWorld'])
             k = np.asarray(camera['intrinsics'])
@@ -128,7 +151,10 @@ def terminate_process(process):
             except ProcessLookupError:
                 pass
         else:
-            process.kill()
+            # Kill the whole tree: the worker's meshroom_batch/AliceVision children too.
+            subprocess.run(['taskkill', '/T', '/F', '/PID', str(process.pid)], capture_output=True)
+            if process.poll() is None:
+                process.kill()
     process.wait()
 
 
@@ -137,7 +163,7 @@ def run_worker(root, job, input_manifest, progress, cancelled):
     output.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
     prep = input_manifest.get('processing', {}).get('elapsedSeconds')
-    budget = max(1., float(os.environ.get('ROOMSHIFT_RECONSTRUCTION_TIMEOUT', '300')) - (prep or 0))
+    budget = max(1., float(os.environ.get('ROOMSHIFT_RECONSTRUCTION_TIMEOUT', DEFAULT_TIMEOUT)) - (prep or 0))
     atomic_write_json(output / 'request.json', {'jobId': job['id'], 'parentPid': os.getpid(), 'projectRoot': str(root.resolve()), 'input': input_manifest})
     try:
         with (output / 'worker.log').open('wb') as log:
@@ -145,7 +171,7 @@ def run_worker(root, job, input_manifest, progress, cancelled):
                 environment = dict(os.environ)
                 environment.setdefault('OMP_NUM_THREADS', '4')
                 environment.setdefault('OPENBLAS_NUM_THREADS', '4')
-                process = subprocess.Popen([worker_python(), str(WORKER_DIR / 'worker.py'), '--request', str(output / 'request.json')],
+                process = subprocess.Popen([worker_python(), str(worker_script()), '--request', str(output / 'request.json')],
                                            stdout=log, stderr=log, env=environment, start_new_session=os.name == 'posix')
             except OSError:
                 raise ApiError(422, 'WORKER_NOT_CONFIGURED', 'Set up the reconstruction worker environment before generating a mesh.')

@@ -2,6 +2,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import {
   Grid,
+  Html,
   Line,
   OrbitControls,
   PointerLockControls,
@@ -11,6 +12,68 @@ import * as THREE from 'three';
 import { buildSceneGeometry, collides, disposeGeometry, pointInRoom } from './geometry';
 import { useEditor } from './store';
 import { resizedObject, type Scene, type V3 } from './scene';
+
+function MeasurePoint({
+  position,
+  label,
+  ghost,
+}: {
+  position: V3;
+  label: string;
+  ghost?: boolean;
+}) {
+  return (
+    <group position={position}>
+      <mesh renderOrder={10}>
+        <sphereGeometry args={[0.035]} />
+        <meshBasicMaterial
+          color="#f3bd63"
+          depthTest={false}
+          transparent={ghost}
+          opacity={ghost ? 0.6 : 1}
+        />
+      </mesh>
+      <Html center zIndexRange={[20, 0]} style={{ pointerEvents: 'none' }}>
+        <div className={ghost ? 'measure-point ghost' : 'measure-point'}>{label}</div>
+      </Html>
+    </group>
+  );
+}
+function MeasureOverlay({ points, hover }: { points: V3[]; hover: V3 | null }) {
+  const ends: V3[] = points.length === 1 && hover ? [points[0], hover] : points;
+  const a = ends[0] && new THREE.Vector3(...ends[0]),
+    b = ends[1] && new THREE.Vector3(...ends[1]);
+  return (
+    <>
+      {points.map((p, i) => (
+        <MeasurePoint key={i} position={p} label={i === 0 ? 'A' : 'B'} />
+      ))}
+      {points.length === 1 && hover && <MeasurePoint position={hover} label="B" ghost />}
+      {a && b && (
+        <>
+          <Line
+            points={[a, b]}
+            color="#f3bd63"
+            lineWidth={2}
+            dashed={points.length < 2}
+            dashSize={0.08}
+            gapSize={0.05}
+            depthTest={false}
+            renderOrder={9}
+          />
+          <Html
+            position={a.clone().lerp(b, 0.5)}
+            center
+            zIndexRange={[20, 0]}
+            style={{ pointerEvents: 'none' }}
+          >
+            <div className="measure-label">{a.distanceTo(b).toFixed(3)} m</div>
+          </Html>
+        </>
+      )}
+    </>
+  );
+}
 
 function FrameCamera({ root }: { root: THREE.Group }) {
   const camera = useThree((s) => s.camera),
@@ -116,10 +179,18 @@ function World() {
         ? buildSceneGeometry(state.scene, {
             ceilings: state.ceilings || state.workspace === 'Explore',
             xray: state.xray,
+            confidence: state.confidenceMap,
             selectedId: state.selectedId,
           })
         : new THREE.Group(),
-    [state.scene, state.ceilings, state.workspace, state.xray, state.selectedId],
+    [
+      state.scene,
+      state.ceilings,
+      state.workspace,
+      state.xray,
+      state.confidenceMap,
+      state.selectedId,
+    ],
   );
   const ghost = useMemo(
     () =>
@@ -138,6 +209,15 @@ function World() {
   const selected = state.scene?.objects.find((o) => o.id === state.selectedId);
   const target = selected ? root.getObjectByName(selected.id) : undefined;
   const dragging = useRef(false);
+  const [hover, setHover] = useState<V3 | null>(null);
+  useEffect(() => {
+    if (!state.measure || state.measures.length !== 1) setHover(null);
+  }, [state.measure, state.measures.length]);
+  function move(event: ThreeEvent<PointerEvent>) {
+    if (!state.measure || state.measures.length !== 1 || state.workspace === 'Explore') return;
+    event.stopPropagation();
+    setHover([event.point.x, event.point.y, event.point.z]);
+  }
   function click(event: ThreeEvent<MouseEvent>) {
     event.stopPropagation();
     if (dragging.current || state.workspace === 'Explore') return;
@@ -154,7 +234,12 @@ function World() {
       <ambientLight intensity={0.9} />
       <hemisphereLight args={['#e1ecef', '#5c635c', 1.5]} />
       <directionalLight position={[3, 9, 5]} intensity={2.2} />
-      <primitive object={root} onClick={click} />
+      <primitive
+        object={root}
+        onClick={click}
+        onPointerMove={move}
+        onPointerOut={() => setHover(null)}
+      />
       {ghost && <primitive object={ghost} raycast={() => null} />}
       {state.workspace !== 'Explore' && (
         <>
@@ -206,15 +291,7 @@ function World() {
         </>
       )}
       {state.workspace === 'Explore' && state.scene && <FirstPerson scene={state.scene} />}
-      {state.measures.map((p, i) => (
-        <mesh key={i} position={p} userData={{ helper: true }}>
-          <sphereGeometry args={[0.035]} />
-          <meshBasicMaterial color="#f3bd63" depthTest={false} />
-        </mesh>
-      ))}
-      {state.measures.length === 2 && (
-        <Line points={state.measures} color="#f3bd63" lineWidth={2} />
-      )}
+      {state.measure && <MeasureOverlay points={state.measures} hover={hover} />}
     </>
   );
 }
@@ -276,19 +353,15 @@ export function Viewport() {
           <span>Eye level 1.65 m · Simple wall and furniture collision</span>
         </div>
       )}
-      {measure && (
-        <div className="measure-readout">
-          {measures.length === 2
-            ? `${new THREE.Vector3(...measures[0]).distanceTo(new THREE.Vector3(...measures[1])).toFixed(3)} m`
-            : 'Click two surface points to measure'}
-          <small>3D straight-line distance</small>
-        </div>
-      )}
       <div className="viewport-bottom">
         <span>
           {workspace === 'Explore'
             ? 'WALK / 2 m/s'
-            : 'LMB select · Drag to orbit · RMB pan · Scroll zoom'}
+            : measure
+              ? measures.length === 1
+                ? 'MEASURE · Click to place point B · Esc to exit'
+                : 'MEASURE · Click a surface to place point A · Esc to exit'
+              : 'LMB select · Drag to orbit · RMB pan · Scroll zoom'}
         </span>
         <span>
           X <i className="axis-x">━</i> Y <i className="axis-y">━</i> Z <i className="axis-z">━</i>

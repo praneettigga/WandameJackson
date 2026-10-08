@@ -867,6 +867,83 @@ code {
 .capitalize {
   text-transform: capitalize;
 }
+.origin-tag,
+.confidence-chip {
+  display: inline-block;
+  border: 1px solid;
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 6px;
+  font-size: 8px;
+  line-height: 13px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  vertical-align: middle;
+  cursor: help;
+}
+.kv .origin-tag {
+  margin-left: 0;
+}
+.entity-badges {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+.entity-badges > span {
+  margin-left: 0;
+}
+.tree-item .confidence-chip {
+  margin-left: auto;
+}
+.meter {
+  height: 5px;
+  background: #2c3438;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 4px 0 8px;
+}
+.meter.small {
+  height: 3px;
+  margin: 2px 0 4px;
+}
+.meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+.factor {
+  margin: 10px 0 0;
+}
+.factor .kv {
+  margin: 0;
+}
+.factor-detail {
+  font-size: 9px;
+  line-height: 1.5;
+  color: #7f9097;
+  margin: 0;
+}
+.inferred-note b {
+  color: #e7b665;
+  font-weight: 500;
+}
+.confidence-summary p {
+  margin-bottom: 4px;
+}
+.review-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px 18px;
+  font-size: 10px;
+  color: #a5b0b3;
+}
+.review-list button {
+  font-size: 10px;
+  padding: 2px 7px;
+}
 .parser-info {
   background: #222b30;
 }
@@ -963,26 +1040,34 @@ code {
   letter-spacing: 0.8px;
   pointer-events: none;
 }
-.measure-readout {
-  position: absolute;
-  bottom: 45px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 12px 18px;
+.measure-point {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-top: -24px;
+  border: 1px solid #24292b;
+  border-radius: 50%;
+  background: #f3bd63;
+  color: #171a1c;
+  font-size: 11px;
+  font-weight: 700;
+  user-select: none;
+}
+.measure-point.ghost {
+  opacity: 0.65;
+}
+.measure-label,
+.calibration-length {
+  padding: 3px 7px;
   border: 1px solid #77684d;
+  border-radius: 3px;
   background: #252b2de8;
   color: #f0c487;
-  font-size: 17px;
-  text-align: center;
-  pointer-events: none;
-  border-radius: 4px;
+  font-size: 12px;
   white-space: nowrap;
-}
-.measure-readout small {
-  display: block;
-  font-size: 9px;
-  color: #99a9ae;
-  margin-top: 4px;
+  user-select: none;
+  transform: translateY(-16px);
 }
 .explore-overlay {
   position: absolute;

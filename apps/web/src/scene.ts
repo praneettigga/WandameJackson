@@ -19,6 +19,11 @@ export const provenance = z.strictObject({
   userEdited: z.boolean(),
   fieldOrigins: z.record(z.string(), origin),
   notes: z.array(z.string()),
+  confidenceFactors: z
+    .array(
+      z.strictObject({ label: z.string().min(1), score: number.min(0).max(1), detail: z.string() }),
+    )
+    .optional(),
 });
 export const objectSchema = z.strictObject({
   id,
@@ -97,6 +102,8 @@ export type Wall = z.infer<typeof wallSchema>;
 export type Opening = z.infer<typeof openingSchema>;
 export type Room = z.infer<typeof roomSchema>;
 export type Provenance = z.infer<typeof provenance>;
+export type Origin = z.infer<typeof origin>;
+export type ConfidenceLevel = 'high' | 'medium' | 'low' | 'none';
 export type V2 = z.infer<typeof v2>;
 export type V3 = z.infer<typeof v3>;
 export type Entity = Room | Wall | Opening | SceneObject;
@@ -108,6 +115,16 @@ export const entities = (scene: Scene): Entity[] => [
 ];
 export const entityById = (scene: Scene, id: string | null) =>
   entities(scene).find((e) => e.id === id);
+// Parser scores are heuristic evidence strengths, not calibrated probabilities; bands keep the UI honest about that.
+export const confidenceLevel = (confidence: number | null): ConfidenceLevel =>
+  confidence === null ? 'none' : confidence >= 0.8 ? 'high' : confidence >= 0.5 ? 'medium' : 'low';
+export const fieldOrigin = (entity: Entity, field: string): Origin =>
+  entity.provenance.fieldOrigins[field] ?? entity.provenance.origin;
+/** Fields whose values were assumed or derived rather than read from the drawing. */
+export const inferredFields = (entity: Entity) =>
+  Object.entries(entity.provenance.fieldOrigins)
+    .filter(([, o]) => o === 'inferred')
+    .map(([field]) => field);
 export const wallLength = (wall: Wall) =>
   Math.hypot(wall.end[0] - wall.start[0], wall.end[1] - wall.start[1]);
 

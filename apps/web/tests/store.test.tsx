@@ -106,4 +106,28 @@ describe('semantic editor state', () => {
     expect(useEditor.getState().scene!.objects[0].dimensions[0]).toBe(1.7);
     expect(useEditor.getState().scene!.objects[0].provenance.fieldOrigins.dimensions).toBe('user');
   });
+  it('explains parser confidence factors and flags inferred fields the score does not cover', () => {
+    const scene = demoScene();
+    Object.assign(scene.walls[0].provenance, {
+      origin: 'evidence',
+      confidence: 0.42,
+      confidenceFactors: [
+        { label: 'Stroke coverage', score: 0.9, detail: '90% backed by a solid wall stroke.' },
+        { label: 'Junctions', score: 0.2, detail: 'Neither end meets another wall.' },
+      ],
+    });
+    useEditor.getState().load(scene);
+    useEditor.getState().select('wall-n');
+    render(<Inspector />);
+    expect(screen.getByRole('meter', { name: 'Detection confidence' })).toHaveAttribute(
+      'aria-valuenow',
+      '42',
+    );
+    expect(screen.getByText('Neither end meets another wall.')).toBeInTheDocument();
+    expect(screen.getByText('Not read from the drawing:').parentElement).toHaveTextContent(
+      'height, thickness',
+    );
+    const height = screen.getByLabelText('Wall height').closest('label')!;
+    expect(height).toHaveTextContent('inferred');
+  });
 });

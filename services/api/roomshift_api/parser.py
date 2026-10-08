@@ -58,7 +58,8 @@ class WallLine:
     a0: float
     a1: float
     thick: float
-    openings: list = field(default_factory=list)  # (type, g0, g1) in px along the axis
+    openings: list = field(default_factory=list)  # (type, g0, g1, filled) in px along the axis
+    joined: int = 0  # endpoints snapped to a perpendicular wall (0-2)
 
 
 def _runs(mask: np.ndarray) -> np.ndarray:
@@ -142,7 +143,7 @@ def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warni
                 cur = WallLine(b.orient, pos, b.a0, b.a1, thick)
                 continue
             if kind:
-                cur.openings.append((kind, cur.a1, b.a0))
+                cur.openings.append((kind, cur.a1, b.a0, filled))
             cur.a1 = b.a1
         lines.append(cur)
     return lines
@@ -159,6 +160,7 @@ def _snap(lines: list[WallLine], perpendicular: list[WallLine], T: float) -> Non
                         best = p.pos
             if best is not None:
                 setattr(ln, end, best)
+                ln.joined += 1
 
 
 def _rooms(lines: list[WallLine], shape, T: float, mpp: float) -> list[list[list[float]]]:
@@ -191,8 +193,107 @@ def _rooms(lines: list[WallLine], shape, T: float, mpp: float) -> list[list[list
         if poly.geom_type != "Polygon" or not poly.is_valid or poly.area <= 0:
             continue
         coords = list(poly.exterior.coords)[:-1]
-        polys.append([[round(px * mpp, 4), round(py * mpp, 4)] for px, py in coords])
+        polys.append(([[round(px * mpp, 4), round(py * mpp, 4)] for px, py in coords], coords))
     return polys
+
+
+# --- confidence -------------------------------------------------------------
+# Scores are heuristic evidence strengths in [0, 1], computed from measurements of the drawing. They are not
+# calibrated probabilities. Each factor is reported so users can see why a score is high or low; the overall
+# score is the geometric mean, so one weak signal pulls it down. Assumed values (heights, sills) are never scored.
+
+def _factor(label: str, score: float, detail: str) -> dict:
+    return {"label": label, "score": round(min(1.0, max(0.0, score)), 2), "detail": detail}
+
+
+def _overall(factors: list[dict]) -> float:
+    return round(float(np.exp(np.mean([np.log(max(f["score"], 0.01)) for f in factors]))), 2)
+
+
+def _span_typicality(value: float, typical: tuple[float, float], limits: tuple[float, float]) -> float:
+    """1 inside the typical range, falling linearly to 0.5 at the accepted limits, never below 0.3."""
+    lo, hi = typical
+    if value < lo:
+        return max(0.3, 1 - 0.5 * (lo - value) / max(lo - limits[0], 1e-9))
+    if value > hi:
+        return max(0.3, 1 - 0.5 * (value - hi) / max(limits[1] - hi, 1e-9))
+    return 1.0
+
+
+def _wall_factors(ln: WallLine, thick_mask: np.ndarray, T: float) -> list[dict]:
+    m = thick_mask if ln.orient == "h" else thick_mask.T
+    a0, a1 = int(round(ln.a0)), int(round(ln.a1))
+    keep = np.ones(max(0, a1 - a0), bool)
+    for _, g0, g1, _ in ln.openings:
+        keep[max(0, int(g0) - a0):max(0, int(math.ceil(g1)) - a0)] = False
+    r0, r1 = int(max(0, math.floor(ln.pos - T / 2))), int(math.ceil(ln.pos + T / 2))
+    stroke = (m[r0:r1, a0:a1] > 0).any(axis=0)[keep] if keep.any() else np.zeros(0, bool)
+    coverage = float(stroke.mean()) if stroke.size else 0.0
+
+    # Width consistency away from the ends, where perpendicular walls widen the stroke.
+    w0, w1 = int(max(0, math.floor(ln.pos - T))), int(math.ceil(ln.pos + T))
+    widths = (m[w0:w1, a0:a1] > 0).sum(axis=0).astype(float)
+    inner = keep.copy()
+    edge = int(math.ceil(T))
+    inner[:edge], inner[-edge:] = False, False
+    widths = widths[inner & (widths > 0)]
+    cv = float(widths.std() / widths.mean()) if widths.size >= 3 else 0.5
+    joined = {0: (0.4, "Neither end meets another wall (free-standing stroke)."),
+              1: (0.7, "One end meets an adjoining wall; the other end is free."),
+              2: (1.0, "Both ends meet adjoining walls.")}[min(ln.joined, 2)]
+    return [
+        _factor("Stroke coverage", coverage,
+                f"{coverage:.0%} of the wall line (excluding doors/windows) is backed by a solid wall stroke."),
+        _factor("Width consistency", 1 - cv / 0.5,
+                f"Stroke width varies by about {cv:.0%} along the wall."),
+        _factor("Junctions", joined[0], joined[1]),
+    ]
+
+
+def _opening_factors(kind: str, ln: WallLine, g0: float, g1: float, filled: float,
+                     ink: np.ndarray, thick_mask: np.ndarray, T: float, mpp: float) -> list[dict]:
+    width_m = (g1 - g0) * mpp
+    if kind == "door":
+        factors = [
+            _factor("Gap clarity", 1 - 2.5 * filled,
+                    f"The gap is {1 - filled:.0%} empty (a door needs at least 80%)."),
+            _factor("Width", _span_typicality(width_m, (0.7, 1.0), DOOR_RANGE_M),
+                    f"{width_m:.2f} m {'is a typical door width' if 0.7 <= width_m <= 1.0 else 'is an unusual door width; check the calibration'} (typical 0.70–1.00 m)."),
+        ]
+        # A door swing arc or leaf is thin linework beside the gap, on either side of the wall.
+        thin = (ink > 0) & ~(thick_mask > 0)
+        t = thin if ln.orient == "h" else thin.T
+        span = slice(int(g0), int(math.ceil(g1)))
+        reach = int(math.ceil(g1 - g0))
+        near, far = int(math.ceil(ln.pos + T / 2)), int(math.floor(ln.pos - T / 2))
+        sides = [t[near:near + reach, span], t[max(0, far - reach):max(0, far), span]]
+        density = max((float(s.mean()) for s in sides if s.size), default=0.0)
+        found = density >= 0.01
+        factors.append(_factor("Door symbol", 1.0 if found else 0.55,
+                               "A door swing arc or leaf was found beside the gap." if found else
+                               "No door swing symbol beside the gap; this may be an open passage."))
+        return factors
+    return [
+        _factor("Glazing lines", 0.5 + 2.5 * (filled - 0.8),
+                f"Thin lines fill {filled:.0%} of the gap (a window needs at least 80%)."),
+        _factor("Width", _span_typicality(width_m, (0.6, 2.4), (MIN_WINDOW_M, 4.0)),
+                f"{width_m:.2f} m {'is a typical window width' if 0.6 <= width_m <= 2.4 else 'is an unusual window width; check the calibration'} (typical 0.60–2.40 m)."),
+    ]
+
+
+def _room_factors(outline_px: list[tuple[float, float]], thick_mask: np.ndarray, T: float) -> list[dict]:
+    near_wall = cv2.dilate(thick_mask, np.ones((int(T) | 1, int(T) | 1), np.uint8)) > 0
+    h, w = near_wall.shape
+    hits = total = 0
+    for (x0, y0), (x1, y1) in zip(outline_px, outline_px[1:] + outline_px[:1]):
+        n = max(2, int(math.hypot(x1 - x0, y1 - y0)))
+        for s in np.linspace(0, 1, n, endpoint=False):
+            x, y = int(x0 + s * (x1 - x0)), int(y0 + s * (y1 - y0))
+            total += 1
+            hits += bool(near_wall[min(max(y, 0), h - 1), min(max(x, 0), w - 1)])
+    support = hits / total if total else 0.0
+    return [_factor("Boundary support", support,
+                    f"{support:.0%} of the outline follows drawn walls; the rest was closed across doors, windows or gaps.")]
 
 
 def parse_blueprint(
@@ -255,10 +356,10 @@ def parse_blueprint(
     if not (0.03 <= measured_m <= 1.0) and wall_thickness is None:
         warnings.append(f"Measured wall thickness {measured_m:.3f} m is implausible; check the calibration. Using {DEFAULT_WALL_THICKNESS} m.")
 
-    def prov(origin: str, field_origins: dict, notes: list[str]) -> dict:
+    def prov(origin: str, field_origins: dict, notes: list[str], factors: list[dict]) -> dict:
         return {
-            "origin": origin, "confidence": None, "source": f"{PARSER_NAME}@{PARSER_VERSION}",
-            "userEdited": False, "fieldOrigins": field_origins, "notes": notes,
+            "origin": origin, "confidence": _overall(factors), "source": f"{PARSER_NAME}@{PARSER_VERSION}",
+            "userEdited": False, "fieldOrigins": field_origins, "notes": notes, "confidenceFactors": factors,
         }
 
     walls, openings = [], []
@@ -284,9 +385,10 @@ def parse_blueprint(
             "thickness": round(t_m, 4),
             "provenance": prov("evidence", {"height": height_origin, "thickness": t_origin},
                                [t_note, "Centerline from detected wall stroke; endpoints snapped to adjoining walls.",
-                                f"Height {'supplied by the user' if wall_height is not None else 'assumed from the default'}: {height} m."]),
+                                f"Height {'supplied by the user' if wall_height is not None else 'assumed from the default'}: {height} m."],
+                               _wall_factors(ln, thick, T)),
         })
-        for kind, g0, g1 in ln.openings:
+        for kind, g0, g1, filled in ln.openings:
             offset = max(0.0, (g0 - ln.a0) * mpp)
             width = min((g1 - g0) * mpp, length_m - offset)
             if width <= 0:
@@ -303,17 +405,19 @@ def parse_blueprint(
             openings.append({
                 "id": f"{kind}-{len(openings) + 1}", "type": kind, "wallId": wid,
                 "offset": round(offset, 4), "width": round(width, 4), "height": o_h, "bottom": o_b,
-                "provenance": prov("inferred", fo, notes),
+                "provenance": prov("inferred", fo, notes,
+                                   _opening_factors(kind, ln, g0, g1, filled, ink, thick, T, mpp)),
             })
     progress(0.8)
 
     rooms = []
-    for j, poly in enumerate(_rooms(lines, (h_img, w_img), T, mpp), 1):
+    for j, (poly, outline_px) in enumerate(_rooms(lines, (h_img, w_img), T, mpp), 1):
         rooms.append({
             "id": f"room-{j}", "name": f"Room {j}", "polygon": poly, "height": height,
             "provenance": prov("inferred", {"height": height_origin},
                                ["Enclosed region bounded by detected walls (openings closed), offset to wall centerlines.",
-                                "Ceiling inferred from this footprint at the room height; not observed in the drawing."]),
+                                "Ceiling inferred from this footprint at the room height; not observed in the drawing."],
+                               _room_factors(outline_px, thick, T)),
         })
     if not rooms:
         warnings.append("No enclosed rooms were detected; walls were reconstructed without floors.")

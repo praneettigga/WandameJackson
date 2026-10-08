@@ -77,7 +77,7 @@ Provenance on each element type:
 | Walls | `evidence` | thickness `evidence`, or `user` if supplied; height `inferred`, or `user` if supplied | |
 | Openings | `inferred` | height/bottom `inferred` (door 2.1 m; window sill 0.9 m, height 1.2 m) | |
 | Rooms | `inferred` | | |
-| All of the above | | | `confidence: null`, explanatory `notes` |
+| All of the above | | | heuristic `confidence` with `confidenceFactors` (see API contract), explanatory `notes` |
 
 Objects are always `[]`, because furniture is not extracted.
 

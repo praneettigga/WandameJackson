@@ -27,6 +27,7 @@ type EditorState = {
   mode: Mode;
   snap: boolean;
   xray: boolean;
+  confidenceMap: boolean;
   ceilings: boolean;
   sourceScene: Scene | null;
   compare: boolean;
@@ -57,6 +58,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   mode: 'translate',
   snap: true,
   xray: false,
+  confidenceMap: false,
   ceilings: false,
   sourceScene: null,
   compare: false,

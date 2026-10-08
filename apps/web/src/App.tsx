@@ -1,7 +1,16 @@
-import { Component, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  Component,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from 'react';
 import { api, pollJob, type Job, type ProjectEnvelope } from './api';
 import {
   components,
+  confidenceLevel,
   entities,
   exportSceneJson,
   geometryWarnings,
@@ -10,8 +19,8 @@ import {
   type V2,
 } from './scene';
 import { useEditor } from './store';
-import { download, exportGlb, originColors } from './geometry';
-import { Inspector } from './Inspector';
+import { confidenceColors, download, exportGlb, originColors, originLabels } from './geometry';
+import { ConfidenceChip, Inspector } from './Inspector';
 import { Viewport } from './Viewport';
 
 class ViewportBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
@@ -89,13 +98,29 @@ function Calibration({
   project,
   points,
   setPoints,
+  distance,
 }: {
   project: ProjectEnvelope;
   points: V2[];
   setPoints: (p: V2[]) => void;
+  distance: string;
 }) {
   const [imageError, setImageError] = useState(false);
+  const [hover, setHover] = useState<V2 | null>(null);
   useEffect(() => setImageError(false), [project]);
+  const toImage = (e: ReactMouseEvent<HTMLDivElement>) =>
+    imagePoint(
+      e.clientX,
+      e.clientY,
+      e.currentTarget.getBoundingClientRect(),
+      project.image.width,
+      project.image.height,
+    );
+  const w = project.image.width;
+  const ghost = points.length === 1 ? hover : null;
+  const ends = ghost ? [points[0], ghost] : points.length === 2 ? points : null;
+  const marks: [V2, string, boolean][] = points.map((p, i) => [p, i === 0 ? 'A' : 'B', false]);
+  if (ghost) marks.push([ghost, 'B', true]);
   return (
     <div className="calibration-view">
       <div className="viewport-label">
@@ -104,15 +129,14 @@ function Calibration({
       <div
         className="calibration-image"
         onClick={(e) => {
-          const p = imagePoint(
-            e.clientX,
-            e.clientY,
-            e.currentTarget.getBoundingClientRect(),
-            project.image.width,
-            project.image.height,
-          );
-          if (p && !imageError) setPoints(points.length >= 2 ? [p] : [...points, p]);
+          const p = toImage(e);
+          if (p && !imageError) {
+            setPoints(points.length >= 2 ? [p] : [...points, p]);
+            setHover(null);
+          }
         }}
+        onMouseMove={(e) => setHover(points.length === 1 && !imageError ? toImage(e) : null)}
+        onMouseLeave={() => setHover(null)}
       >
         <img
           src={api.imageUrl(project.image.url)}
@@ -124,36 +148,53 @@ function Calibration({
           preserveAspectRatio="xMidYMid meet"
           aria-hidden="true"
         >
-          {points.length === 2 && (
-            <line
-              x1={points[0][0]}
-              y1={points[0][1]}
-              x2={points[1][0]}
-              y2={points[1][1]}
-              stroke="#e99f39"
-              strokeWidth={project.image.width / 400}
-            />
+          {ends && (
+            <>
+              <line
+                x1={ends[0][0]}
+                y1={ends[0][1]}
+                x2={ends[1][0]}
+                y2={ends[1][1]}
+                stroke="#e99f39"
+                strokeWidth={w / 400}
+                strokeDasharray={ghost ? `${w / 120} ${w / 200}` : undefined}
+              />
+              <text
+                x={(ends[0][0] + ends[1][0]) / 2}
+                y={(ends[0][1] + ends[1][1]) / 2 - w / 50}
+                textAnchor="middle"
+                fontSize={w / 50}
+                fontWeight="bold"
+                fill="#f0c487"
+                stroke="#171a1c"
+                strokeWidth={w / 250}
+                paintOrder="stroke"
+              >
+                {Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]).toFixed(1)} px
+                {!ghost && distance && Number(distance) > 0 ? ` = ${Number(distance)} m` : ''}
+              </text>
+            </>
           )}
-          {points.map(([x, y], i) => (
-            <g key={i}>
+          {marks.map(([[x, y], label, isGhost], i) => (
+            <g key={i} opacity={isGhost ? 0.65 : 1}>
               <circle
                 cx={x}
                 cy={y}
-                r={project.image.width / 65}
+                r={w / 65}
                 fill="#f3bd63"
                 stroke="#24292b"
-                strokeWidth={project.image.width / 600}
+                strokeWidth={w / 600}
               />
               <text
                 x={x}
                 y={y}
                 textAnchor="middle"
                 dominantBaseline="central"
-                fontSize={project.image.width / 55}
+                fontSize={w / 55}
                 fontWeight="bold"
                 fill="#171a1c"
               >
-                {i === 0 ? 'A' : 'B'}
+                {label}
               </text>
             </g>
           ))}
@@ -312,6 +353,15 @@ export default function App() {
   const warnings = state.scene
     ? [...state.scene.reconstruction.warnings, ...geometryWarnings(state.scene)]
     : [];
+  const scored = state.scene
+    ? entities(state.scene).filter((e) => e.provenance.confidence !== null)
+    : [];
+  const review = scored
+    .filter((e) => confidenceLevel(e.provenance.confidence) === 'low')
+    .sort((a, b) => a.provenance.confidence! - b.provenance.confidence!);
+  const inferredCount = state.scene
+    ? entities(state.scene).filter((e) => e.provenance.origin === 'inferred').length
+    : 0;
   const disabled = working || state.busy;
   const renderBlueprint = state.workspace === 'Reconstruct' && project && showBlueprint;
   async function reconstruct() {
@@ -595,7 +645,11 @@ export default function App() {
                                 ? `${entity.type} / ${entity.id}`
                                 : entity.id}
                           </span>
-                          <i style={{ background: originColors[entity.provenance.origin] }} />
+                          <ConfidenceChip confidence={entity.provenance.confidence} />
+                          <i
+                            title={originLabels[entity.provenance.origin]}
+                            style={{ background: originColors[entity.provenance.origin] }}
+                          />
                         </button>
                       ))}
                     </div>
@@ -726,7 +780,12 @@ export default function App() {
           </div>
           <div className="viewport-host">
             {renderBlueprint ? (
-              <Calibration project={project} points={points} setPoints={setPoints} />
+              <Calibration
+                project={project}
+                points={points}
+                setPoints={setPoints}
+                distance={distance}
+              />
             ) : (
               <ViewportBoundary>
                 <Viewport />
@@ -738,9 +797,27 @@ export default function App() {
               <input
                 type="checkbox"
                 checked={state.xray}
-                onChange={(e) => useEditor.setState({ xray: e.target.checked })}
+                onChange={(e) =>
+                  useEditor.setState({
+                    xray: e.target.checked,
+                    confidenceMap: e.target.checked ? false : state.confidenceMap,
+                  })
+                }
               />
               Provenance X-Ray
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={state.confidenceMap}
+                onChange={(e) =>
+                  useEditor.setState({
+                    confidenceMap: e.target.checked,
+                    xray: e.target.checked ? false : state.xray,
+                  })
+                }
+              />
+              Confidence map
             </label>
             <label>
               <input
@@ -771,7 +848,24 @@ export default function App() {
                 {Object.entries(originColors).map(([label, color]) => (
                   <span key={label}>
                     <i style={{ background: color }} />
-                    {label}
+                    {originLabels[label as keyof typeof originLabels]}
+                  </span>
+                ))}
+              </div>
+            )}
+            {state.confidenceMap && (
+              <div className="origin-legend">
+                {(
+                  [
+                    ['high', '≥ 80%'],
+                    ['medium', '50–79%'],
+                    ['low', '< 50%'],
+                    ['none', 'not scored'],
+                  ] as const
+                ).map(([level, range]) => (
+                  <span key={level}>
+                    <i style={{ background: confidenceColors[level] }} />
+                    {level === 'none' ? range : `${level} ${range}`}
                   </span>
                 ))}
               </div>
@@ -786,6 +880,32 @@ export default function App() {
             </div>
             <div className="dock-body">
               <div className="warnings">
+                {scored.length > 0 && (
+                  <div className="confidence-summary">
+                    <p>
+                      <span>◔</span>
+                      {(['high', 'medium', 'low'] as const)
+                        .map(
+                          (level) =>
+                            `${scored.filter((e) => confidenceLevel(e.provenance.confidence) === level).length} ${level}`,
+                        )
+                        .join(' · ')}{' '}
+                      confidence · {inferredCount} inferred{' '}
+                      {inferredCount === 1 ? 'element' : 'elements'}. Scores are heuristic evidence
+                      strengths, not probabilities.
+                    </p>
+                    {review.length > 0 && (
+                      <div className="review-list">
+                        <span>Needs review:</span>
+                        {review.map((e) => (
+                          <button key={e.id} onClick={() => state.select(e.id)}>
+                            {e.id} <ConfidenceChip confidence={e.provenance.confidence} />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {warnings.length ? (
                   warnings.map((warning, i) => (
                     <p key={i}>

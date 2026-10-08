@@ -121,7 +121,13 @@ JPEG pixel coordinates and reported dimensions use the image's EXIF display orie
 ## Provenance conventions
 
 - `origin`: `evidence` (read from the drawing), `inferred` (derived or default), `generated` (fixture/procedural), or `user`.
-- `confidence` is `null` unless there is a real score.
+- `confidence` is `null` unless there is a real score. The parser scores every wall, opening and room with a heuristic evidence strength in [0, 1]. This is not a calibrated probability. It is the geometric mean of the optional `confidenceFactors` (`{label, score, detail}`), which record what was measured:
+  - Walls: stroke coverage along the centerline, stroke-width consistency, junctions with adjoining walls.
+  - Doors: gap emptiness, width typicality, door swing symbol beside the gap.
+  - Windows: glazing-line fill, width typicality.
+  - Rooms: fraction of the outline backed by drawn walls.
+
+  The score covers detected geometry only. Fields marked `inferred` in `fieldOrigins` are not scored. The UI shows scores as high (≥ 0.8), medium (≥ 0.5) and low. Scores are fixed at reconstruction time and are not recomputed after user edits.
 - Assumed values such as heights and default thickness are marked in `fieldOrigins` (e.g. `"height": "inferred"`) and explained in `notes`.
 - User edits to an existing entity keep its `origin`, set `userEdited: true`, and set the changed fields to `"user"` in `fieldOrigins`. New user entities have `origin: "user"` and get a fresh ID.
 

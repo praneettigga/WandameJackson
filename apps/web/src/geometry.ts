@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import {
+  confidenceLevel,
   type Entity,
   type Scene,
   type SceneObject,
@@ -16,8 +17,28 @@ export const originColors = {
   generated: '#a994df',
   user: '#75a9ff',
 };
+export const originLabels = {
+  evidence: 'detected',
+  inferred: 'inferred',
+  generated: 'generated',
+  user: 'user',
+};
+export const originDescriptions = {
+  evidence: 'Measured directly from the drawing.',
+  inferred:
+    'Derived by the parser or filled in from a default; not read directly from the drawing.',
+  generated: 'Synthetic or procedural data (fixture or component library).',
+  user: 'Entered or edited by you.',
+};
+export const confidenceColors = {
+  high: '#62bcb2',
+  medium: '#e7b665',
+  low: '#e5736a',
+  none: '#6f7a7e',
+};
 export type RenderOptions = {
   xray?: boolean;
+  confidence?: boolean;
   ceilings?: boolean;
   selectedId?: string | null;
   ghost?: boolean;
@@ -28,7 +49,9 @@ function material(entity: Entity, color: string, options: RenderOptions, glass =
       ? '#66d9e8'
       : options.xray
         ? originColors[entity.provenance.origin]
-        : color,
+        : options.confidence
+          ? confidenceColors[confidenceLevel(entity.provenance.confidence)]
+          : color,
     roughness: 0.78,
     metalness: 0.02,
     side: THREE.DoubleSide,

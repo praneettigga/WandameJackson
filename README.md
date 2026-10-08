@@ -7,30 +7,27 @@ Upload a floor-plan PNG/JPEG, automatically read printed dimensions or estimate 
 Use Python 3.12+ and Node 22.12+. The current checkout directory contains `:`
 (`National-Round:Hacknex`), which Python and Vitest/Vite treat as a path/URL
 separator. Move or clone this repository into a directory without `:` before
-running it (for example, `~/Projects/WandameJackson`). Install the backend dependencies:
+running it (for example, `~/Projects/WandameJackson`). From the repository
+root, start the backend:
 
 ```bash
 cd services/api
 python -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m uvicorn roomshift_api.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir roomshift_api
 ```
 
-Install the web dependencies:
+In another terminal:
 
 ```bash
 cd apps/web
 npm ci
+VITE_USE_MOCK_API=false VITE_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-Start the full local stack from the repository root:
+Open http://127.0.0.1:5173. On Windows use `.venv\Scripts\python` and set environment variables with PowerShell. API data persists in `services/api/data/`; use one API worker for this local prototype.
 
-```bash
-npm run dev
-```
-
-The command starts FastAPI on `http://127.0.0.1:8000`, waits for `/api/health`, then starts Vite at `http://127.0.0.1:5173`. It uses `services/api/.venv` by default; set `ROOMSHIFT_PYTHON` for a nonstandard Python executable, `ROOMSHIFT_RELOAD=true` to restart FastAPI when backend files change, or `ROOMSHIFT_API_PORT` / `ROOMSHIFT_WEB_PORT` to use other ports. The launcher stops with an error if either requested port is already in use. On Windows it uses `.venv\Scripts\python.exe`. API data persists in `services/api/data/`; use one API worker for this local prototype.
-
-For an offline demo use `cd apps/web && VITE_USE_MOCK_API=true npm run dev`. It loads the synthetic fixture and simulates reconstruction. Explicit environment variables override any local `.env.local` settings.
+For an offline demo use `VITE_USE_MOCK_API=true npm run dev`. It loads the synthetic fixture and simulates reconstruction. Explicit environment variables override any local `.env.local` settings.
 
 ## First demo
 

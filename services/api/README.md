@@ -24,8 +24,6 @@ OCR uses [Tesseract TSV word boxes](https://tesseract-ocr.github.io/tessdoc/Comm
 
 ## Run
 
-For the normal full-stack development workflow, run `npm run dev` from the repository root after completing setup. To run only the API:
-
 ```powershell
 .venv\Scripts\python -m uvicorn roomshift_api.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir roomshift_api
 ```

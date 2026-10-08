@@ -1,5 +1,5 @@
 import { Component, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { api, pollJob, type Job, type ProjectEnvelope } from './api';
+import { api, pollJob, type Job, type ProjectEnvelope, type ScaleCalibration } from './api';
 import {
   components,
   entities,
@@ -89,10 +89,14 @@ function Calibration({
   project,
   points,
   setPoints,
+  manual,
+  disabled,
 }: {
   project: ProjectEnvelope;
   points: V2[];
   setPoints: (p: V2[]) => void;
+  manual: boolean;
+  disabled: boolean;
 }) {
   const [imageError, setImageError] = useState(false);
   useEffect(() => setImageError(false), [project]);
@@ -111,7 +115,8 @@ function Calibration({
             project.image.width,
             project.image.height,
           );
-          if (p && !imageError) setPoints(points.length >= 2 ? [p] : [...points, p]);
+          if (p && manual && !disabled && !imageError)
+            setPoints(points.length >= 2 ? [p] : [...points, p]);
         }}
       >
         <img
@@ -165,11 +170,13 @@ function Calibration({
         </div>
       )}
       <div className="calibration-caption">
-        {points.length === 0
-          ? 'Click the first end of a known distance.'
-          : points.length === 1
-            ? 'Now click the other end.'
-            : 'Reference set. Enter the real-world distance on the left.'}
+        {!manual
+          ? 'Automatic scale selected. Choose Manual reference to set your own measurement.'
+          : points.length === 0
+            ? 'Click the first end of a known distance.'
+            : points.length === 1
+              ? 'Now click the other end.'
+              : 'Reference set. Enter the real-world distance on the left.'}
         <span>
           {project.image.width} × {project.image.height} px · Image is unmodified
         </span>
@@ -183,6 +190,19 @@ export default function App() {
   const [project, setProject] = useState<ProjectEnvelope | null>(null);
   const [points, setPoints] = useState<V2[]>([]),
     [distance, setDistance] = useState('2');
+  const [scaleMode, setScaleMode] = useState<'auto' | 'manual'>('auto');
+  const [automaticScale, setAutomaticScale] = useState<ScaleCalibration | null>(null);
+  const [findingScale, setFindingScale] = useState(false);
+  async function findScale(id: string) {
+    setFindingScale(true);
+    setAutomaticScale(null);
+    try {
+      const result = await api.getScale(id);
+      setAutomaticScale(result.calibration);
+    } finally {
+      setFindingScale(false);
+    }
+  }
   const [height, setHeight] = useState(''),
     [thickness, setThickness] = useState('');
   const [job, setJob] = useState<Job | null>(null),
@@ -224,6 +244,10 @@ export default function App() {
     setHeight('');
     setThickness('');
     setProject(envelope);
+    setAutomaticScale(null);
+    setScaleMode(scene && !scene.source.calibration.method ? 'manual' : 'auto');
+    if (scene?.source.calibration.method) setAutomaticScale(scene.source.calibration);
+    else if (!scene) await findScale(id);
     setProjectId(id);
     localStorage.setItem('roomshift.lastProject', id);
     setPoints(scene ? [scene.source.calibration.pointA, scene.source.calibration.pointB] : []);
@@ -232,7 +256,7 @@ export default function App() {
       useEditor.setState({ workspace: 'Edit' });
     }
     setNotice(
-      scene ? `Loaded revision ${scene.revision}` : 'Project loaded. Set its scale to reconstruct.',
+      scene ? `Loaded revision ${scene.revision}` : 'Project loaded. Automatic scale is ready.',
     );
   }
   useEffect(() => {
@@ -305,7 +329,8 @@ export default function App() {
   }, []);
   let scale: number | null = null;
   try {
-    if (points.length === 2) scale = metersPerPixel(points[0], points[1], Number(distance));
+    if (scaleMode === 'auto') scale = automaticScale?.metersPerPixel ?? null;
+    else if (points.length === 2) scale = metersPerPixel(points[0], points[1], Number(distance));
   } catch {
     /* Inline readiness below. */
   }
@@ -329,7 +354,15 @@ export default function App() {
       polling.current?.abort();
       polling.current = new AbortController();
       const { job: initial } = await api.reconstruct(project.project.id, {
-        calibration: { pointA: points[0], pointB: points[1], distanceMeters: Number(distance) },
+        ...(scaleMode === 'manual'
+          ? {
+              calibration: {
+                pointA: points[0],
+                pointB: points[1],
+                distanceMeters: Number(distance),
+              },
+            }
+          : {}),
         ...(height === '' ? {} : { wallHeight: Number(height) }),
         wallThickness: thickness === '' ? null : Number(thickness),
       });
@@ -429,15 +462,19 @@ export default function App() {
                       setProjectId(next.project.id);
                       localStorage.setItem('roomshift.lastProject', next.project.id);
                       setPoints([]);
+                      setDistance('2');
+                      setScaleMode('auto');
+                      setAutomaticScale(null);
                       setJob(null);
                       setShowBlueprint(true);
                       state.load(null);
                       setHeight('');
                       setThickness('');
+                      await findScale(next.project.id);
                       setNotice(
                         api.mock
                           ? 'Mock mode always displays the committed fixture; your image is not reconstructed.'
-                          : 'Blueprint uploaded. Select two points in the preview.',
+                          : 'Blueprint uploaded. Automatic scale is ready; you can override it with a manual reference.',
                       );
                     });
                   }}
@@ -474,40 +511,91 @@ export default function App() {
                 <h4>
                   <span className="step">02</span> SET THE SCALE
                 </h4>
-                <p className="hint">Click two endpoints of a known measurement in the blueprint.</p>
-                <div className="point-list">
-                  {[0, 1].map((i) => (
-                    <div key={i}>
-                      <span>{i === 0 ? 'A' : 'B'}</span>
-                      <code>
-                        {points[i]
-                          ? `${points[i][0].toFixed(1)}, ${points[i][1].toFixed(1)} px`
-                          : 'Select a point'}
-                      </code>
-                    </div>
-                  ))}
-                </div>
                 <label className="field">
-                  Known distance (metres)
-                  <input
-                    type="number"
-                    min="0.001"
-                    step="0.1"
-                    value={distance}
-                    onChange={(e) => setDistance(e.target.value)}
-                  />
+                  Scale method
+                  <select
+                    value={scaleMode}
+                    disabled={disabled}
+                    onChange={(e) => {
+                      const mode = e.target.value as 'auto' | 'manual';
+                      setScaleMode(mode);
+                      if (mode === 'auto' && project && !automaticScale)
+                        void guarded(() => findScale(project.project.id));
+                    }}
+                  >
+                    <option value="auto">Automatic (default)</option>
+                    <option value="manual">Manual reference</option>
+                  </select>
                 </label>
+                {scaleMode === 'auto' ? (
+                  <>
+                    <p className="hint" role="status">
+                      {findingScale
+                        ? 'Reading blueprint measurements…'
+                        : !project
+                          ? 'Upload a blueprint to assign its scale automatically.'
+                          : automaticScale?.method === 'printed-dimension'
+                            ? 'Using a printed measurement'
+                            : automaticScale
+                              ? api.mock
+                                ? 'Synthetic fixture scale'
+                                : 'Estimated scale · no verified measurement'
+                              : 'Automatic scale unavailable. Retry or use a manual reference.'}
+                    </p>
+                    {automaticScale?.notes?.map((note, i) => (
+                      <p className="hint" key={i}>
+                        {note}
+                      </p>
+                    ))}
+                    {project && !automaticScale && !findingScale && (
+                      <button
+                        disabled={disabled}
+                        onClick={() => void guarded(() => findScale(project.project.id))}
+                      >
+                        Retry automatic scale
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <p className="hint">
+                      Click two endpoints of a known measurement in the blueprint.
+                    </p>
+                    <div className="point-list">
+                      {[0, 1].map((i) => (
+                        <div key={i}>
+                          <span>{i === 0 ? 'A' : 'B'}</span>
+                          <code>
+                            {points[i]
+                              ? `${points[i][0].toFixed(1)}, ${points[i][1].toFixed(1)} px`
+                              : 'Select a point'}
+                          </code>
+                        </div>
+                      ))}
+                    </div>
+                    <label className="field">
+                      Known distance (metres)
+                      <input
+                        type="number"
+                        min="0.001"
+                        step="0.1"
+                        value={distance}
+                        onChange={(e) => setDistance(e.target.value)}
+                      />
+                    </label>
+                    <button
+                      className="text-button"
+                      disabled={!points.length || disabled}
+                      onClick={() => setPoints([])}
+                    >
+                      Reset reference points
+                    </button>
+                  </>
+                )}
                 <div className="scale-result">
                   <span>METRES / PIXEL</span>
                   <b>{scale ? scale.toFixed(6) : '—'}</b>
                 </div>
-                <button
-                  className="text-button"
-                  disabled={!points.length}
-                  onClick={() => setPoints([])}
-                >
-                  Reset reference points
-                </button>
               </section>
               <section>
                 <h4>
@@ -726,7 +814,19 @@ export default function App() {
           </div>
           <div className="viewport-host">
             {renderBlueprint ? (
-              <Calibration project={project} points={points} setPoints={setPoints} />
+              <Calibration
+                project={project}
+                points={
+                  scaleMode === 'auto' && automaticScale?.method === 'printed-dimension'
+                    ? [automaticScale.pointA, automaticScale.pointB]
+                    : scaleMode === 'manual'
+                      ? points
+                      : []
+                }
+                setPoints={setPoints}
+                manual={scaleMode === 'manual'}
+                disabled={disabled}
+              />
             ) : (
               <ViewportBoundary>
                 <Viewport />

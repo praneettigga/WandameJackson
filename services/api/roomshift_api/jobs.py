@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .auto_scale import estimate_scale
 from .config import SCHEMA_VERSION
 from .errors import ApiError
 from .images import load_gray
@@ -56,7 +57,7 @@ class JobRunner:
             self._thread = None
 
     # --- API --------------------------------------------------------------
-    def submit(self, project: dict, calibration: dict, wall_height: float | None, wall_thickness: float | None) -> dict:
+    def submit(self, project: dict, calibration: dict | None, wall_height: float | None, wall_thickness: float | None) -> dict:
         with self._guard:
             existing = self._active.get(project["id"])
             if existing:
@@ -111,10 +112,21 @@ class JobRunner:
         if gray.shape != (project["image"]["height"], project["image"]["width"]):
             raise ParseError("Stored image dimensions do not match the project record.")
 
+        if cal is None:
+            cal = estimate_scale(gray)
         def progress(p: float) -> None:
             self._update(job, progress=round(0.05 + 0.85 * p, 3))
 
         result = parse_blueprint(gray, cal["metersPerPixel"], req["wallHeight"], req["wallThickness"], progress)
+        result["warnings"] = cal.get("notes", []) + result["warnings"]
+        if cal.get("method") in {"wall-thickness", "image-extent"}:
+            for group, fields in (("walls", ("start", "end", "thickness")), ("rooms", ("polygon",)), ("openings", ("offset", "width"))):
+                for entity in result[group]:
+                    entity["provenance"]["notes"].append("Metric dimensions depend on an estimated scale; no physical reference was verified.")
+                    for field in fields:
+                        if field == "thickness" and req["wallThickness"] is not None:
+                            continue
+                        entity["provenance"]["fieldOrigins"][field] = "inferred"
         scene = {
             "schemaVersion": SCHEMA_VERSION,
             "id": project["id"],
@@ -146,6 +158,9 @@ class JobRunner:
             raise ParseError(f"Reconstruction produced an invalid scene ({problems[0]['path']}: {problems[0]['message']}); nothing was saved.")
         with self.storage.project_lock(project["id"]):
             self.storage.save_reconstruction(project["id"], scene)
+            project = self.storage.get_project(project["id"])
+            if cal.get("method"):
+                project["automaticCalibration"] = cal
             project["hasScene"] = True
             self.storage.save_project(project)
         self._update(job, status="succeeded", progress=1.0, sceneUrl=f"/api/projects/{project['id']}/scene")

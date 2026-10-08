@@ -16,10 +16,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .auto_scale import estimate_scale
 from .calibration import compute_calibration
 from .config import SCHEMA_VERSION, Settings
 from .errors import ApiError, error_body
-from .images import inspect_image
+from .images import inspect_image, load_gray
 from .jobs import JobRunner, now_iso, public_job
 from .storage import Storage
 from .validation import validate_scene
@@ -37,7 +38,7 @@ class CalibrationIn(BaseModel):
 
 class ReconstructIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    calibration: CalibrationIn
+    calibration: CalibrationIn | None = None
     wallHeight: float | None = Field(default=None, gt=0, le=20)
     wallThickness: float | None = Field(default=None, gt=0, le=2)
 
@@ -144,13 +145,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         p = need_project(project_id)
         return FileResponse(storage.blueprint_path(p), media_type=p["image"]["mimeType"])
 
+    @app.get("/api/projects/{project_id}/scale")
+    async def automatic_scale(project_id: str):
+        p = need_project(project_id)
+        if not p.get("automaticCalibration"):
+            cal = await run_in_threadpool(estimate_scale, await run_in_threadpool(load_gray, storage.blueprint_path(p)))
+            with storage.project_lock(project_id):
+                p = need_project(project_id)
+                p["automaticCalibration"] = cal
+                storage.save_project(p)
+        return {"calibration": p["automaticCalibration"]}
+
     @app.post("/api/projects/{project_id}/reconstruct", status_code=202)
     async def reconstruct(project_id: str, body: ReconstructIn):
         p = need_project(project_id)
         if p.get("synthetic"):
             raise ApiError(400, "VALIDATION_ERROR", "The synthetic demo project cannot be reconstructed; upload a real blueprint.")
         c = body.calibration
-        cal = compute_calibration(c.pointA, c.pointB, c.distanceMeters, p["image"]["width"], p["image"]["height"])
+        cal = compute_calibration(c.pointA, c.pointB, c.distanceMeters, p["image"]["width"], p["image"]["height"]) if c else p.get("automaticCalibration")
         for k in ("wallHeight", "wallThickness"):
             v = getattr(body, k)
             if v is not None and not math.isfinite(v):

@@ -68,6 +68,11 @@ Multipart form: `blueprint` (file, required), `name` (string, optional, default 
 ### `GET /api/projects/{projectId}/blueprint`
 `200` → the original image bytes, `Content-Type: image/png` or `image/jpeg`.
 
+### `GET /api/projects/{projectId}/scale`
+`200` → `{ "calibration": { "pointA": [150,120], "pointB": [650,120], "distanceMeters": 5, "metersPerPixel": 0.01, "method": "printed-dimension", "notes": ["..."] } }`.
+
+Computes and caches an automatic scale from the uploaded image. Tries OCR dimensions paired with dimension lines/extension marks first; otherwise assumes 0.20 m solid walls (`wall-thickness`), or a 10 m longest image side (`image-extent`). The latter two are estimates, never verified measurements. Notes explain the evidence, assumptions, and OCR failures. Original image pixel coordinates are used, including EXIF orientation. Runtime is bounded by OCR timeouts; clients should allow 60 seconds for this endpoint.
+
 ### `POST /api/projects/{projectId}/reconstruct`
 ```json
 {
@@ -76,7 +81,8 @@ Multipart form: `blueprint` (file, required), `name` (string, optional, default 
   "wallThickness": null
 }
 ```
-- `calibration` is required. The points are in original-image pixels.
+- `calibration` is optional. Omit it (or send null) to use automatic scale; an empty JSON object is a valid request. If not already cached, the worker computes the automatic scale. Supply two original-image pixel points and a distance to override it manually.
+- The saved Scene calibration includes optional `method` and `notes` for automatic scale; manual calibrations retain the existing four fields. Estimates also mark affected metric geometry fields as inferred.
 - `wallHeight` is optional and defaults to 2.7 m.
 - `wallThickness` is optional. If it is null, the parser measures thickness from the drawing, or falls back to 0.12 m.
 

@@ -71,7 +71,9 @@
         "pointA": { "$ref": "#/$defs/PixelPoint" },
         "pointB": { "$ref": "#/$defs/PixelPoint" },
         "distanceMeters": { "$ref": "#/$defs/Positive" },
-        "metersPerPixel": { "$ref": "#/$defs/Positive", "description": "distanceMeters / euclidean pixel distance(pointA, pointB)" }
+        "metersPerPixel": { "$ref": "#/$defs/Positive", "description": "distanceMeters / euclidean pixel distance(pointA, pointB)" },
+        "method": { "enum": ["printed-dimension", "wall-thickness", "image-extent"], "description": "Omitted for manual calibration." },
+        "notes": { "type": "array", "items": { "type": "string" } }
       }
     },
     "Source": {

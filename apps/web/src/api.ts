@@ -49,7 +49,7 @@ export class HttpApi implements RoomshiftApi {
   readonly mock = false;
   constructor(
     public baseUrl = 'http://127.0.0.1:8000',
-    private transport: typeof fetch = fetch,
+    private transport: typeof fetch = (...args) => globalThis.fetch(...args),
   ) {}
   imageUrl(path: string) {
     return new URL(path, this.baseUrl).href;

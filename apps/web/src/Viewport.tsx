@@ -10,16 +10,15 @@ import {
 } from '@react-three/drei';
 import * as THREE from 'three';
 import {
-  buildSceneGeometry,
+  GeometryCache,
   buildAssemblyGeometry,
+  buildSceneGeometry,
   collides,
   disposeGeometry,
   pointInRoom,
 } from './geometry';
 import { useEditor, editorScenes } from './store';
 import { floorsOf, placements, type Placement } from './assembly';
-import { GeometryCache, buildSceneGeometry, collides, disposeGeometry, pointInRoom } from './geometry';
-import { useEditor } from './store';
 import { useLibrary } from './library';
 import { SNAP_PX, gridStepFor, snapToWalls, worldPerPixel } from './snapping';
 import { WallTools } from './WallTools';
@@ -258,34 +257,35 @@ function World() {
   const activePlacement = state.assembly
     ? placements(state.assembly, scenes).find((p) => p.floor.projectId === state.activeProjectId)
     : undefined;
-  const root = useMemo(
-    () =>
-      state.assembly
-        ? buildAssemblyGeometry(state.assembly, editorScenes(state), view, {
   // Custom-scan meshes load asynchronously; placements rebuild once their mesh arrives or is removed.
   const libraryRevision = useLibrary((s) => s.revision);
   // Unchanged entities keep their geometry between edits; only changed ones are rebuilt.
   const cache = useMemo(() => new GeometryCache(), []);
   useEffect(() => () => cache.clear(), [cache]);
   const root = useMemo(() => {
-    const next = state.scene
-      ? buildSceneGeometry(
+    const next = state.assembly
+      ? buildAssemblyGeometry(state.assembly, scenes, view, {
+          ceilings: state.ceilings || state.workspace === 'Explore',
+          xray: state.xray,
+          confidence: state.confidenceMap,
+          selectedId: state.selectedId,
+          activeProjectId: state.activeProjectId,
+        })
+      : state.scene
+        ? buildSceneGeometry(
           state.scene,
           {
             ceilings: state.ceilings || state.workspace === 'Explore',
             xray: state.xray,
             confidence: state.confidenceMap,
             selectedId: state.selectedId,
-            activeProjectId: state.activeProjectId,
-          })
-        : state.scene
-          ? buildSceneGeometry(state.scene, {
-              ceilings: state.ceilings || state.workspace === 'Explore',
-              xray: state.xray,
-              selectedId: state.selectedId,
-            })
-          : new THREE.Group(),
-    [
+          },
+          cache,
+        )
+        : new THREE.Group();
+    cache.sweep();
+    return next;
+  }, [
       state.scene,
       state.scenes,
       state.floorStates,
@@ -295,25 +295,11 @@ function World() {
       state.ceilings,
       state.workspace,
       state.xray,
-      state.selectedId,
-          },
-          cache,
-        )
-      : new THREE.Group();
-    cache.sweep();
-    return next;
-  },
-    [
-      state.scene,
-      state.ceilings,
-      state.workspace,
-      state.xray,
       state.confidenceMap,
       state.selectedId,
       cache,
       libraryRevision,
-    ],
-  );
+  ]);
   const ghost = useMemo(
     () =>
       state.sourceScene && state.compare
@@ -473,16 +459,6 @@ function World() {
       {state.workspace === 'Explore' && state.scene && (
         <FirstPerson scene={state.scene} placement={activePlacement} />
       )}
-      {state.measures.map((p, i) => (
-        <mesh key={i} position={p} userData={{ helper: true }}>
-          <sphereGeometry args={[0.035]} />
-          <meshBasicMaterial color="#f3bd63" depthTest={false} />
-        </mesh>
-      ))}
-      {state.measures.length === 2 && (
-        <Line points={state.measures} color="#f3bd63" lineWidth={2} />
-      )}
-      {state.workspace === 'Explore' && state.scene && <FirstPerson scene={state.scene} />}
       {state.measure && <MeasureOverlay points={state.measures} hover={hover} />}
     </>
   );

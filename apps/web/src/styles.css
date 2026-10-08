@@ -1477,6 +1477,7 @@ body:has(.explore-overlay) canvas {
   .blueprint-wizard {
     padding: 16px;
   }
+}
 .snap-glyph {
   font: 600 10px/1.2 ui-monospace, monospace;
   color: #11181b;

@@ -14,7 +14,6 @@ import {
   type ProjectEnvelope,
   type RoomshiftApi,
 } from './api';
-import { ApiError, type RoomshiftApi } from './api';
 import { customSpec } from './library';
 import {
   components,
@@ -41,6 +40,8 @@ type FloorSnapshot = {
   conflict: boolean;
   selectedId: string | null;
 };
+export type Tool = 'select' | 'wall' | 'door' | 'window';
+
 export type EditorState = {
   assembly: Assembly | null;
   assemblyDirty: boolean;
@@ -57,8 +58,6 @@ export type EditorState = {
   updateAssembly: (mutate: (assembly: Assembly) => void) => void;
   setView: (patch: Partial<FloorView>) => void;
   hasUnsaved: () => boolean;
-export type Tool = 'select' | 'wall' | 'door' | 'window';
-type EditorState = {
   scene: Scene | null;
   selectedId: string | null;
   past: Scene[];

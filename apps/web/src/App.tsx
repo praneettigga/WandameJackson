@@ -21,14 +21,18 @@ import {
 import { useEditor, editorScenes } from './store';
 import { BlueprintWizard, AssemblyControls, FloorViews } from './AssemblyPanel';
 import { floorsOf, exportAssemblyJson, layoutErrors, type Floor } from './assembly';
-import { download, exportGlb, exportAssemblyGlb, originColors } from './geometry';
-import { Inspector } from './Inspector';
+import {
+  confidenceColors,
+  download,
+  exportGlb,
+  exportAssemblyGlb,
+  originColors,
+  originLabels,
+} from './geometry';
+import { ConfidenceChip, Inspector } from './Inspector';
 import { completeness } from './completeness';
 import { snapKindLabels, type SnapKind } from './snapping';
 import { clearDraft, restorableDraft, writeDraft } from './draft';
-import { useEditor } from './store';
-import { confidenceColors, download, exportGlb, originColors, originLabels } from './geometry';
-import { ConfidenceChip, Inspector } from './Inspector';
 import { Viewport } from './Viewport';
 import { ComponentLibrary } from './ComponentLibrary';
 import { loadLibrary } from './library';
@@ -635,9 +639,6 @@ export default function App() {
         ]
       : []),
   ];
-  const warnings = state.scene
-    ? [...state.scene.reconstruction.warnings, ...geometryWarnings(state.scene)]
-    : [];
   const scored = state.scene
     ? entities(state.scene).filter((e) => e.provenance.confidence !== null)
     : [];
@@ -1493,11 +1494,6 @@ export default function App() {
                   ↓ Scene JSON
                 </button>
                 <button
-                  disabled={
-                    (!state.scene && !state.assembly) ||
-                    disabled ||
-                    (Boolean(state.assembly) && exportScope === 'floor' && !state.scene)
-                  }
                   disabled={!state.scene || disabled}
                   title="Download this scene with its blueprint image as an evaluation ground-truth pair (name.png + name.scene.json)"
                   onClick={() =>
@@ -1520,7 +1516,11 @@ export default function App() {
                   ↓ GT pair
                 </button>
                 <button
-                  disabled={!state.scene || disabled}
+                  disabled={
+                    (!state.scene && !state.assembly) ||
+                    disabled ||
+                    (Boolean(state.assembly) && exportScope === 'floor' && !state.scene)
+                  }
                   onClick={() =>
                     void guarded(async () => {
                       if (state.assembly) {

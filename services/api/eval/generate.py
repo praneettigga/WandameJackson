@@ -45,13 +45,53 @@ def _split(rect, depth, rng, min_side=2.4):
     return [rect], []
 
 
+def _annotate_sheet(img, px, ox, oz, W, D, t, axes_x):
+    """Drawing-sheet clutter that real plans carry and walls must not be confused with."""
+    h, w = img.shape
+    # Border frame: a heavy outer line and a thin inner line near the sheet edge.
+    inset = px(0.3)
+    cv2.rectangle(img, (inset, inset), (w - 1 - inset, h - 1 - inset), 0, max(3, px(t) // 2))
+    cv2.rectangle(img, (inset + px(0.15), inset + px(0.15)), (w - 1 - inset - px(0.15), h - 1 - inset - px(0.15)), 0, 1)
+    # Bold title above the plan, with strokes about as heavy as a partition wall.
+    scale = px(0.5) / 22
+    cv2.putText(img, "FLOOR PLAN", (px(ox), px(oz - 1.0)), cv2.FONT_HERSHEY_DUPLEX, scale, 0, max(2, px(t * 0.6)))
+    # Dash-dot grid axes through the vertical walls, with numbered bubbles below the plan.
+    xs = [ox, *axes_x, ox + W]
+    bottom = oz + D + 1.85
+    for i, x in enumerate(xs, 1):
+        z = oz - 0.4
+        while z < bottom - 0.25:
+            cv2.line(img, (px(x), px(z)), (px(x), px(min(z + 0.5, bottom - 0.25))), 0, 1)
+            cv2.circle(img, (px(x), px(z + 0.6)), 0, 0, 1)
+            z += 0.7
+        cv2.circle(img, (px(x), px(bottom)), px(0.25), 0, 1)
+        cv2.putText(img, str(i), (px(x) - 4, px(bottom) + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, 0, 1)
+    # Two rows of dimension lines with heavy 45° ticks (part spans, then the overall length).
+    for row, stops in ((oz + D + 0.7, xs), (oz + D + 1.2, [ox, ox + W])):
+        cv2.line(img, (px(stops[0] - 0.2), px(row)), (px(stops[-1] + 0.2), px(row)), 0, 1)
+        for x in stops:
+            cv2.line(img, (px(x), px(oz + D + 0.2)), (px(x), px(row + 0.1)), 0, 1)
+            cv2.line(img, (px(x - 0.1), px(row + 0.1)), (px(x + 0.1), px(row - 0.1)), 0, 3)
+        for a, b in zip(stops, stops[1:]):
+            cv2.putText(img, f"{round((b - a) * 1000)}", (px((a + b) / 2) - 14, px(row) - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, 0, 1)
+
+
 def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool = True,
-             style: str = "solid", chamfer: bool = False) -> Plan:
-    """style: 'solid' (filled wall strokes) or 'outline' (double-line walls).
-    chamfer: cut the top-left outer corner with a 45° diagonal wall."""
+             style: str = "solid", chamfer: bool = False, annotated: bool = False,
+             partition: float | None = None) -> Plan:
+    """style: 'solid' (filled wall strokes), 'outline' (double-line walls) or 'hatched' (architectural
+    poché: light diagonal hatching between a heavy line and a light line).
+    chamfer: cut the top-left outer corner with a 45° diagonal wall.
+    annotated: a drawing sheet like a real architectural plan: bold title, axis lines with bubbles,
+    two rows of dimension lines and a border frame.
+    partition: interior walls this thick (m) instead of the outer wall thickness (mixed thickness)."""
     rng = random.Random(seed)
     W, D = round(rng.uniform(6, 12), 1), round(rng.uniform(5, 9), 1)
     t = round(rng.uniform(0.15, 0.25), 2)
+    tp_ = partition if partition is not None else t
+    if annotated:
+        margin_m = max(margin_m, 3.0)  # room for dimension rows, axis bubbles, the title and the frame
     ox = oz = margin_m
     leaves, parts = _split((ox, oz, ox + W, oz + D), rng.randint(1, 3), rng)
     c = 1.5 if chamfer else 0.0
@@ -88,27 +128,36 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
     px = lambda m: int(round(m / mpp))  # noqa: E731
     img = np.full((px(D + 2 * margin_m), px(W + 2 * margin_m)), 255, np.uint8)
     tp = max(2, px(t))
+    thick_of = lambda seg: tp_ if seg in parts else t  # noqa: E731
     # Walls are drawn into a mask first so outline style can trace their boundary.
     mask = np.zeros_like(img)
-    for (ax, az), (bx, bz) in outer + parts:
-        # Extend by t/2 so corners are solid, like a real drawing.
+    for seg in outer + parts:
+        (ax, az), (bx, bz) = seg
+        th = thick_of(seg)
+        # Extend by th/2 so corners are solid, like a real drawing.
         if ax == bx:
-            cv2.rectangle(mask, (px(ax - t / 2), px(min(az, bz) - t / 2)), (px(ax + t / 2) - 1, px(max(az, bz) + t / 2) - 1), 255, -1)
+            cv2.rectangle(mask, (px(ax - th / 2), px(min(az, bz) - th / 2)), (px(ax + th / 2) - 1, px(max(az, bz) + th / 2) - 1), 255, -1)
         else:
-            cv2.rectangle(mask, (px(min(ax, bx) - t / 2), px(az - t / 2)), (px(max(ax, bx) + t / 2) - 1, px(az + t / 2) - 1), 255, -1)
+            cv2.rectangle(mask, (px(min(ax, bx) - th / 2), px(az - th / 2)), (px(max(ax, bx) + th / 2) - 1, px(az + th / 2) - 1), 255, -1)
     for (ax, az), (bx, bz) in diagonal:
         cv2.line(mask, (px(ax), px(az)), (px(bx), px(bz)), 255, tp)
     for o in openings:
         (ax, az), (bx, bz) = o["seg"]
         cx, cz = o["centre"]
         h = o["width"] / 2
+        th = thick_of(o["seg"])
         if az == bz:
-            cv2.rectangle(mask, (px(cx - h), px(cz - t / 2) - 1), (px(cx + h) - 1, px(cz + t / 2)), 0, -1)
+            cv2.rectangle(mask, (px(cx - h), px(cz - th / 2) - 1), (px(cx + h) - 1, px(cz + th / 2)), 0, -1)
         else:
-            cv2.rectangle(mask, (px(cx - t / 2) - 1, px(cz - h)), (px(cx + t / 2), px(cz + h) - 1), 0, -1)
+            cv2.rectangle(mask, (px(cx - th / 2) - 1, px(cz - h)), (px(cx + th / 2), px(cz + h) - 1), 0, -1)
     if style == "outline":
         edge = cv2.subtract(mask, cv2.erode(mask, np.ones((5, 5), np.uint8)))
         img[edge > 0] = 0
+    elif style == "hatched":
+        # Architectural poché: light 45° hatching inside a 2 px boundary, like a CAD print.
+        yy, xx = np.indices(img.shape)
+        img[(mask > 0) & ((xx + yy) % 5 == 0)] = 175
+        img[cv2.subtract(mask, cv2.erode(mask, np.ones((5, 5), np.uint8))) > 0] = 0
     else:
         img[mask > 0] = 0
     for o in openings:
@@ -116,12 +165,13 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
         horizontal = az == bz
         cx, cz = o["centre"]
         h = o["width"] / 2
+        th = thick_of(o["seg"])
         if o["type"] == "window":
             for f in (-0.25, 0.25):
                 if horizontal:
-                    cv2.line(img, (px(cx - h), px(cz + f * t)), (px(cx + h), px(cz + f * t)), 0, 1)
+                    cv2.line(img, (px(cx - h), px(cz + f * th)), (px(cx + h), px(cz + f * th)), 0, 1)
                 else:
-                    cv2.line(img, (px(cx + f * t), px(cz - h)), (px(cx + f * t), px(cz + h)), 0, 1)
+                    cv2.line(img, (px(cx + f * th), px(cz - h)), (px(cx + f * th), px(cz + h)), 0, 1)
         else:
             # Door leaf and quarter swing arc on one side of the wall.
             side = rng.choice([-1, 1])
@@ -129,12 +179,12 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
             # the hinge is always at the jamb with the smaller coordinate.
             o["swing_side"] = side
             if horizontal:
-                hinge = (px(cx - h), px(cz + side * t / 2))
+                hinge = (px(cx - h), px(cz + side * th / 2))
                 tip = (hinge[0], hinge[1] + side * px(o["width"]))
                 cv2.line(img, hinge, tip, 0, 1)
                 cv2.ellipse(img, hinge, (px(o["width"]), px(o["width"])), 0, 0 if side > 0 else 270, 90 if side > 0 else 360, 0, 1)
             else:
-                hinge = (px(cx + side * t / 2), px(cz - h))
+                hinge = (px(cx + side * th / 2), px(cz - h))
                 tip = (hinge[0] + side * px(o["width"]), hinge[1])
                 cv2.line(img, hinge, tip, 0, 1)
                 cv2.ellipse(img, hinge, (px(o["width"]), px(o["width"])), 0, 0 if side > 0 else 90, 90 if side > 0 else 180, 0, 1)
@@ -146,8 +196,10 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
         for x in (ox, ox + W):
             cv2.line(img, (px(x), y - 6), (px(x), y + 6), 0, 1)
         cv2.putText(img, f"{W:.2f} m", (px(ox + W / 2) - 25, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, 0, 1)
+    if annotated:
+        _annotate_sheet(img, px, ox, oz, W, D, t, sorted({p[0][0] for p in parts if p[0][0] == p[1][0]}))
 
-    walls = [{"start": list(a), "end": list(b), "thickness": t} for a, b in segments]
+    walls = [{"start": list(a), "end": list(b), "thickness": thick_of((a, b))} for a, b in segments]
     rooms = [([[x0 + c, z0], [x1, z0], [x1, z1], [x0, z1], [x0, z0 + c]] if c and (x0, z0) == (ox, oz)
               else [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]) for x0, z0, x1, z1 in leaves]
     ops = [{"type": o["type"], "centre": o["centre"], "width": o["width"],
@@ -208,6 +260,60 @@ def jpeg(plan: Plan, quality: int) -> Plan:
     return out
 
 
+def _with(plan: Plan, image: np.ndarray, key: str, value) -> Plan:
+    out = Plan(np.clip(image, 0, 255).astype(np.uint8), plan.mpp, plan.walls, plan.openings, plan.rooms, dict(plan.meta))
+    out.meta[key] = value
+    return out
+
+
+def blueprint(plan: Plan, seed: int = 0) -> Plan:
+    """Classic blueprint (as grayscale after colour conversion): light lines on a dark, gridded,
+    slightly noisy JPEG background."""
+    rng = np.random.default_rng(seed)
+    ink = 1 - plan.image.astype(float) / 255
+    img = 85 + ink * 165
+    step = max(4, int(round(0.5 / plan.mpp)))
+    img[::step, :] += 30  # fine drawing grid, lighter than the background, behind everything
+    img[:, ::step] += 30
+    img += rng.normal(0, 4, img.shape)
+    return jpeg(_with(plan, img, "blueprint", True), 70)
+
+
+def dark(plan: Plan, seed: int = 0) -> Plan:
+    """White-on-black print (inverted polarity) with mild sensor noise."""
+    rng = np.random.default_rng(seed)
+    img = 30 + (1 - plan.image.astype(float) / 255) * 190 + rng.normal(0, 6, plan.image.shape)
+    return _with(plan, img, "dark", True)
+
+
+def uneven(plan: Plan, seed: int = 0) -> Plan:
+    """Phone photo or bad scan: strong lighting gradient plus a vignette, so no single threshold works."""
+    rng = np.random.default_rng(seed)
+    h, w = plan.image.shape
+    yy, xx = np.indices((h, w), dtype=float)
+    light = 0.35 + 0.65 * (xx / w * 0.6 + yy / h * 0.4)
+    light *= 1 - 0.35 * (((xx - w / 2) / w) ** 2 + ((yy - h / 2) / h) ** 2) * 2
+    img = plan.image.astype(float) * light + rng.normal(0, 5, (h, w))
+    return _with(plan, img, "uneven", True)
+
+
+def faded(plan: Plan, seed: int = 0) -> Plan:
+    """Low-contrast pencil/faded scan on grey paper."""
+    rng = np.random.default_rng(seed)
+    img = 120 + plan.image.astype(float) / 255 * 85 + rng.normal(0, 4, plan.image.shape)
+    return _with(plan, img, "faded", True)
+
+
+def speckle(plan: Plan, amount: float = 0.03, seed: int = 0) -> Plan:
+    """Salt-and-pepper speckle from dust and photocopying."""
+    rng = np.random.default_rng(seed)
+    img = plan.image.copy()
+    r = rng.random(img.shape)
+    img[r < amount / 2] = 0
+    img[r > 1 - amount / 2] = 255
+    return _with(plan, img, "speckle", amount)
+
+
 AUGMENTATIONS = {
     "clean": lambda p: p,
     "blur1.5": lambda p: blur(p, 1.5),
@@ -218,9 +324,19 @@ AUGMENTATIONS = {
     "noise60": lambda p: noise(p, 60),
     "skew3": lambda p: skew(p, 3.0),
     "half_res": lambda p: downscale(p, 0.5),
+    "blueprint": blueprint,
+    "dark": dark,
+    "uneven": uneven,
+    "faded": faded,
+    "speckle": speckle,
 }
 # Drawing styles change the rendering itself, so they regenerate the plan from the same seed.
 STYLES = {
     "outline": {"style": "outline"},
     "diagonal": {"chamfer": True},
+    "hatched": {"style": "hatched"},
+    "mixed": {"partition": 0.1},
+    "annotated": {"annotated": True},
+    # A realistic architectural sheet: hatched walls, thinner partitions, title, axes, dimensions, frame.
+    "sheet": {"style": "hatched", "partition": 0.1, "annotated": True},
 }

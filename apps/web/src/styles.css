@@ -1584,3 +1584,20 @@ body:has(.explore-overlay) canvas {
 .snap-menu-panel small {
   color: #819095;
 }
+.unit-input {
+  display: flex;
+  gap: 6px;
+}
+.unit-select {
+  background: #1c2428;
+  border: 1px solid #435058;
+  color: #d8e0df;
+  border-radius: 3px;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 11px;
+}
+.unit-select:focus {
+  outline: 1px solid #d4a865;
+  outline-offset: 0;
+}

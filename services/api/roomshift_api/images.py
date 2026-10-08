@@ -23,7 +23,7 @@ def inspect_image(data: bytes, max_side: int) -> tuple[str, int, int]:
     mime = sniff_mime(data)
     if mime is None:
         raise ApiError(415, "UNSUPPORTED_MEDIA_TYPE", "Only PNG and JPEG blueprints are supported (PDF, DWG, DXF and video are not).")
-    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
+    img = decode_image(data)
     if img is None or img.size == 0:
         raise ApiError(415, "UNSUPPORTED_MEDIA_TYPE", "The file could not be decoded as a PNG/JPEG image.")
     h, w = img.shape[:2]
@@ -34,7 +34,7 @@ def inspect_image(data: bytes, max_side: int) -> tuple[str, int, int]:
 
 def load_gray(path) -> np.ndarray:
     """Load the stored blueprint as 8-bit grayscale; alpha is composited onto white."""
-    img = cv2.imdecode(np.fromfile(str(path), np.uint8), cv2.IMREAD_UNCHANGED)
+    img = decode_image(path.read_bytes())
     if img is None:
         raise ValueError("stored blueprint could not be decoded")
     if img.dtype != np.uint8:
@@ -46,3 +46,13 @@ def load_gray(path) -> np.ndarray:
         rgb = img[:, :, :3].astype(np.float32) * alpha + 255.0 * (1 - alpha)
         img = rgb.astype(np.uint8)
     return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+
+def decode_image(data: bytes):
+    # Browsers display JPEGs using EXIF orientation. Use the same orientation for
+    # dimensions and parsing so calibration clicks refer to the displayed pixels.
+    mode = cv2.IMREAD_COLOR if sniff_mime(data) == "image/jpeg" else cv2.IMREAD_UNCHANGED
+    try:
+        return cv2.imdecode(np.frombuffer(data, np.uint8), mode)
+    except cv2.error:
+        return None

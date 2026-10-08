@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useEditor } from '../src/store';
 import App from '../src/App';
+import { api } from '../src/api';
 
 vi.mock('../src/Viewport', () => ({
   Viewport: () => <div data-testid="viewport">Semantic 3D viewport</div>,
@@ -27,6 +28,25 @@ beforeEach(() => {
   });
 });
 describe('application integration without WebGL', () => {
+  it('blocks edits while reload is pending so they cannot be silently discarded', async () => {
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    const original = structuredClone(useEditor.getState().scene!);
+    let finish!: (scene: typeof original) => void;
+    vi.spyOn(api, 'getScene').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(finish).toBeDefined());
+    expect(useEditor.getState().busy).toBe(true);
+    useEditor.getState().patch('obj-table-1', { position: [9, 0, 9] });
+    expect(useEditor.getState().scene).toEqual(original);
+    finish(original);
+    await waitFor(() => expect(useEditor.getState().busy).toBe(false));
+  });
   it('boots mock mode with its honest badge, synchronizes explorer and inspector, adds, undoes and saves', async () => {
     render(<App />);
     expect(screen.getByText('MOCK DATA')).toBeInTheDocument();
@@ -75,6 +95,7 @@ describe('application integration without WebGL', () => {
     await waitFor(() => expect(useEditor.getState().compare).toBe(false));
   });
   it('performs two-point visual calibration and mock job polling, then opens the fixture', async () => {
+    const reconstruct = vi.spyOn(api, 'reconstruct');
     render(<App />);
     await screen.findByRole('button', { name: 'Select Table' });
     fireEvent.click(screen.getByRole('button', { name: 'Reconstruct' }));
@@ -99,6 +120,7 @@ describe('application integration without WebGL', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load synthetic reconstruction →' }));
     await waitFor(() => expect(useEditor.getState().workspace).toBe('Edit'), { timeout: 4000 });
     expect(useEditor.getState().scene!.reconstruction.parser.name).toBe('fixture');
+    expect(reconstruct.mock.calls[0][1]).not.toHaveProperty('wallHeight');
     expect(
       screen.getByText('Synthetic fixture loaded. No image analysis was performed.'),
     ).toBeInTheDocument();

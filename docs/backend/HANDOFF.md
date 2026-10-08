@@ -1,5 +1,7 @@
 # Backend handoff — Agent 1 (`feat/prototype-backend`)
 
+> Integration update: the root README and `contracts/` are authoritative. Successful reruns now increment the current editable revision; source snapshots stay at revision 0. JPEG decoding follows EXIF display orientation. Validation rejects non-finite values throughout scenes and overlapping openings; tiny calibration scales fail before large allocations. Ceiling assumptions are explicit. Backend regressions and the real frontend/API integration test pass.
+
 Implements the frozen contract `contracts/api-contract.md` + `contracts/scene.schema.json` (v0.1.0) exactly. No contract files were changed.
 
 ## Commands

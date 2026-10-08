@@ -194,7 +194,10 @@ export class MockApi implements RoomshiftApi {
     const job = this.jobs.get(id);
     if (!job) throw new ApiError(404, 'JOB_NOT_FOUND', 'Unknown mock job.');
     if (job.status === 'running') {
+      this.refresh();
+      const revision = this.scene.revision + 1;
       this.scene = demoScene();
+      this.scene.revision = revision;
       this.storage?.setItem('roomshift.mock.scene.v1', JSON.stringify(this.scene));
       job.status = 'succeeded';
       job.progress = 1;
@@ -280,5 +283,5 @@ export async function pollJob(
 }
 export const api: RoomshiftApi =
   import.meta.env.VITE_USE_MOCK_API === 'true'
-    ? new MockApi(localStorage)
+    ? new MockApi(typeof localStorage === 'undefined' ? undefined : localStorage)
     : new HttpApi(import.meta.env.VITE_API_BASE_URL || undefined);

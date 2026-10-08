@@ -75,7 +75,11 @@ for (const mode of ['mock', 'http'] as const)
       const final = await pollJob(api, job, (j) => progress.push(j.status), { intervalMs: 0 });
       expect(progress).toEqual(['queued', 'running', 'succeeded']);
       expect(final.sceneUrl).toBe('/api/projects/demo-room/scene');
-      expect(await api.getScene('demo-room')).toEqual(demoScene());
+      expect(await api.getScene('demo-room')).toEqual({ ...demoScene(), revision: 1 });
+      expect(await api.getSourceScene('demo-room')).toEqual(demoScene());
+      await expect(api.saveScene('demo-room', demoScene())).rejects.toMatchObject({
+        code: 'REVISION_CONFLICT',
+      });
     });
     it('round-trips edits with revision increments, immutable source, and readable conflicts', async () => {
       const api = make(),

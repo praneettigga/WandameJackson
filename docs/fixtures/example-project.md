@@ -1,5 +1,7 @@
 # Example project fixture
 
+> Superseded planning draft. The actual shared fixture is [room.scene.json](../../contracts/fixtures/room.scene.json), with [room.png](../../contracts/fixtures/room.png): a 4 × 3 m room, four walls, one door, one window, and one table. Object positions are bottom centers; floor snap sets Y = 0. The legacy IDs and examples below are not used by either application.
+
 The initial frontend mock and backend smoke test must use the same scene. Store its eventual JSON at `fixtures/demo-room.scene.json` (or another agreed shared path) without changing its meaning.
 
 ## Scenario

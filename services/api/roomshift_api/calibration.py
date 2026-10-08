@@ -20,9 +20,12 @@ def compute_calibration(point_a, point_b, distance_meters, image_width: int, ima
     pixels = math.hypot(point_b[0] - point_a[0], point_b[1] - point_a[1])
     if pixels < 1.0:
         fail("pointA and pointB must be at least 1 pixel apart")
+    scale = distance_meters / pixels
+    if not math.isfinite(scale) or scale <= 0:
+        fail("The measurement is too small or too large to represent a usable scale")
     return {
         "pointA": [float(point_a[0]), float(point_a[1])],
         "pointB": [float(point_b[0]), float(point_b[1])],
         "distanceMeters": float(distance_meters),
-        "metersPerPixel": distance_meters / pixels,
+        "metersPerPixel": scale,
     }

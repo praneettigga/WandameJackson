@@ -10,6 +10,37 @@ beforeEach(() => {
   useEditor.getState().load(demoScene());
 });
 describe('semantic editor state', () => {
+  it('clears conflict, history, measurements and selection when opening an unreconstructed project', () => {
+    useEditor.setState({
+      conflict: true,
+      error: 'Old conflict',
+      measure: true,
+      measures: [[1, 2, 3]],
+      selectedId: 'obj-table-1',
+    });
+    useEditor.getState().load(null);
+    expect(useEditor.getState()).toMatchObject({
+      scene: null,
+      conflict: false,
+      error: null,
+      measure: false,
+      measures: [],
+      selectedId: null,
+      workspace: 'Reconstruct',
+      past: [],
+      future: [],
+    });
+  });
+  it('restores the displayed object name on undo', () => {
+    useEditor.getState().select('obj-table-1');
+    render(<Inspector />);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed table' } });
+    fireEvent.blur(screen.getByLabelText('Name'));
+    // Use a UI event to flush the state change through React.
+    render(<button onClick={() => useEditor.getState().undo()}>Undo name</button>);
+    fireEvent.click(screen.getByText('Undo name'));
+    expect(screen.getByLabelText('Name')).toHaveValue('Table');
+  });
   it('selects only by semantic ID and refuses unknown IDs', () => {
     useEditor.getState().select('obj-table-1');
     expect(useEditor.getState().selectedId).toBe('obj-table-1');

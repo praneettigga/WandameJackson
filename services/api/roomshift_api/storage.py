@@ -77,7 +77,7 @@ class Storage:
 
     # --- projects -------------------------------------------------------
     def project_dir(self, project_id: str) -> Path | None:
-        if not _ID_RE.match(project_id):
+        if not _ID_RE.fullmatch(project_id) or project_id in {".", ".."}:
             return None
         return self.projects_dir / project_id
 
@@ -108,8 +108,11 @@ class Storage:
     def save_reconstruction(self, project_id: str, scene: dict) -> None:
         """Persist a new successful reconstruction: source snapshot first, then current scene."""
         d = self.projects_dir / project_id
+        current = self.get_scene(project_id)
         atomic_write_json(d / "source-scene.json", scene)
-        atomic_write_json(d / "scene.json", scene)
+        # Never reuse a revision after a rerun: stale tabs must not overwrite it.
+        editable = {**scene, "revision": current["revision"] + 1 if current else 0}
+        atomic_write_json(d / "scene.json", editable)
 
     # --- jobs -----------------------------------------------------------
     def get_job(self, job_id: str) -> dict | None:

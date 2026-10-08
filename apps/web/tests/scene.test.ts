@@ -22,6 +22,16 @@ import {
 import { buildSceneGeometry, collides, disposeGeometry, exportGlb } from '../src/geometry';
 
 describe('frozen Scene contract', () => {
+  it('rejects crossing room edges even when signed area is nonzero', () => {
+    const scene = demoScene();
+    scene.rooms[0].polygon = [
+      [0, 0],
+      [4, 3],
+      [0, 4],
+      [3, 0],
+    ];
+    expect(() => validateScene(scene)).toThrow('simple');
+  });
   it('validates the identical committed fixture with Zod and draft-2020 JSON Schema', () => {
     const ajv = new Ajv2020({ strict: false });
     addFormats(ajv);
@@ -196,6 +206,7 @@ describe('responsive calibration', () => {
   it('calculates 100 px = 2 m and rejects coincident points or invalid distances', () => {
     expect(metersPerPixel([50, 50], [150, 50], 2)).toBe(0.02);
     expect(() => metersPerPixel([1, 1], [1, 1], 2)).toThrow();
+    expect(() => metersPerPixel([1, 1], [1.5, 1], 2)).toThrow();
     expect(() => metersPerPixel([0, 0], [1, 1], -1)).toThrow();
   });
 });

@@ -57,3 +57,15 @@ def test_only_diagonal_lines_fail():
     cv2.line(img, (20, 380), (380, 20), 0, 8)
     with pytest.raises(ParseError):
         parse_blueprint(img, 0.02)
+
+
+def test_tiny_scale_fails_before_allocating_a_huge_kernel():
+    with pytest.raises(ParseError, match="calibration"):
+        parse_blueprint(l_shaped_plan(), 1e-300)
+
+
+def test_arbitrary_wall_height_keeps_openings_inside_wall():
+    result = parse_blueprint(load_gray(CONTRACTS / "fixtures" / "room.png"), 0.02, wall_height=1.123456)
+    assert result["openings"]
+    assert all(o["bottom"] + o["height"] <= 1.123456 + 1e-6 for o in result["openings"])
+    assert any("Ceilings are inferred" in warning for warning in result["warnings"])

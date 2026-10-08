@@ -119,8 +119,8 @@ export function validOpenings(wall: Wall, openings: Opening[]) {
     .sort((a, b) => a.offset - b.offset || a.id.localeCompare(b.id))) {
     if (
       !openingSchema.safeParse(opening).success ||
-      opening.offset + opening.width > wallLength(wall) + 1e-8 ||
-      opening.bottom + opening.height > wall.height + 1e-8 ||
+      opening.offset + opening.width > wallLength(wall) + 1e-6 ||
+      opening.bottom + opening.height > wall.height + 1e-6 ||
       (opening.type === 'door' && opening.bottom !== 0) ||
       valid.some(
         (o) =>
@@ -169,7 +169,7 @@ export function geometryWarnings(scene: Scene): string[] {
   return [
     ...(new Set(ids).size !== ids.length ? ['Entity IDs must be unique.'] : []),
     ...scene.walls.flatMap((w) =>
-      wallLength(w) < 1e-8
+      wallLength(w) <= 1e-6
         ? [`Wall ${w.id} has zero length.`]
         : validOpenings(w, scene.openings).warnings,
     ),
@@ -184,11 +184,43 @@ export function geometryWarnings(scene: Scene): string[] {
           return sum + p[0] * q[1] - q[0] * p[1];
         }, 0),
       );
-      return area < 1e-8 || (last[0] === r.polygon[0][0] && last[1] === r.polygon[0][1])
-        ? [`Room ${r.id} must have a nondegenerate open polygon.`]
+      return area / 2 <= 1e-6 ||
+        !simplePolygon(r.polygon) ||
+        (last[0] === r.polygon[0][0] && last[1] === r.polygon[0][1])
+        ? [`Room ${r.id} must have a simple, nondegenerate open polygon.`]
         : [];
     }),
   ];
+}
+
+function simplePolygon(points: V2[]) {
+  if (new Set(points.map((p) => JSON.stringify(p))).size !== points.length) return false;
+  const cross = (a: V2, b: V2, c: V2) =>
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const onSegment = (a: V2, b: V2, p: V2) =>
+    cross(a, b, p) === 0 &&
+    p[0] >= Math.min(a[0], b[0]) &&
+    p[0] <= Math.max(a[0], b[0]) &&
+    p[1] >= Math.min(a[1], b[1]) &&
+    p[1] <= Math.max(a[1], b[1]);
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i],
+      b = points[(i + 1) % points.length];
+    for (let j = i + 1; j < points.length; j++) {
+      if (j === i + 1 || (i === 0 && j === points.length - 1)) continue;
+      const c = points[j],
+        d = points[(j + 1) % points.length];
+      if (
+        (cross(a, b, c) * cross(a, b, d) < 0 && cross(c, d, a) * cross(c, d, b) < 0) ||
+        onSegment(a, b, c) ||
+        onSegment(a, b, d) ||
+        onSegment(c, d, a) ||
+        onSegment(c, d, b)
+      )
+        return false;
+    }
+  }
+  return true;
 }
 
 export function validateScene(value: unknown): Scene {
@@ -268,8 +300,11 @@ export function imagePoint(
 }
 export function metersPerPixel(a: V2, b: V2, distance: number) {
   const pixels = Math.hypot(b[0] - a[0], b[1] - a[1]);
-  if (!Number.isFinite(distance) || distance <= 0 || !Number.isFinite(pixels) || pixels <= 0)
-    throw new Error('Choose two distinct image points and a positive known distance.');
-  return distance / pixels;
+  if (!Number.isFinite(distance) || distance <= 0 || !Number.isFinite(pixels) || pixels < 1)
+    throw new Error('Choose image points at least one pixel apart and a positive known distance.');
+  const scale = distance / pixels;
+  if (!Number.isFinite(scale) || scale <= 0)
+    throw new Error('The measurement cannot represent a usable scale.');
+  return scale;
 }
 export const exportSceneJson = (scene: Scene) => JSON.stringify(sceneSchema.parse(scene), null, 2);

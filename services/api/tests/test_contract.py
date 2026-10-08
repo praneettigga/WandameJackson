@@ -45,3 +45,19 @@ def test_geometry_rules():
     assert _broken(lambda s: s["objects"][0].update(dimensions=[1, 0, 1]))
     assert _broken(lambda s: s["objects"][0].update(scale=[1, 1, 1]))  # scale is never persisted
     assert _broken(lambda s: s.update(units="m"))
+
+
+def test_overlapping_openings_and_nonfinite_dimensions_rejected():
+    assert _broken(lambda s: s["openings"].append({**s["openings"][0], "id": "overlap"}))
+    for value in (float("nan"), float("inf"), -float("inf")):
+        assert _broken(lambda s: s["walls"][0].update(height=value))
+        assert _broken(lambda s: s["objects"][0].update(dimensions=[1, value, 1]))
+
+
+def test_storage_rejects_dot_directory_ids(tmp_path):
+    from roomshift_api.storage import Storage
+    storage = Storage(tmp_path)
+    assert storage.project_dir('.') is None
+    assert storage.project_dir('..') is None
+    assert storage.project_dir('valid\n') is None
+    assert storage.project_dir('demo-room') == tmp_path / 'projects' / 'demo-room'

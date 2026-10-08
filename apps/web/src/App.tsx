@@ -183,7 +183,7 @@ export default function App() {
   const [project, setProject] = useState<ProjectEnvelope | null>(null);
   const [points, setPoints] = useState<V2[]>([]),
     [distance, setDistance] = useState('2');
-  const [height, setHeight] = useState('2.7'),
+  const [height, setHeight] = useState(''),
     [thickness, setThickness] = useState('');
   const [job, setJob] = useState<Job | null>(null),
     [working, setWorking] = useState(false);
@@ -198,13 +198,15 @@ export default function App() {
   const error = (e: unknown) =>
     useEditor.setState({ error: e instanceof Error ? e.message : String(e) });
   const guarded = async (action: () => Promise<void>) => {
+    if (useEditor.getState().busy) return;
     setWorking(true);
-    useEditor.setState({ error: null });
+    useEditor.setState({ error: null, busy: true });
     try {
       await action();
     } catch (e) {
       error(e);
     } finally {
+      useEditor.setState({ busy: false });
       setWorking(false);
     }
   };
@@ -216,17 +218,11 @@ export default function App() {
   async function loadProject(id: string) {
     const envelope = await api.getProject(id);
     const scene = envelope.project.hasScene ? await api.getScene(id) : null;
-    if (scene) state.load(scene);
-    else
-      useEditor.setState({
-        scene: null,
-        dirty: false,
-        selectedId: null,
-        past: [],
-        future: [],
-        sourceScene: null,
-        compare: false,
-      });
+    state.load(scene);
+    setJob(null);
+    setShowBlueprint(true);
+    setHeight('');
+    setThickness('');
     setProject(envelope);
     setProjectId(id);
     localStorage.setItem('roomshift.lastProject', id);
@@ -322,16 +318,19 @@ export default function App() {
     if (!project || !scale || !discard()) return;
     await guarded(async () => {
       if (
-        !Number.isFinite(Number(height)) ||
-        Number(height) <= 0 ||
-        (thickness !== '' && (!Number.isFinite(Number(thickness)) || Number(thickness) <= 0))
+        (height !== '' &&
+          (!Number.isFinite(Number(height)) || Number(height) <= 0 || Number(height) > 20)) ||
+        (thickness !== '' &&
+          (!Number.isFinite(Number(thickness)) || Number(thickness) <= 0 || Number(thickness) > 2))
       )
-        throw new Error('Wall height and optional thickness must be positive metres.');
+        throw new Error(
+          'Wall height must be between 0 and 20 m, and thickness between 0 and 2 m (exclusive of 0).',
+        );
       polling.current?.abort();
       polling.current = new AbortController();
       const { job: initial } = await api.reconstruct(project.project.id, {
         calibration: { pointA: points[0], pointB: points[1], distanceMeters: Number(distance) },
-        wallHeight: Number(height),
+        ...(height === '' ? {} : { wallHeight: Number(height) }),
         wallThickness: thickness === '' ? null : Number(thickness),
       });
       await pollJob(api, initial, setJob, { signal: polling.current.signal });
@@ -371,7 +370,7 @@ export default function App() {
               });
             }}
           >
-            {state.busy ? 'Saving…' : 'Save scene'}
+            {state.busy && !working ? 'Saving…' : 'Save scene'}
           </button>
         </div>
       </header>
@@ -432,15 +431,9 @@ export default function App() {
                       setPoints([]);
                       setJob(null);
                       setShowBlueprint(true);
-                      useEditor.setState({
-                        scene: null,
-                        selectedId: null,
-                        dirty: false,
-                        past: [],
-                        future: [],
-                        sourceScene: null,
-                        compare: false,
-                      });
+                      state.load(null);
+                      setHeight('');
+                      setThickness('');
                       setNotice(
                         api.mock
                           ? 'Mock mode always displays the committed fixture; your image is not reconstructed.'
@@ -525,11 +518,16 @@ export default function App() {
                   <input
                     type="number"
                     min="0.1"
+                    max="20"
                     step="0.1"
+                    placeholder="Assumed: 2.7 m"
                     value={height}
                     onChange={(e) => setHeight(e.target.value)}
                   />
                 </label>
+                <p className="hint">
+                  Leave height blank to assume 2.7 m. Ceilings are inferred from room heights.
+                </p>
                 <label className="field">
                   Wall thickness (m)
                   <input

@@ -206,3 +206,38 @@ def test_dev_seed_is_opt_in(tmp_path):
         assert c.get("/api/projects/demo-room/blueprint").content == (CONTRACTS / "fixtures" / "room.png").read_bytes()
         cal = {"pointA": [50, 50], "pointB": [150, 50], "distanceMeters": 2}
         assert_error(c.post("/api/projects/demo-room/reconstruct", json={"calibration": cal}), 400, "VALIDATION_ERROR")
+
+
+def test_reconstruction_never_reuses_an_editable_revision(client):
+    pid = reconstructed(client)
+    url = f"/api/projects/{pid}/scene"
+    old = client.get(url).json()
+    saved = client.put(url, json=old).json()
+    job = client.post(f"/api/projects/{pid}/reconstruct", json={"calibration": CAL}).json()["job"]
+    assert wait_job(client, job["id"])["status"] == "succeeded"
+    assert client.get(url).json()["revision"] == 2
+    assert client.get(f"/api/projects/{pid}/source-scene").json()["revision"] == 0
+    assert_error(client.put(url, json=old), 409, "REVISION_CONFLICT")
+    assert_error(client.put(url, json=saved), 409, "REVISION_CONFLICT")
+
+
+def test_jpeg_orientation_matches_browser_calibration(client, tmp_path):
+    import struct
+    from roomshift_api.images import load_gray
+    image = np.full((60, 100), 255, np.uint8)
+    image[10:30, 10:30] = 0
+    _, encoded = cv2.imencode('.jpg', image)
+    # Minimal EXIF TIFF with Orientation=6 (90 degrees clockwise).
+    exif = b'Exif\x00\x00' + b'II' + struct.pack('<HIH', 42, 8, 1)
+    exif += struct.pack('<HHIHHI', 0x112, 3, 1, 6, 0, 0)
+    data = encoded.tobytes()
+    data = data[:2] + b'\xff\xe1' + struct.pack('>H', len(exif) + 2) + exif + data[2:]
+    result = upload(client, data, name='rotated.jpg')
+    assert result.status_code == 201
+    assert (result.json()['image']['width'], result.json()['image']['height']) == (60, 100)
+    assert client.get(result.json()['image']['url']).content == data
+    path = tmp_path / 'oriented.jpg'
+    path.write_bytes(data)
+    gray = load_gray(path)
+    assert gray.shape == (100, 60)
+    assert gray[20, 40] < 20

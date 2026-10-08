@@ -27,6 +27,18 @@ def wall_length(wall: dict) -> float:
 def validate_scene(scene: object, schema_path: Path) -> list[dict]:
     """Return a list of {path, message} problems; empty when valid."""
     problems: list[dict] = []
+    def check_finite(value, path=""):
+        if isinstance(value, float) and not math.isfinite(value):
+            problems.append({"path": path or "/", "message": "number must be finite"})
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                check_finite(item, f"{path}/{key}")
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                check_finite(item, f"{path}/{index}")
+    check_finite(scene)
+    if problems:
+        return problems
     for err in sorted(_validator(str(schema_path)).iter_errors(scene), key=lambda e: list(e.absolute_path)):
         problems.append({"path": "/" + "/".join(str(p) for p in err.absolute_path), "message": err.message})
     if problems:
@@ -79,6 +91,13 @@ def validate_scene(scene: object, schema_path: Path) -> list[dict]:
             bad(f"/openings/{i}", "opening is taller than its wall (bottom + height > wall height)")
         if o["type"] == "door" and o["bottom"] != 0:
             bad(f"/openings/{i}/bottom", "doors must have bottom = 0")
+        for other in scene["openings"][:i]:
+            if (other["wallId"] == o["wallId"]
+                    and o["offset"] < other["offset"] + other["width"]
+                    and o["offset"] + o["width"] > other["offset"]
+                    and o["bottom"] < other["bottom"] + other["height"]
+                    and o["bottom"] + o["height"] > other["bottom"]):
+                bad(f"/openings/{i}", "opening overlaps another opening")
 
     for i, ob in enumerate(scene["objects"]):
         if not (finite(ob["position"]) and finite(ob["rotationY"])):

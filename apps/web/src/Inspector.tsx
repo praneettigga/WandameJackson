@@ -90,6 +90,7 @@ export function Inspector() {
                 <label className="field">
                   Name
                   <input
+                    key={entity.name}
                     defaultValue={entity.name}
                     onBlur={(e) => {
                       if (e.target.value !== entity.name) patch('name', e.target.value);

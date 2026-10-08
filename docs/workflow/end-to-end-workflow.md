@@ -27,9 +27,9 @@ This is the prototype's definition of done. The work is complete only when this 
 - The room has floor, four walls, ceiling, and at least one opening when the plan contains one.
 - Furniture can be selected, moved, rotated, resized, and floor-snapped.
 - The editor can run from the example fixture with no backend connection.
-- The saved scene follows schema `1.0` and reloads without changed IDs or measurements.
+- The saved scene follows the authoritative schema `0.1.0` in `contracts/scene.schema.json` and reloads without changed IDs or measurements.
 - Scene JSON and GLB are both exportable.
 
 ## Suggested demo sequence
 
-Use the demo room fixture first. Select the sofa, move it, rotate it, resize it, floor-snap it, inspect its provenance, save, reload, then export JSON and GLB. This demonstrates the entire promised workflow in a short, reliable path.
+Use the committed demo room fixture first. Select its table (or add a sofa from the component library), move it, rotate it, resize it, floor-snap it to bottom-center Y = 0, inspect its provenance, save, reload, then export JSON and GLB. Real reconstructions currently extract architecture; furniture is added manually from the library.

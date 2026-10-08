@@ -1,5 +1,7 @@
 # Scene schema
 
+> Superseded planning draft. Use [the implemented schema](../../contracts/scene.schema.json) and [coordinate/provenance rules](../../contracts/api-contract.md). The active version is `0.1.0`, objects use bottom-center positions, and floor snap sets Y = 0. The legacy examples below are not compatible with the running prototype.
+
 This is the frozen scene format exchanged by the backend and editor. It is JSON. Unknown fields may be ignored so long as required fields remain intact.
 
 ## Global rules

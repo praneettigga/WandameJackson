@@ -1,5 +1,7 @@
 # Backend API contract
 
+> Superseded planning draft. Use [the authoritative API contract](../../contracts/api-contract.md). The running prototype uses `/api/projects`, async reconstruction jobs, bare Scene payloads, and frontend JSON/GLB exports; the `/api/v1` endpoints below are not implemented.
+
 The editor can be built with the example project until these endpoints exist. All JSON responses use the [scene schema](scene-schema.md).
 
 Base path: `/api/v1`

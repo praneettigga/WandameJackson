@@ -1,5 +1,7 @@
 # Agent 2 frontend handoff
 
+> Integration update: the root README and `contracts/` are authoritative. Reconstruction now preserves monotonically increasing editable revisions (including mock mode), while source snapshots stay at revision 0. Blank wall height uses the labelled backend assumption; geometry validation, project-state reset, async edit locking, name undo, and local-axis resize were corrected. A real API/editor integration test is available in `apps/web/tests/live-api.test.ts` and has passed. Browser visual verification remains manual.
+
 Implemented on `feat/prototype-frontend`, against the committed `contracts/scene.schema.json`, `contracts/api-contract.md`, and the unchanged `contracts/fixtures/room.scene.json` / `room.png`. All implementation, dependencies, configuration, and tests are under `apps/web/`; this handoff is under `docs/frontend/`.
 
 ## Install and run

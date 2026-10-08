@@ -100,6 +100,7 @@ Multipart form: `blueprint` (file, required), `name` (string, optional, default 
 - `error` is null unless the status is `failed`. On failure it has the shape `{ code, message, details }`, e.g. `RECONSTRUCTION_FAILED` with actionable text.
 - Jobs that were interrupted by a server restart are reported as `failed`.
 - A failed job never replaces the current scene.
+- The first reconstruction starts at editable revision 0. Each successful rerun increments the current editable revision, so a stale editor cannot overwrite the new result. The source snapshot remains revision 0.
 
 ### `GET /api/projects/{projectId}/scene`
 `200` → the current editable `Scene` (bare object, not wrapped). `404 SCENE_NOT_READY` if none.
@@ -114,6 +115,8 @@ The body is a complete `Scene` whose `revision` equals the server's current revi
 
 ### `GET /api/projects/{projectId}/source-scene`
 `200` → the latest successful reconstruction, as produced and unmodified (`revision` 0). Saves never change it. A new successful reconstruction replaces both the source scene and the current scene. `404 SCENE_NOT_READY` if none.
+
+JPEG pixel coordinates and reported dimensions use the image's EXIF display orientation, matching the browser preview. Uploaded image bytes are preserved.
 
 ## Provenance conventions
 

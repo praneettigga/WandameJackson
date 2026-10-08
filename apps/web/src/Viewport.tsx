@@ -175,6 +175,7 @@ function World() {
             <TransformControls
               object={target}
               mode={state.mode}
+              space={state.mode === 'scale' ? 'local' : 'world'}
               showX={state.mode !== 'rotate'}
               showY
               showZ={state.mode !== 'rotate'}

@@ -224,7 +224,10 @@ def parse_blueprint(
         raise ParseError("Could not find solid wall strokes (lines are at most 1 px thick). Use a drawing where walls are drawn as thick solid lines.")
     k = max(3, int(round(T * 0.6))) | 1  # odd kernels avoid a 1 px anchor shift
     thick = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
-    L = max(int(3 * T) + 1, int(MIN_WALL_M / mpp)) | 1
+    min_wall_px = MIN_WALL_M / mpp
+    if not math.isfinite(min_wall_px) or min_wall_px > max(h_img, w_img):
+        raise ParseError("The calibrated image is smaller than the minimum 0.3 m wall length. Check the calibration distance.")
+    L = max(int(3 * T) + 1, int(min_wall_px)) | 1
     horiz = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((1, L), np.uint8))
     vert = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((L, 1), np.uint8))
     progress(0.4)
@@ -248,6 +251,7 @@ def parse_blueprint(
     height_origin = "user" if wall_height is not None else "inferred"
     if wall_height is None:
         warnings.append(f"Wall height is not present in a plan; assumed {DEFAULT_WALL_HEIGHT} m.")
+    warnings.append("Ceilings are inferred from enclosed room footprints at the room height; they were not observed in the blueprint.")
     if not (0.03 <= measured_m <= 1.0) and wall_thickness is None:
         warnings.append(f"Measured wall thickness {measured_m:.3f} m is implausible; check the calibration. Using {DEFAULT_WALL_THICKNESS} m.")
 
@@ -279,7 +283,8 @@ def parse_blueprint(
             "height": height,
             "thickness": round(t_m, 4),
             "provenance": prov("evidence", {"height": height_origin, "thickness": t_origin},
-                               [t_note, "Centerline from detected wall stroke; endpoints snapped to adjoining walls."]),
+                               [t_note, "Centerline from detected wall stroke; endpoints snapped to adjoining walls.",
+                                f"Height {'supplied by the user' if wall_height is not None else 'assumed from the default'}: {height} m."]),
         })
         for kind, g0, g1 in ln.openings:
             offset = max(0.0, (g0 - ln.a0) * mpp)
@@ -297,7 +302,7 @@ def parse_blueprint(
                 fo = {"height": "inferred", "bottom": "inferred"}
             openings.append({
                 "id": f"{kind}-{len(openings) + 1}", "type": kind, "wallId": wid,
-                "offset": round(offset, 4), "width": round(width, 4), "height": round(o_h, 4), "bottom": round(o_b, 4),
+                "offset": round(offset, 4), "width": round(width, 4), "height": o_h, "bottom": o_b,
                 "provenance": prov("inferred", fo, notes),
             })
     progress(0.8)
@@ -307,7 +312,8 @@ def parse_blueprint(
         rooms.append({
             "id": f"room-{j}", "name": f"Room {j}", "polygon": poly, "height": height,
             "provenance": prov("inferred", {"height": height_origin},
-                               ["Enclosed region bounded by detected walls (openings closed), offset to wall centerlines."]),
+                               ["Enclosed region bounded by detected walls (openings closed), offset to wall centerlines.",
+                                "Ceiling inferred from this footprint at the room height; not observed in the drawing."]),
         })
     if not rooms:
         warnings.append("No enclosed rooms were detected; walls were reconstructed without floors.")

@@ -33,7 +33,7 @@ type EditorState = {
   measure: boolean;
   measures: V3[];
   frame: number;
-  load: (scene: Scene) => void;
+  load: (scene: Scene | null) => void;
   select: (id: string | null) => void;
   commit: (mutate: (scene: Scene) => void) => boolean;
   patch: (id: string, patch: Record<string, unknown>) => void;
@@ -65,7 +65,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   frame: 0,
   load: (scene) =>
     set({
-      scene: sceneSchema.parse(scene),
+      scene: scene ? sceneSchema.parse(scene) : null,
       selectedId: null,
       past: [],
       future: [],
@@ -74,7 +74,9 @@ export const useEditor = create<EditorState>((set, get) => ({
       conflict: false,
       sourceScene: null,
       compare: false,
+      measure: false,
       measures: [],
+      workspace: scene ? 'Edit' : 'Reconstruct',
       frame: get().frame + 1,
     }),
   select: (id) => set({ selectedId: get().scene && entityById(get().scene!, id) ? id : null }),

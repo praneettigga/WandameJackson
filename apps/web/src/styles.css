@@ -1831,3 +1831,45 @@ body:has(.explore-overlay) canvas {
   border-radius: 50%;
   background: #ff4d4d;
 }
+
+/* What-if impact note */
+.what-if {
+  position: absolute;
+  left: 20px;
+  bottom: 34px;
+  max-width: 300px;
+  padding: 8px 26px 8px 11px;
+  background: rgba(36, 44, 48, 0.94);
+  border: 1px solid #344147;
+  border-left: 2px solid #e8b571;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: #d7dcdc;
+  animation: what-if-in 0.18s ease-out;
+}
+.what-if b {
+  display: block;
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: #e8b571;
+  margin-bottom: 3px;
+}
+.what-if p {
+  margin: 0;
+}
+.what-if button {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  padding: 0 5px;
+  border: 0;
+  background: none;
+  color: #819095;
+}
+@keyframes what-if-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}

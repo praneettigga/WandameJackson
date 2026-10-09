@@ -29,6 +29,7 @@ import { resizedObject, type Scene, type V3 } from './scene';
 import { buildInfrastructureGeometry } from './infrastructureGeometry';
 import { serviceInfo, serviceKinds } from './infrastructure';
 import { useInfrastructure } from './InfrastructurePanel';
+import { WhatIfToast } from './WhatIfToast';
 
 function MeasurePoint({
   position,
@@ -583,6 +584,7 @@ export function Viewport() {
           </button>
         </div>
       )}
+      <WhatIfToast />
       {compare && <div className="compare-label">CYAN WIREFRAME · ORIGINAL RECONSTRUCTION</div>}
       {seeThrough && hasScene && (
         <div className="services-legend" aria-label="Services legend">

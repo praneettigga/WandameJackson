@@ -1,0 +1,9 @@
+.venv/
+.python/
+.cache/
+checkpoints/
+__pycache__/
+.pytest_cache/
+meshroom/
+# Baked demo meshes are large; share them out of band (presets.json stays tracked).
+demo/*/

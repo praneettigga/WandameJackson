@@ -38,6 +38,7 @@ import { ComponentLibrary } from './ComponentLibrary';
 import { InfrastructurePanel, WallsToggle } from './InfrastructurePanel';
 import { loadLibrary } from './library';
 import { formatLength, fromMeters, lengthUnits, toMeters, type LengthUnit } from './units';
+import { CaptureWorkspace } from './CaptureWorkspace';
 
 class ViewportBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -72,7 +73,13 @@ export function ErrorBanner() {
   );
 }
 
-function UnitSelect({ label, onChange }: { label: string; onChange?: (from: LengthUnit, to: LengthUnit) => void }) {
+function UnitSelect({
+  label,
+  onChange,
+}: {
+  label: string;
+  onChange?: (from: LengthUnit, to: LengthUnit) => void;
+}) {
   const unit = useEditor((s) => s.lengthUnit);
   return (
     <select
@@ -215,7 +222,9 @@ function Calibration({
                 paintOrder="stroke"
               >
                 {Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]).toFixed(1)} px
-                {!ghost && distance && Number(distance) > 0 ? ` = ${formatLength(toMeters(Number(distance), unit), unit)}` : ''}
+                {!ghost && distance && Number(distance) > 0
+                  ? ` = ${formatLength(toMeters(Number(distance), unit), unit)}`
+                  : ''}
               </text>
             </>
           )}
@@ -270,6 +279,7 @@ export default function App() {
   const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
   const addFiles = useRef(false);
   const [exportScope, setExportScope] = useState<'all' | 'floor'>('all');
+  const [inputMode, setInputMode] = useState<'blueprint' | 'capture'>('blueprint');
   const [project, setProject] = useState<ProjectEnvelope | null>(null);
   const [points, setPoints] = useState<V2[]>([]),
     [distance, setDistance] = useState('2');
@@ -404,7 +414,11 @@ export default function App() {
     localStorage.setItem('roomshift.lastProject', id);
     setPoints(scene ? [scene.source.calibration.pointA, scene.source.calibration.pointB] : []);
     if (scene) {
-      setDistance(String(fromMeters(scene.source.calibration.distanceMeters, useEditor.getState().lengthUnit)));
+      setDistance(
+        String(
+          fromMeters(scene.source.calibration.distanceMeters, useEditor.getState().lengthUnit),
+        ),
+      );
       useEditor.setState({ workspace: 'Edit' });
     }
     setNotice(
@@ -593,6 +607,7 @@ export default function App() {
       }
     };
     const key = (e: KeyboardEvent) => {
+      if (inputMode !== 'blueprint') return;
       const target = e.target;
       if (
         (target instanceof HTMLElement &&
@@ -648,11 +663,12 @@ export default function App() {
       window.removeEventListener('beforeunload', beforeUnload);
       window.removeEventListener('keydown', key);
     };
-  }, []);
+  }, [inputMode]);
   let scale: number | null = null;
   try {
     if (scaleMode === 'auto') scale = automaticScale?.metersPerPixel ?? null;
-    else if (points.length === 2) scale = metersPerPixel(points[0], points[1], toMeters(Number(distance), state.lengthUnit));
+    else if (points.length === 2)
+      scale = metersPerPixel(points[0], points[1], toMeters(Number(distance), state.lengthUnit));
   } catch {
     /* Inline readiness below. */
   }
@@ -730,7 +746,7 @@ export default function App() {
   }
   return (
     <div
-      className="app-shell"
+      className={`app-shell ${inputMode === 'capture' ? 'capture-mode' : ''}`}
       style={
         { '--left-panel': `${leftWidth}px`, '--right-panel': `${rightWidth}px` } as CSSProperties
       }
@@ -740,7 +756,12 @@ export default function App() {
           <span className="brand-mark">▱</span>ROOMSHIFT<span className="version">/ 0.1</span>
         </a>
         <div className="project-title">
-          {state.assembly?.name ?? state.scene?.name ?? project?.project.name ?? 'Untitled space'}
+          {inputMode === 'capture'
+            ? 'Room capture'
+            : (state.assembly?.name ??
+              state.scene?.name ??
+              project?.project.name ??
+              'Untitled space')}
           {state.dirty && <span title="Unsaved changes" className="dirty-dot" />}
         </div>
         <div className="header-actions">
@@ -811,7 +832,12 @@ export default function App() {
             <button
               className="primary small"
               onClick={() => {
-                useEditor.setState({ scene: draftOffer.draft.scene, dirty: true, past: [], future: [] });
+                useEditor.setState({
+                  scene: draftOffer.draft.scene,
+                  dirty: true,
+                  past: [],
+                  future: [],
+                });
                 setDraftOffer(null);
               }}
             >
@@ -828,7 +854,26 @@ export default function App() {
           </button>
         </div>
       )}
-      <main className="editor-layout">
+      <div className="input-mode" role="group" aria-label="Input mode">
+        {(['blueprint', 'capture'] as const).map((mode) => (
+          <button
+            key={mode}
+            aria-pressed={inputMode === mode}
+            disabled={disabled}
+            onClick={() => {
+              if (document.pointerLockElement) document.exitPointerLock();
+              setInputMode(mode);
+            }}
+          >
+            {mode === 'blueprint' ? 'Mode 1 · Blueprint' : 'Mode 2 · Photos & video'}
+          </button>
+        ))}
+      </div>
+      {inputMode === 'capture' && <CaptureWorkspace />}
+      <main
+        className="editor-layout"
+        style={inputMode === 'capture' ? { display: 'none' } : undefined}
+      >
         <aside className="left-panel panel">
           {state.assembly && (
             <AssemblyControls onReconstruct={(ids) => void reconstructGroup(ids)} />
@@ -1102,19 +1147,20 @@ export default function App() {
                       {job.cancelRequested ? 'cancelling' : job.status} ·{' '}
                       {Math.round(job.progress * 100)}%
                     </span>
-                    {(job.status === 'queued' || job.status === 'running') && !job.cancelRequested && (
-                      <button
-                        className="small"
-                        onClick={() =>
-                          void api
-                            .cancelJob(job.id)
-                            .then((r) => setJob(r.job))
-                            .catch(error)
-                        }
-                      >
-                        Cancel
-                      </button>
-                    )}
+                    {(job.status === 'queued' || job.status === 'running') &&
+                      !job.cancelRequested && (
+                        <button
+                          className="small"
+                          onClick={() =>
+                            void api
+                              .cancelJob(job.id)
+                              .then((r) => setJob(r.job))
+                              .catch(error)
+                          }
+                        >
+                          Cancel
+                        </button>
+                      )}
                   </div>
                 )}
               </section>
@@ -1455,7 +1501,8 @@ export default function App() {
               <span>REVIEW & OUTPUT</span>
               <span>
                 {warnings.length} {warnings.length === 1 ? 'notice' : 'notices'}
-                {issues.length > 0 && ` · ${issues.length} completeness ${issues.length === 1 ? 'check' : 'checks'}`}
+                {issues.length > 0 &&
+                  ` · ${issues.length} completeness ${issues.length === 1 ? 'check' : 'checks'}`}
               </span>
             </div>
             <div className="dock-body">
@@ -1554,12 +1601,17 @@ export default function App() {
                       if (!state.scene) return;
                       const scene = state.scene;
                       const image = await fetch(api.imageUrl(scene.source.imageUrl)).then((r) => {
-                        if (!r.ok) throw new Error(`Could not download the blueprint (HTTP ${r.status}).`);
+                        if (!r.ok)
+                          throw new Error(`Could not download the blueprint (HTTP ${r.status}).`);
                         return r.blob();
                       });
                       const ext = scene.source.mimeType === 'image/jpeg' ? 'jpg' : 'png';
                       download(image, scene.source.mimeType, `${scene.id}.${ext}`);
-                      download(exportSceneJson(scene), 'application/json', `${scene.id}.scene.json`);
+                      download(
+                        exportSceneJson(scene),
+                        'application/json',
+                        `${scene.id}.scene.json`,
+                      );
                       setNotice(
                         'Ground-truth pair downloaded. Put both files in services/api/data/gt and run python -m eval.run --set real.',
                       );
@@ -1687,16 +1739,28 @@ export default function App() {
       <footer className="status-bar">
         <span>
           <i className="online-dot" />
-          {working ? 'Working…' : state.hasUnsaved() ? 'Unsaved changes' : 'Ready'}
+          {inputMode === 'capture'
+            ? 'Capture workspace'
+            : working
+              ? 'Working…'
+              : state.hasUnsaved()
+                ? 'Unsaved changes'
+                : 'Ready'}
           <b>·</b>
-          {state.scene ? `Revision ${state.scene.revision}` : 'No scene loaded'}
+          {inputMode === 'capture'
+            ? 'Local project storage'
+            : state.scene
+              ? `Revision ${state.scene.revision}`
+              : 'No scene loaded'}
         </span>
         <span>
-          {state.scene
-            ? `${state.scene.rooms.length} rooms / ${state.scene.walls.length} walls / ${state.scene.objects.length} objects`
-            : state.assembly
-              ? `${state.assembly.buildings.length} buildings / ${floorsOf(state.assembly).length} floors`
-              : 'Single floor / Metric / Y up'}
+          {inputMode === 'capture'
+            ? 'Photo/video mesh · Scale & alignment in viewer'
+            : state.scene
+              ? `${state.scene.rooms.length} rooms / ${state.scene.walls.length} walls / ${state.scene.objects.length} objects`
+              : state.assembly
+                ? `${state.assembly.buildings.length} buildings / ${floorsOf(state.assembly).length} floors`
+                : 'Single floor / Metric / Y up'}
           <b>·</b>ROOMSHIFT PROTOTYPE
         </span>
       </footer>

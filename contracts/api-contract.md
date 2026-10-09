@@ -157,7 +157,7 @@ JPEG pixel coordinates and reported dimensions use the image's EXIF display orie
 
 The additive [assembly schema](assembly.schema.json) references unchanged Scene 0.1.0 projects. Buildings contain ordered floors (bottom first). Each floor references a unique `projectId` and stores offsets in metres, rotation in radians, optional story height, reconstruction settings, and a server-owned job link. Building transforms apply after floor transforms. Plans are centered for placement; source scene coordinates remain unchanged. Automatic story height is maximum wall/room height plus a 0.20 m slab. Manual heights below that minimum are rejected. Exploded spacing is display-only.
 
-- `POST /api/assemblies`: body `{name, buildings}`; returns 201 with the envelope below. IDs and project membership must be unique; referenced projects must exist.
+- `POST /api/assemblies`: body `{name, buildings}`; returns 201 with the envelope below. IDs and project membership must be unique; referenced projects must exist and be blueprints. Photo/video captures return `INVALID_SOURCE` on assembly creation, save, or floor reconstruction.
 - `GET /api/assemblies/{id}`: returns 200 with available scenes and latest linked jobs.
 - `PUT /api/assemblies/{id}`: full Assembly with matching ID, revision, and immutable creation time; increments revision. Stale saves return `REVISION_CONFLICT`. Server job links are preserved.
 - `POST /api/assemblies/{id}/reconstruct`: `{}` targets missing or previously failed floors; `{projectIds:[...]}` targets explicit members. Uses independent automatic/manual calibration and wall settings. Reuses running jobs. Returns 202 with the envelope plus `submittedJobs` and per-project `errors`. Updates assembly revision. One failed submission does not abort other floors.
@@ -165,3 +165,117 @@ The additive [assembly schema](assembly.schema.json) references unchanged Scene 
 Envelope: `{assembly, projects:[ProjectEnvelope], scenes:{[projectId]:Scene}, jobs:{[projectId]:Job}}`. Unavailable scenes/jobs are omitted. Unknown grouped IDs return `ASSEMBLY_NOT_FOUND`. Existing child project, scene, source, and job endpoints remain supported.
 
 Save-all uses separate revision checks for layout and child scenes; failed saves retain local changes. JSON bundles the assembly, available scenes, and `omittedFloors`. GLB contains available geometry at physical elevations and reports omitted floors.
+
+## Mode 2 additive ingestion contract (Milestone 1)
+
+The frozen Mode 1 Scene remains unchanged. Project envelopes now include `source`
+with `kind: "blueprint" | "video" | "photo-set"`. Legacy projects default to
+`blueprint`. Blueprint `image` remains unchanged; capture projects have `image:
+null`, `captureJobId` and `inputManifestUrl` (null until prepared). Capture source
+metadata contains ordered `originals` with `id`, `filename`, project-relative
+`path`, `bytes`, and `sha256`. `/api/projects` returns both kinds; clients must
+branch on source kind before using blueprint endpoints.
+
+- `POST /api/captures`: multipart `kind`, repeated `files`, optional `name`.
+  Returns 201 with capture ProjectEnvelope plus `job`. Requires one MP4/MOV or
+  20–40 PNG/JPEGs. Upload validation failures create no project. Deeper media and
+  quality checks run asynchronously and report failures on the job.
+- `POST /api/projects/{id}/prepare`: retry capture preparation; returns 202
+  `{job}` or 409 `JOB_IN_PROGRESS`. Originals remain unchanged.
+- `GET /api/projects/{id}/capture-input`: latest accepted manifest or 404
+  `INPUT_NOT_READY`. Schema v1.0.0, `kind: reconstruction-input`, `projectId`,
+  `jobId`, `sourceKind`, `originals`, `frames`, `rejected`, `overlapEdges`,
+  `processing`, `warnings`. Frame records include stable `id`, project-relative
+  `path`, HTTP `url`, `sourceId`, `timestampSeconds`, `sourceTimestampSeconds`,
+  normalized `width`/`height`, `sharpness`, `sha256`. Rejected records identify
+  original source/time and `reason`. Overlap edges use zero-based frame indexes
+  and measured `inliers`. Processing records pin algorithm version and thresholds.
+- `GET /api/projects/{id}/capture-artifacts/{path}`: allowlisted original files
+  and latest accepted frames only. Arbitrary project files are never served.
+
+Preparation reuses job polling/cancellation. Jobs add `kind: capture-preparation`,
+`stage`, `inputManifestUrl`, and (on success) `selectedViews`. Stages: `queued`,
+`decoding`, `quality_checks`, `overlap_checks`, `saving_input`, `ready`.
+Successful preparation has `sceneUrl: null`, and the project still has
+`hasScene: false`. Consumers must use the result URL appropriate to the job kind.
+Errors include `INSUFFICIENT_VIEWS`, `LOW_OVERLAP`, `INVALID_DURATION`,
+`INVALID_VIDEO`, `INVALID_PHOTO`, `SOURCE_CHANGED`, `MEDIA_TOOLS_MISSING`,
+`MEDIA_TIMEOUT`, and `JOB_CANCELLED`, with actionable messages. Blueprint,
+scale and blueprint-reconstruct endpoints reject capture sources with 400
+`INVALID_SOURCE`. Prepared captures feed the mesh reconstruction endpoint below.
+
+See [ingestion behavior and limits](../docs/mode2-ingestion.md).
+
+## Mode 2 mesh reconstruction (Milestone 2)
+
+- `GET /api/reconstruction/capabilities`: `{ready, code, message, device?}` from
+  an isolated worker probe. Missing environment/checkpoint/CUDA returns `ready:false`.
+- `POST /api/projects/{id}/reconstruct-mesh`: optional JSON
+  `{ "maxViews": 20 }` (12, 20, 32, or 40; defaults to 20). Requires accepted
+  capture input. Returns 202 `{job}`; active same-project jobs return 409.
+- `GET /api/projects/{id}/mesh`: latest successful reconstruction manifest, or
+  404 `MESH_NOT_READY`. Adds `meshUrl` and `diagnosticUrl` to manifest v1.0.0.
+- `GET /api/projects/{id}/mesh-artifacts/{jobId}/{filename}`: only `mesh.glb` and
+  `diagnostic.ply` for the currently published job. No request/log paths are served.
+
+Envelopes add `hasMesh`, `meshJobId`, and `meshManifestUrl`. `hasScene` continues to
+mean the Mode 1 editable Scene; a capture mesh never masquerades as editable walls.
+Mesh jobs have `kind: mesh-reconstruction`, `maxViews`, `meshManifestUrl`, and
+`stage`. `sceneUrl` remains null. Stages include loading input/model, camera/depth
+estimation, filtering, fusion, extraction, export, validation, and ready.
+
+The mesh manifest includes input job/frame hashes, both camera transform
+directions, intrinsics/content bounds, `units: uncalibrated`, `calibration: null`,
+model/checkpoint provenance, processing settings, statistics and warnings.
+`statistics.endToEndSeconds` is null for legacy inputs without preparation timing.
+Errors include `WORKER_NOT_CONFIGURED`, `GPU_UNAVAILABLE`, `CHECKPOINT_MISSING`,
+`CHECKPOINT_LICENSE_REQUIRED`, `GPU_OUT_OF_MEMORY`, `RECONSTRUCTION_TIMEOUT`,
+`WORKER_EXITED`, `INVALID_MESH`, and `JOB_CANCELLED`. Failed/cancelled reruns retain
+the previous published mesh. See [worker setup and validation boundaries](../services/reconstruction/README.md).
+
+## Mode 2 scale and alignment (Milestone 3)
+
+`PUT /api/projects/{id}/mesh/calibration` applies a complete calibration specification:
+
+```json
+{
+  "jobId": "j_current_mesh",
+  "expectedRevision": null,
+  "reference": { "pointA": [0, 0, 0], "pointB": [1, 0, 0], "distanceMeters": 2 },
+  "floor": { "points": [[0, 0, 0], [1, 0, 0], [0, 0, 1]], "flipNormal": false },
+  "rotationDegrees": [0, 0, 0]
+}
+```
+
+Points use the original reconstruction coordinates. `reference` and `floor` may
+be null. With both null and zero rotation, the result resets to original geometry.
+`expectedRevision` must match the current `calibrationRevision` (null initially);
+stale revisions or reconstruction job IDs return 409 `CALIBRATION_CONFLICT`.
+Invalid/non-finite references, coincident scale points and collinear floor points
+return 400. Two-point scale must be between 1e-4 and 1e4 model-to-world units.
+
+Floor alignment rotates the selected normal toward +Y, translating the first floor
+point to the origin. `flipNormal` reverses the chosen up direction. Manual X/Y/Z
+Euler corrections in degrees, each within ±180, apply after floor alignment in
+X-then-Y-then-Z order. The final transform is `T = [sR, -sR origin; 0, 1]`.
+
+Success returns the effective mesh manifest, version `1.1.0`, including
+`reconstructionToWorld` (row-major 4×4), `calibrationRevision`, `calibration`,
+`meshUrl` and `manifestUrl`. Units are `meters` only when a reference distance is
+present. Geometry positions use T; normals use R. Camera orientations use R and
+centers use T, keeping rigid camera bases and inverse world-to-camera matrices.
+`worldToViewer`, when present, composes T with the original convention conversion.
+Geometry-length statistics are scaled; source-image intrinsics remain unchanged.
+
+`GET /api/projects/{id}/mesh` returns the latest effective calibration after reload.
+`GET /api/projects/{id}/mesh-calibrations/{revision}/{mesh.glb|manifest.json}` serves
+only the current published calibration. GLB transforms are baked into vertices;
+the manifest matrix describes the operation already applied (do not apply twice).
+Diagnostic PLY continues to use original uncalibrated coordinates and is labeled
+accordingly. Calibrations are always rebuilt from the original mesh, avoiding
+cumulative transform error. Tiny faces collapsed at float32 precision are removed,
+with a count in `statistics.calibrationDegenerateTrianglesRemoved`.
+
+Publication is atomic under the project lock. Failed calibration/rerun preserves
+the previous result. A successful new reconstruction has a new coordinate frame
+and starts uncalibrated. Existing Mode 1 and uncalibrated Mode 2 projects still load.

@@ -1873,3 +1873,16 @@ body:has(.explore-overlay) canvas {
     transform: translateY(4px);
   }
 }
+
+/* Splitter between the viewport and the review dock */
+.resize-handle-row {
+  height: 4px;
+  flex-shrink: 0;
+  background: #161c1f;
+  cursor: row-resize;
+  touch-action: none;
+}
+.resize-handle-row:hover,
+.resize-handle-row:focus {
+  background: #b28b52;
+}

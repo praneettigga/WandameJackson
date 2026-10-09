@@ -132,6 +132,30 @@ function ResizeHandle({
   );
 }
 
+/** Horizontal splitter above the review dock: dragging it trades viewport height for dock height. */
+function DockResizeHandle({ onChange }: { onChange: (height: number) => void }) {
+  const dock = (el: Element) => el.nextElementSibling?.getBoundingClientRect();
+  return (
+    <div
+      className="resize-handle-row"
+      role="separator"
+      aria-label="Resize bottom panel"
+      aria-orientation="horizontal"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown')
+          onChange((dock(e.currentTarget)?.height ?? 140) + (e.key === 'ArrowUp' ? 20 : -20));
+      }}
+      onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
+      onPointerMove={(e) => {
+        const rect = dock(e.currentTarget);
+        if (e.currentTarget.hasPointerCapture(e.pointerId) && rect) onChange(rect.bottom - e.clientY);
+      }}
+      onPointerUp={(e) => e.currentTarget.releasePointerCapture(e.pointerId)}
+    />
+  );
+}
+
 function Calibration({
   project,
   points,
@@ -296,6 +320,7 @@ export default function App() {
     [working, setWorking] = useState(false);
   const [health, setHealth] = useState('Checking API'),
     [projectId, setProjectId] = useState(localStorage.getItem('roomshift.lastProject') ?? '');
+  const [dockHeight, setDockHeight] = useState<number | null>(null);
   const [leftWidth, setLeftWidth] = useState(260),
     [rightWidth, setRightWidth] = useState(286);
   const [notice, setNotice] = useState(''),
@@ -1450,7 +1475,13 @@ export default function App() {
               </div>
             )}
           </div>
-          <div className="bottom-dock">
+          <DockResizeHandle
+            onChange={(h) => setDockHeight(Math.max(40, Math.min(window.innerHeight * 0.7, h)))}
+          />
+          <div
+            className="bottom-dock"
+            style={dockHeight === null ? undefined : { height: dockHeight, minHeight: 0, maxHeight: 'none' }}
+          >
             <div className="dock-title">
               <span>REVIEW & OUTPUT</span>
               <span>

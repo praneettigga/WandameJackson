@@ -51,19 +51,24 @@ def project_envelope(p: dict) -> dict:
     }
 
 
+# Committed synthetic fixtures exposed as ready-made projects: project id → file stem in contracts/fixtures.
+SEEDED_FIXTURES = {DEMO_ID: "room", "services-apartment": "services-apartment"}
+
+
 def seed_fixture(storage: Storage, contracts_dir: Path) -> None:
-    """Dev-only: expose the committed synthetic fixture as project `demo-room`. Never used as a parse fallback."""
-    if storage.get_project(DEMO_ID):
-        return
-    scene = json.loads((contracts_dir / "fixtures" / "room.scene.json").read_text(encoding="utf-8"))
-    png = (contracts_dir / "fixtures" / "room.png").read_bytes()
-    storage.save_blueprint(DEMO_ID, png, "image/png")
-    storage.save_project({
-        "id": DEMO_ID, "name": scene["name"], "createdAt": now_iso(), "hasScene": True, "synthetic": True,
-        "image": {"url": scene["source"]["imageUrl"], "width": scene["source"]["imageWidth"],
-                  "height": scene["source"]["imageHeight"], "mimeType": "image/png"},
-    })
-    storage.save_reconstruction(DEMO_ID, scene)
+    """Dev-only: expose the committed synthetic fixtures (e.g. `demo-room`). Never used as a parse fallback."""
+    for project_id, stem in SEEDED_FIXTURES.items():
+        if storage.get_project(project_id):
+            continue
+        scene = json.loads((contracts_dir / "fixtures" / f"{stem}.scene.json").read_text(encoding="utf-8"))
+        png = (contracts_dir / "fixtures" / f"{stem}.png").read_bytes()
+        storage.save_blueprint(project_id, png, "image/png")
+        storage.save_project({
+            "id": project_id, "name": scene["name"], "createdAt": now_iso(), "hasScene": True, "synthetic": True,
+            "image": {"url": scene["source"]["imageUrl"], "width": scene["source"]["imageWidth"],
+                      "height": scene["source"]["imageHeight"], "mimeType": "image/png"},
+        })
+        storage.save_reconstruction(project_id, scene)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

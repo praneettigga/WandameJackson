@@ -25,6 +25,9 @@ import { SNAP_PX, gridStepFor, snapToWalls, worldPerPixel } from './snapping';
 import { WallTools } from './WallTools';
 import { danglingEnds } from './wallGraph';
 import { resizedObject, type Scene, type V3 } from './scene';
+import { buildInfrastructureGeometry } from './infrastructureGeometry';
+import { serviceInfo, serviceKinds } from './infrastructure';
+import { useInfrastructure } from './InfrastructurePanel';
 
 function MeasurePoint({
   position,
@@ -272,6 +275,7 @@ function World() {
           confidence: state.confidenceMap,
           selectedId: state.selectedId,
           activeProjectId: state.activeProjectId,
+          seeThrough: state.seeThrough,
         })
       : state.scene
         ? buildSceneGeometry(
@@ -281,6 +285,7 @@ function World() {
             xray: state.xray,
             confidence: state.confidenceMap,
             selectedId: state.selectedId,
+            seeThrough: state.seeThrough,
           },
           cache,
         )
@@ -299,6 +304,7 @@ function World() {
       state.xray,
       state.confidenceMap,
       state.selectedId,
+      state.seeThrough,
       cache,
       libraryRevision,
   ]);
@@ -309,21 +315,43 @@ function World() {
         : null,
     [state.sourceScene, state.compare, state.ceilings, libraryRevision],
   );
-  if (ghost && activePlacement) {
-    const display = state.assembly
+  // Services of the active scene, shown only while walls are see-through.
+  const { plan, proposal } = useInfrastructure();
+  const services = useMemo(
+    () =>
+      state.seeThrough && plan && proposal
+        ? buildInfrastructureGeometry(
+            proposal,
+            plan.fixtures,
+            state.serviceLayers,
+            proposal.clashes.find((c) => c.id === state.serviceFocus) ?? null,
+          )
+        : null,
+    [state.seeThrough, plan, proposal, state.serviceLayers, state.serviceFocus],
+  );
+  const display =
+    activePlacement && state.assembly
       ? placements(state.assembly, scenes, view.mode === 'exploded' ? view.gap : 0).find(
           (p) => p.floor.id === activePlacement.floor.id,
-        )!
+        )
       : activePlacement;
-    ghost.position.set(...display.position);
-    ghost.rotation.y = display.rotationY;
-  }
+  for (const overlay of [ghost, services])
+    if (overlay && display) {
+      overlay.position.set(...display.position);
+      overlay.rotation.y = display.rotationY;
+    }
   useEffect(() => () => disposeGeometry(root), [root]);
   useEffect(
     () => () => {
       if (ghost) disposeGeometry(ghost);
     },
     [ghost],
+  );
+  useEffect(
+    () => () => {
+      if (services) disposeGeometry(services);
+    },
+    [services],
   );
   const camera = useThree((s) => s.camera),
     height = useThree((s) => s.size.height);
@@ -365,6 +393,7 @@ function World() {
         onPointerOut={() => setHover(null)}
       />
       {ghost && <primitive object={ghost} raycast={() => null} />}
+      {services && <primitive object={services} />}
       {state.workspace !== 'Explore' && (
         <>
           <Grid
@@ -492,7 +521,8 @@ export function Viewport() {
     snap = useEditor((s) => s.snap),
     gridStep = useEditor((s) => s.gridStep),
     tool = useEditor((s) => s.tool),
-    notice = useEditor((s) => s.notice);
+    notice = useEditor((s) => s.notice),
+    seeThrough = useEditor((s) => s.seeThrough);
   return (
     <div className="viewport">
       <Canvas
@@ -530,6 +560,20 @@ export function Viewport() {
         </div>
       )}
       {compare && <div className="compare-label">CYAN WIREFRAME · ORIGINAL RECONSTRUCTION</div>}
+      {seeThrough && hasScene && (
+        <div className="services-legend" aria-label="Services legend">
+          {serviceKinds.map((kind) => (
+            <span key={kind}>
+              <i style={{ background: serviceInfo[kind].color }} />
+              {serviceInfo[kind].label}
+            </span>
+          ))}
+          <span>
+            <i className="clash-dot" />
+            Clash
+          </span>
+        </div>
+      )}
       {workspace === 'Explore' && (
         <div className="explore-overlay" style={{ visibility: locked ? 'hidden' : 'visible' }}>
           <button id="enter-explore" className="primary">

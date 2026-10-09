@@ -107,7 +107,7 @@ for (const mode of ['mock', 'http'] as const)
     });
     it('lists projects and cancels an active job without replacing the scene', async () => {
       const api = make();
-      expect((await api.listProjects()).projects.map((p) => p.project.id)).toEqual(['demo-room']);
+      expect((await api.listProjects()).projects.map((p) => p.project.id)).toContain('demo-room');
       const before = await api.getScene('demo-room');
       const { job } = await api.reconstruct('demo-room', input);
       const cancelled = (await api.cancelJob(job.id)).job;

@@ -35,6 +35,7 @@ import { snapKindLabels, type SnapKind } from './snapping';
 import { clearDraft, restorableDraft, writeDraft } from './draft';
 import { Viewport } from './Viewport';
 import { ComponentLibrary } from './ComponentLibrary';
+import { InfrastructurePanel, WallsToggle } from './InfrastructurePanel';
 import { loadLibrary } from './library';
 import { formatLength, fromMeters, lengthUnits, toMeters, type LengthUnit } from './units';
 
@@ -610,6 +611,11 @@ export default function App() {
         });
         return;
       }
+      // Works while walking too: look through the walls at the services.
+      if (e.key.toLowerCase() === 'i' && !e.ctrlKey && !e.metaKey && s.scene) {
+        useEditor.setState({ seeThrough: !s.seeThrough, serviceFocus: null });
+        return;
+      }
       if (s.workspace === 'Explore' || s.busy) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
@@ -1158,6 +1164,7 @@ export default function App() {
                     </div>
                   ))}
               </div>
+              <InfrastructurePanel />
               <ComponentLibrary disabled={disabled} />
             </>
           )}
@@ -1390,6 +1397,7 @@ export default function App() {
               />
               Ceilings
             </label>
+            <WallsToggle compact />
             <button
               disabled={!state.scene || disabled}
               className={state.compare ? 'active' : ''}

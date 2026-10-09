@@ -54,8 +54,26 @@ export type RenderOptions = {
   ceilings?: boolean;
   selectedId?: string | null;
   ghost?: boolean;
+  /** Walls, openings, floors and ceilings turn translucent so services inside them show; furniture stays solid. */
+  seeThrough?: boolean;
 };
 function material(entity: Entity, color: string, options: RenderOptions, glass = false) {
+  const structure = !('dimensions' in entity);
+  if (options.seeThrough && structure && !options.ghost)
+    return new THREE.MeshStandardMaterial({
+      color: options.xray
+        ? originColors[entity.provenance.origin]
+        : options.confidence
+          ? confidenceColors[confidenceLevel(entity.provenance.confidence)]
+          : color,
+      roughness: 0.9,
+      side: THREE.DoubleSide,
+      emissive: entity.id === options.selectedId ? '#b97e24' : '#000000',
+      emissiveIntensity: 0.4,
+      transparent: true,
+      opacity: entity.id === options.selectedId ? 0.32 : glass ? 0.08 : 0.16,
+      depthWrite: false,
+    });
   return new THREE.MeshStandardMaterial({
     color: options.ghost
       ? '#66d9e8'
@@ -422,7 +440,7 @@ export function buildSceneGeometry(scene: Scene, options: RenderOptions = {}, ca
     revision: scene.revision,
     generator: 'ROOMSHIFT',
   };
-  const flags = `${options.xray ? 1 : 0}${options.confidence ? 1 : 0}${options.ghost ? 1 : 0}`;
+  const flags = `${options.xray ? 1 : 0}${options.confidence ? 1 : 0}${options.ghost ? 1 : 0}${options.seeThrough ? 1 : 0}`;
   const get = (key: string, build: () => THREE.Object3D) => (cache ? cache.get(key, build) : build());
   const sel = (...ids: string[]) => (options.selectedId && ids.includes(options.selectedId) ? 1 : 0);
   for (const room of scene.rooms)

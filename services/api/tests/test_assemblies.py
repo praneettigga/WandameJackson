@@ -29,7 +29,7 @@ def test_group_validation_and_revision_conflicts(client):
     envelope = make_group(client, ids)
     a = envelope['assembly']; aid = a['id']
     assert len(envelope['projects']) == 2 and envelope['scenes'] == {}
-    assert client.get(f'/api/assemblies/{aid}').json() == envelope
+    assert client.get(f'/api/assemblies/{aid}').json() == envelopegit 
     edited = copy.deepcopy(a)
     edited['buildings'][0]['floors'].reverse()
     edited['buildings'][0]['floors'][0]['offset'] = [1.2, -.4]

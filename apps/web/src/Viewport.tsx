@@ -18,7 +18,8 @@ import {
   pointInRoom,
 } from './geometry';
 import { useEditor, editorScenes } from './store';
-import { floorsOf, placements, type Placement } from './assembly';
+import { floorsOf, placements, visiblePlacements, type Placement } from './assembly';
+import { RoomLabels } from './RoomLabels';
 import { useLibrary } from './library';
 import { formatLength } from './units';
 import { SNAP_PX, gridStepFor, snapToWalls, worldPerPixel } from './snapping';
@@ -109,11 +110,12 @@ function DanglingMarkers({ scene }: { scene: Scene }) {
 /** Exposes the camera to browser end-to-end tests (VITE_E2E builds only). */
 function E2EHook() {
   const camera = useThree((s) => s.camera),
+    scene = useThree((s) => s.scene),
     size = useThree((s) => s.size);
   useEffect(() => {
     if (import.meta.env.VITE_E2E === 'true')
-      (window as unknown as { __three: unknown }).__three = { camera, size, Vector3: THREE.Vector3 };
-  }, [camera, size]);
+      (window as unknown as { __three: unknown }).__three = { camera, scene, size, Vector3: THREE.Vector3 };
+  }, [camera, scene, size]);
   return null;
 }
 /** Keeps the store's grid step matched to the current zoom (distance to the orbit target). */
@@ -155,7 +157,8 @@ function FrameCamera({ root }: { root: THREE.Group }) {
       camera.far = Math.max(500, distance * 10);
       camera.updateProjectionMatrix();
     }
-    camera.position.copy(center).add(new THREE.Vector3(distance * 0.85, distance * 0.85, distance));
+    // A higher default angle exposes the room floors and their labels.
+    camera.position.copy(center).add(new THREE.Vector3(distance * 0.7, distance * 1.35, distance * 0.85));
     camera.lookAt(center);
     if (controls && 'target' in controls) {
       (controls.target as THREE.Vector3).copy(center);
@@ -393,6 +396,27 @@ function World() {
         onPointerOut={() => setHover(null)}
       />
       {ghost && <primitive object={ghost} raycast={() => null} />}
+      {state.roomLabels &&
+        (state.assembly
+          ? visiblePlacements(
+              placements(state.assembly, scenes, view.mode === 'exploded' ? view.gap : 0),
+              view,
+            ).map((p) => p.scene && (
+              <group key={p.floor.id} position={p.position} rotation={[0, p.rotationY, 0]}>
+                <RoomLabels
+                  scene={p.scene}
+                  interactive={state.tool === 'select' && state.workspace !== 'Explore'}
+                  onClick={click}
+                />
+              </group>
+            ))
+          : state.scene && (
+              <RoomLabels
+                scene={state.scene}
+                interactive={state.tool === 'select' && state.workspace !== 'Explore'}
+                onClick={click}
+              />
+            ))}
       {services && <primitive object={services} />}
       {state.workspace !== 'Explore' && (
         <>

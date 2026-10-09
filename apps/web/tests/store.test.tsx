@@ -10,6 +10,25 @@ beforeEach(() => {
   useEditor.getState().load(demoScene());
 });
 describe('semantic editor state', () => {
+  it('renames rooms in Properties, tracks provenance, saves and undoes the name', async () => {
+    const original = useEditor.getState().scene!.rooms[0];
+    useEditor.getState().select(original.id);
+    render(<Inspector />);
+    const input = screen.getByLabelText('Room name');
+    fireEvent.change(input, { target: { value: '  Home office  ' } });
+    fireEvent.blur(input);
+    expect(useEditor.getState().scene!.rooms[0].name).toBe('Home office');
+    expect(useEditor.getState().scene!.rooms[0].provenance.fieldOrigins.name).toBe('user');
+    const api = new MockApi();
+    await useEditor.getState().save(api);
+    expect((await api.getScene('demo-room')).rooms[0].name).toBe('Home office');
+    render(<button onClick={() => useEditor.getState().undo()}>Undo room name</button>);
+    fireEvent.click(screen.getByText('Undo room name'));
+    expect(screen.getByLabelText('Room name')).toHaveValue(original.name);
+    fireEvent.change(screen.getByLabelText('Room name'), { target: { value: '   ' } });
+    fireEvent.blur(screen.getByLabelText('Room name'));
+    expect(useEditor.getState().scene!.rooms[0].name).toBe(original.name);
+  });
   it('clears conflict, history, measurements and selection when opening an unreconstructed project', () => {
     useEditor.setState({
       conflict: true,

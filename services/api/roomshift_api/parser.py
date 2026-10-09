@@ -23,6 +23,7 @@ from typing import Callable
 import cv2
 import numpy as np
 from shapely.geometry import Polygon
+from .room_labels import read_room_names
 
 PARSER_NAME = "opencv-rectilinear-fallback"
 PARSER_VERSION = "0.1.0"
@@ -785,12 +786,14 @@ def parse_blueprint(
             rotated, Minv = _rotate(gray, angle)
             result = _parse(rotated, meters_per_pixel, wall_height, wall_thickness, progress, opts)
             _map_result(result, Minv, meters_per_pixel)
+            read_room_names(gray, result, meters_per_pixel)
             result["warnings"][:0] = notes
             result["warnings"].append(
                 f"The drawing is rotated by about {angle:.1f}°. It was straightened before parsing and the walls "
                 "were mapped back to the original image.")
             return result
     result = _parse(gray, meters_per_pixel, wall_height, wall_thickness, progress, opts)
+    read_room_names(gray, result, meters_per_pixel)
     result["warnings"][:0] = notes
     return result
 
@@ -989,7 +992,7 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     for j, (poly, outline_px) in enumerate(_rooms(lines, (h_img, w_img), T, mpp, extra), 1):
         rooms.append({
             "id": f"room-{j}", "name": f"Room {j}", "polygon": poly, "height": height,
-            "provenance": prov("inferred", {"height": height_origin},
+            "provenance": prov("inferred", {"height": height_origin, "name": "inferred"},
                                ["Enclosed region bounded by detected walls (openings closed), offset to wall centerlines.",
                                 "Ceiling inferred from this footprint at the room height; not observed in the drawing."],
                                _room_factors(outline_px, thick, T)),

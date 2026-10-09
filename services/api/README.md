@@ -22,6 +22,10 @@ Limits: no interpretation of dimension pairs inside room labels, arbitrary diago
 
 OCR uses [Tesseract TSV word boxes](https://tesseract-ocr.github.io/tessdoc/Command-Line-Usage.html) or [Apple Vision text recognition](https://developer.apple.com/documentation/vision/vnrecognizetextrequest).
 
+## Room names
+
+Room names are also read locally during reconstruction. Recognized English room labels (including numbered bedrooms and common combined uses) are matched to the enclosing room footprint. Dimensions and drawing notes are ignored. Rooms without a readable supported name keep `Room N`; unavailable OCR does not block reconstruction. Select a floor or label in the 3D editor and edit **Room name** in Properties, then Save. Names persist in Scene JSON and support undo/redo. The **Room labels** checkbox controls the floor overlay. OCR may miss unusual names, rotated text, or blurry scans; these can be entered manually. Existing saved scenes need reconstruction to extract names from their original blueprint.
+
 ## Run
 
 ```powershell

@@ -1363,6 +1363,14 @@ export default function App() {
             )}
           </div>
           <div className="view-options">
+            <label title="Select a room floor or label to edit its name in Properties.">
+              <input
+                type="checkbox"
+                checked={state.roomLabels}
+                onChange={(e) => useEditor.setState({ roomLabels: e.target.checked })}
+              />
+              Room labels
+            </label>
             <label>
               <input
                 type="checkbox"

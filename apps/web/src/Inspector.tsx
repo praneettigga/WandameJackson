@@ -374,6 +374,38 @@ export function Inspector() {
             )}
             {'polygon' in entity && (
               <>
+                <label className="field">
+                  Room name
+                  <input
+                    key={entity.name}
+                    aria-label="Room name"
+                    defaultValue={entity.name}
+                    placeholder="Enter a room name"
+                    maxLength={80}
+                    disabled={state.busy}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        e.currentTarget.value = entity.name;
+                        e.currentTarget.blur();
+                      }
+                      if (e.key === 'Enter') e.currentTarget.blur();
+                    }}
+                    onBlur={(e) => {
+                      const name = e.target.value.trim();
+                      if (!name) {
+                        e.target.value = entity.name;
+                        return;
+                      }
+                      if (name !== entity.name) patch('name', name);
+                      else e.target.value = name;
+                    }}
+                  />
+                </label>
+                <p className="hint">
+                  Shown on the 3D floor. Names read from the blueprint can be corrected here;
+                  enter your own name when none was detected. Press Enter to apply, then Save to keep it.
+                </p>
+                <OriginTag origin={fieldOrigin(entity, 'name')} />
                 <NumberField
                   label="Ceiling height"
                   value={entity.height}

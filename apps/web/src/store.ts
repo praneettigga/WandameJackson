@@ -93,6 +93,7 @@ export type EditorState = {
   xray: boolean;
   confidenceMap: boolean;
   ceilings: boolean;
+  roomLabels: boolean;
   sourceScene: Scene | null;
   compare: boolean;
   measure: boolean;
@@ -248,6 +249,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   xray: false,
   confidenceMap: false,
   ceilings: false,
+  roomLabels: true,
   sourceScene: null,
   compare: false,
   measure: false,

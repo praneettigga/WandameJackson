@@ -7,15 +7,17 @@ type EditorWindow = Window & {
       scene: {
         walls: { id: string; start: V2; end: V2 }[];
         openings: { id: string; type: string; wallId: string; offset: number }[];
-        rooms: { id: string }[];
+        rooms: { id: string; name: string }[];
         revision: number;
       } | null;
       gridStep: number;
       tool: string;
+      selectedId: string | null;
       error: string | null;
     };
   };
   __three: {
+    scene: { getObjectByName: (name: string) => { position: { x: number; z: number }; material: { map: { image: HTMLCanvasElement } } } | undefined };
     camera: { position: unknown; updateMatrixWorld: () => void };
     Vector3: new (x: number, y: number, z: number) => { project: (c: unknown) => { x: number; y: number } };
   };
@@ -24,7 +26,7 @@ type EditorWindow = Window & {
 const state = (page: Page) =>
   page.evaluate(() => {
     const s = (window as unknown as EditorWindow).__editor.getState();
-    return { scene: s.scene, gridStep: s.gridStep, tool: s.tool, error: s.error };
+    return { scene: s.scene, gridStep: s.gridStep, tool: s.tool, error: s.error, selectedId: s.selectedId };
   });
 
 /** Page coordinates of a floor point [x, z]. */
@@ -66,6 +68,39 @@ test('renders the demo room with WebGL', async ({ page }) => {
   // The rendered frame is not a flat colour.
   const shot = await page.locator('.viewport canvas').screenshot();
   expect(new Set(shot.subarray(1000, 60000)).size).toBeGreaterThan(20);
+});
+
+test('selects a floor label, renames the room, toggles labels and reloads the saved name', async ({ page }) => {
+  const room = (await state(page)).scene!.rooms[0];
+  const labelPosition = await page.evaluate((id) => {
+    const label = (window as unknown as EditorWindow).__three.scene.getObjectByName(`${id}:label`)!;
+    return [label.position.x, label.position.z] as V2;
+  }, room.id);
+  // Look into the room so the floor label is visible and can be selected.
+  await page.evaluate(([x, z]) => {
+    const camera = (window as unknown as EditorWindow).__three.camera as {
+      position: { set: (x: number, y: number, z: number) => void };
+      lookAt: (x: number, y: number, z: number) => void;
+      updateMatrixWorld: () => void;
+    };
+    camera.position.set(x, 11, z + 0.01);
+    camera.lookAt(x, 0, z);
+    camera.updateMatrixWorld();
+  }, labelPosition);
+  await clickFloor(page, labelPosition);
+  await expect.poll(async () => (await state(page)).selectedId).toBe(room.id);
+  await expect(page.getByLabel('Room name', { exact: true })).toBeVisible();
+  await page.getByLabel('Room name', { exact: true }).fill('Home Office');
+  await page.getByLabel('Room name', { exact: true }).press('Enter');
+  await expect.poll(async () => (await state(page)).scene!.rooms[0].name).toBe('Home Office');
+  await page.screenshot({ path: 'test-results/room-floor-label.png' });
+  await page.getByLabel('Room labels', { exact: true }).uncheck();
+  expect(await page.evaluate((id) => Boolean((window as unknown as EditorWindow).__three.scene.getObjectByName(`${id}:label`)), room.id)).toBe(false);
+  await page.getByLabel('Room labels', { exact: true }).check();
+  await page.getByRole('button', { name: 'Save scene' }).click();
+  await expect.poll(async () => (await state(page)).scene!.revision).toBe(1);
+  await page.reload();
+  await expect.poll(async () => (await state(page)).scene?.rooms[0].name).toBe('Home Office');
 });
 
 test('grid step follows zoom', async ({ page }) => {

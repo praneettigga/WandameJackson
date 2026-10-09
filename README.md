@@ -45,7 +45,25 @@ walking order. Meshes begin with uncalibrated scale and may contain missing surf
 Under the viewer, use **Set scale · 2 points** with a known distance, **Align floor ·
 3 points**, and the manual orientation controls. Applied changes save automatically;
 GLB and JSON exports preserve the saved scale/orientation. Use **Measure · 2 points**
-to check another known distance. Object editing remains a later milestone.
+to check another known distance. Choose **Edit in 3D workspace** to open the result
+in the same editor used for blueprints. Captures need metric scale and floor alignment
+first; the architectural presets already have metric layouts.
+
+The classroom and rectangular-room presets expose separate rooms, walls, doors,
+windows, and furniture. A photogrammetry result remains one editable surface object:
+move, rotate, resize, duplicate or delete it, measure actual surfaces, add furniture
+or draw walls, undo/redo, save/reload, and export Scene JSON or a combined GLB.
+Scanned furniture and walls are not automatically segmented. Room labels,
+infrastructure proposals, wall snapping and structural checks use semantic walls
+and rooms (from presets or ones you draw), not inferred parts of the raw scan.
+Walking collision checks cover semantic walls and furniture, not scan triangles.
+
+Editor snapshots and their mesh assets are stored on the API. Reopening a capture
+continues its saved edits, even after the capture is reconstructed or recalibrated;
+later capture processing never silently replaces editor work. Use **Save scene**
+and the editor's JSON/GLB exports for edits; the capture viewer's export remains
+the original reconstruction. Preset fixtures use the editor's procedural furniture
+and box geometry so each item is independently editable.
 Mock mode does not run the photo/video pipeline.
 
 Switching between input modes preserves the loaded blueprint or building assembly,

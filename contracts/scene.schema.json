@@ -95,6 +95,16 @@
       "additionalProperties": false,
       "required": ["imageUrl", "imageWidth", "imageHeight", "mimeType", "synthetic", "calibration"],
       "properties": {
+        "capture": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "jobId", "calibrationRevision", "representation"],
+          "properties": {
+            "kind": { "enum": ["video", "photo-set"] },
+            "jobId": { "$ref": "#/$defs/Id" },
+            "calibrationRevision": { "type": ["string", "null"] },
+            "representation": { "enum": ["layout", "mesh"] }
+          }
+        },
         "imageUrl": { "type": "string", "pattern": "^/", "description": "Root-relative URL; clients resolve it against the API base URL." },
         "imageWidth": { "type": "integer", "minimum": 1 },
         "imageHeight": { "type": "integer", "minimum": 1 },
@@ -184,6 +194,7 @@
         "name": { "type": "string" },
         "category": { "type": "string", "description": "chair, table, sofa, bed, cabinet, other" },
         "componentId": { "type": ["string", "null"], "description": "Procedural component such as table.basic; null for a generic box." },
+        "assetUrl": { "type": "string", "pattern": "^/api/projects/[A-Za-z0-9_.-]+/editor-assets/[a-f0-9]+\\.glb$", "description": "Immutable server-backed mesh, normalized to the object's dimensions and transform." },
         "position": { "$ref": "#/$defs/V3", "description": "Centre of the object's BOTTOM face. Floor-snapped means position[1] = 0." },
         "rotationY": { "type": "number", "description": "Radians about +Y." },
         "dimensions": {

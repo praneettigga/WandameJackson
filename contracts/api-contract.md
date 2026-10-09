@@ -166,6 +166,32 @@ Envelope: `{assembly, projects:[ProjectEnvelope], scenes:{[projectId]:Scene}, jo
 
 Save-all uses separate revision checks for layout and child scenes; failed saves retain local changes. JSON bundles the assembly, available scenes, and `omittedFloors`. GLB contains available geometry at physical elevations and reports omitted floors.
 
+## Capture editor snapshots
+
+`POST /api/projects/{id}/editor-scene` creates a persistent metric Scene from a
+capture's published mesh, or returns its existing edited Scene without replacing
+anything. Uncalibrated captures return `MESH_SCALE_REQUIRED`; raw scans without
+a floor reference return `MESH_FLOOR_REQUIRED`. Blueprint projects return
+`INVALID_SOURCE`. The two supported architectural demo layouts produce separate
+semantic walls/rooms/openings and editable procedural furniture. Other meshes
+produce one surface object, with no invented semantic structure.
+
+Scene 0.1.0 gains optional `source.capture` metadata (`kind`, `jobId`,
+`calibrationRevision`, `representation: "layout" | "mesh"`) and optional object
+`assetUrl`. Existing blueprint scenes are unchanged. Capture source images are
+generated top-down projections, not uploaded blueprints or evaluation ground truth.
+Assets are normalized to the object's dimensions and positioned at its bottom-face
+center, just like library components. Mesh picking uses actual triangle surfaces.
+
+`GET /api/projects/{id}/editor-assets/{filename}` serves only assets referenced by
+that project's immutable source scene. Copies of calibrated GLBs remain valid
+across later reconstruction/calibration runs. The existing scene GET/PUT and
+source-scene endpoints provide persistence, provenance, revision conflict handling,
+and comparison. Scene saves cannot introduce mesh assets from another project.
+Editor JSON retains asset URLs; GLB exports include the actual mesh and edited
+furniture geometry. Full-resolution mesh assets must load successfully before a
+capture scene is opened; failed loads never substitute boxes.
+
 ## Mode 2 additive ingestion contract (Milestone 1)
 
 The frozen Mode 1 Scene remains unchanged. Project envelopes now include `source`

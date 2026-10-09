@@ -343,7 +343,8 @@ export const useEditor = create<EditorState>((set, get) => ({
     const component = components.find((c) => c.id === componentId) ?? customSpec(componentId);
     if (!component) return;
     const room = get().scene?.rooms[0];
-    const points = room?.polygon ?? [[0, 0]];
+    const scan = get().scene?.objects.find((o) => o.assetUrl);
+    const points = room?.polygon ?? (scan ? [[scan.position[0], scan.position[2]]] : [[0, 0]]);
     const position: V3 = [
       points.reduce((s, p) => s + p[0], 0) / points.length,
       0,

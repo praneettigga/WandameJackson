@@ -17,6 +17,7 @@ import {
   imagePoint,
   metersPerPixel,
   type V2,
+  type Scene,
 } from './scene';
 import { useEditor, editorScenes } from './store';
 import { BlueprintWizard, AssemblyControls, FloorViews } from './AssemblyPanel';
@@ -280,6 +281,7 @@ export default function App() {
   const addFiles = useRef(false);
   const [exportScope, setExportScope] = useState<'all' | 'floor'>('all');
   const [inputMode, setInputMode] = useState<'blueprint' | 'capture'>('blueprint');
+  const [captureMeshId, setCaptureMeshId] = useState<string | null>(null);
   const [project, setProject] = useState<ProjectEnvelope | null>(null);
   const [points, setPoints] = useState<V2[]>([]),
     [distance, setDistance] = useState('2');
@@ -397,6 +399,17 @@ export default function App() {
         );
       return;
     }
+    if (!api.mock) {
+      const candidate = await api.getCapture(id);
+      if (candidate.image === null) {
+        if (!candidate.project.hasScene)
+          throw new Error(
+            'Open this capture from Photos & video, then choose Edit in 3D workspace.',
+          );
+        loadCaptureScene(await api.getScene(id));
+        return;
+      }
+    }
     const envelope = await api.getProject(id);
     const scene = envelope.project.hasScene ? await api.getScene(id) : null;
     state.load(scene);
@@ -425,6 +438,27 @@ export default function App() {
       scene
         ? `Loaded revision ${scene.revision}`
         : 'Project loaded. Reconstruction will use automatic scale.',
+    );
+  }
+  function loadCaptureScene(scene: Scene) {
+    state.load(scene);
+    setDraftOffer(restorableDraft(scene));
+    setProject(null);
+    setProjectId(scene.id);
+    localStorage.setItem('roomshift.lastProject', scene.id);
+    setJob(null);
+    setShowBlueprint(false);
+    setPoints([]);
+    setAutomaticScale(null);
+    setInputMode('blueprint');
+    useEditor.setState({
+      workspace: 'Edit',
+      selectedId: scene.objects.find((o) => o.assetUrl)?.id ?? null,
+    });
+    setNotice(
+      scene.source.capture?.representation === 'layout'
+        ? 'Editable demo layout loaded. Select walls, doors, windows or furniture to edit them.'
+        : 'Capture loaded in the editor. Transform the scan, measure surfaces, and add furniture or walls. The scan is not segmented into individual objects.',
     );
   }
   useEffect(() => {
@@ -791,9 +825,27 @@ export default function App() {
               key={name}
               aria-label={name}
               className={state.workspace === name ? 'active' : ''}
-              disabled={name !== 'Reconstruct' && !state.scene}
+              disabled={
+                name !== 'Reconstruct' &&
+                !(inputMode === 'capture' && captureMeshId) &&
+                !state.scene
+              }
               onClick={() => {
                 if (document.pointerLockElement) document.exitPointerLock();
+                if (inputMode === 'capture' && name !== 'Reconstruct') {
+                  const id = captureMeshId ?? state.scene?.id;
+                  if (!id) return;
+                  void (async () => {
+                    if (state.scene?.id === id && state.scene.source.capture)
+                      setInputMode('blueprint');
+                    else {
+                      if (!discard()) return;
+                      await guarded(async () => loadCaptureScene(await api.openCaptureScene(id)));
+                    }
+                    useEditor.setState({ workspace: name, measure: false });
+                  })();
+                  return;
+                }
                 useEditor.setState({ workspace: name, measure: false });
               }}
             >
@@ -869,7 +921,15 @@ export default function App() {
           </button>
         ))}
       </div>
-      {inputMode === 'capture' && <CaptureWorkspace />}
+      {inputMode === 'capture' && (
+        <CaptureWorkspace
+          onMeshReady={setCaptureMeshId}
+          onOpenEditor={async (id) => {
+            if (!discard()) return;
+            await guarded(async () => loadCaptureScene(await api.openCaptureScene(id)));
+          }}
+        />
+      )}
       <main
         className="editor-layout"
         style={inputMode === 'capture' ? { display: 'none' } : undefined}
@@ -878,7 +938,20 @@ export default function App() {
           {state.assembly && (
             <AssemblyControls onReconstruct={(ids) => void reconstructGroup(ids)} />
           )}
-          {state.workspace === 'Reconstruct' ? (
+          {state.workspace === 'Reconstruct' && state.scene?.source.capture ? (
+            <section className="project-section">
+              <h4>CAPTURE PROJECT</h4>
+              <p>
+                This scene uses a saved capture snapshot. Edit it here with the shared 3D tools.
+              </p>
+              <button onClick={() => setInputMode('capture')}>
+                Photos & video · source and calibration
+              </button>
+              <p className="hint">
+                Reconstruction and calibration changes do not overwrite saved editor work.
+              </p>
+            </section>
+          ) : state.workspace === 'Reconstruct' ? (
             <>
               <div className="panel-heading">
                 RECONSTRUCTION <span>01—03</span>
@@ -1594,7 +1667,7 @@ export default function App() {
                   ↓ Scene JSON
                 </button>
                 <button
-                  disabled={!state.scene || disabled}
+                  disabled={!state.scene || !!state.scene.source.capture || disabled}
                   title="Download this scene with its blueprint image as an evaluation ground-truth pair (name.png + name.scene.json)"
                   onClick={() =>
                     void guarded(async () => {

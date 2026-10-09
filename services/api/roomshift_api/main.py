@@ -22,6 +22,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .assemblies import Assembly, AssemblyCreate, AssemblyReconstruct
 from .auto_scale import estimate_scale
 from .calibration import compute_calibration
+from .capture_scene import open_editor_scene
 from .config import SCHEMA_VERSION, Settings
 from .errors import ApiError, error_body
 from .images import inspect_image, load_gray
@@ -367,6 +368,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         p = need_project(project_id)
         return mesh_response(current_mesh(storage, p))
 
+    @app.post('/api/projects/{project_id}/editor-scene')
+    async def capture_editor_scene(project_id: str):
+        return await run_in_threadpool(open_editor_scene, storage, project_id, settings.contracts_dir)
+
+    @app.get('/api/projects/{project_id}/editor-assets/{filename}')
+    async def editor_asset(project_id: str, filename: str):
+        need_project(project_id)
+        source = storage.get_source_scene(project_id)
+        base = f'/api/projects/{project_id}/editor-assets/'
+        allowed = ({source['source']['imageUrl'], *[o.get('assetUrl') for o in source['objects']]}
+                   if source else set())
+        if base+filename not in allowed:
+            raise ApiError(404, 'NOT_FOUND', 'Editor asset does not exist.')
+        return FileResponse(storage.project_dir(project_id)/'editor-assets'/filename,
+                            media_type='model/gltf-binary' if filename.endswith('.glb') else 'image/png')
+
     @app.put('/api/projects/{project_id}/mesh/calibration')
     async def calibrate_mesh(project_id: str, body: MeshCalibrationIn):
         return await run_in_threadpool(save_calibration, storage, project_id, body.model_dump())
@@ -503,6 +520,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if scene.get(k) != current[k]:
                     raise ApiError(409, "IMMUTABLE_FIELD", f"'{k}' cannot be changed by saving a scene.")
             problems = validate_scene(scene, schema_path)
+            source = storage.get_source_scene(project_id)
+            allowed_assets = {None, *[o.get('assetUrl') for o in (source or current)['objects']]}
+            if not problems and any(o.get('assetUrl') not in allowed_assets for o in scene['objects']):
+                problems.append({'path': '/objects', 'message': 'Mesh assets must belong to this editor snapshot.'})
             if problems:
                 raise ApiError(400, "VALIDATION_ERROR", "Scene does not satisfy the contract.", problems)
             scene["revision"] = current["revision"] + 1

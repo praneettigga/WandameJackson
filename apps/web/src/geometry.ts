@@ -58,7 +58,7 @@ export type RenderOptions = {
   seeThrough?: boolean;
 };
 function material(entity: Entity, color: string, options: RenderOptions, glass = false) {
-  const structure = !('dimensions' in entity);
+  const structure = !('dimensions' in entity) || ('assetUrl' in entity && !!entity.assetUrl);
   if (options.seeThrough && structure && !options.ghost)
     return new THREE.MeshStandardMaterial({
       color: options.xray
@@ -136,12 +136,14 @@ function scanInstance(object: SceneObject, template: THREE.Object3D, options: Re
   const instance = template.clone();
   instance.scale.set(...object.dimensions);
   const flat =
-    options.ghost || options.xray || options.confidence ? material(object, '#bba184', options) : null;
+    options.ghost || options.xray || options.confidence || (options.seeThrough && object.assetUrl)
+      ? material(object, '#bba184', options) : null;
   const selected = object.id === options.selectedId;
   instance.traverse((node) => {
     if (!(node instanceof THREE.Mesh)) return;
     node.userData = { entityId: object.id };
-    node.raycast = (raycaster, hits) => boundsRaycast(node, raycaster, hits);
+    // Room meshes need actual surface intersections for selection and measurement.
+    if (!object.assetUrl) node.raycast = (raycaster, hits) => boundsRaycast(node, raycaster, hits);
     node.castShadow = true;
     node.receiveShadow = true;
     if (flat) node.material = flat;
@@ -158,7 +160,8 @@ function furniture(object: SceneObject, options: RenderOptions) {
   group.userData.entityId = object.id;
   group.position.set(...object.position);
   group.rotation.y = object.rotationY;
-  const scan = customTemplate(object.componentId);
+  const scan = customTemplate(object.assetUrl ?? object.componentId);
+  if (object.assetUrl && !scan) throw new Error('Captured mesh is not loaded. Reload the project before editing or exporting.');
   if (scan) {
     group.add(scanInstance(object, scan, options));
     return group;
@@ -464,7 +467,7 @@ export function buildSceneGeometry(scene: Scene, options: RenderOptions = {}, ca
   for (const object of scene.objects)
     root.add(
       get(
-        `object|${flags}|${sel(object.id)}|${customTemplate(object.componentId)?.uuid ?? ''}|${JSON.stringify(object)}`,
+        `object|${flags}|${sel(object.id)}|${customTemplate(object.assetUrl ?? object.componentId)?.uuid ?? ''}|${JSON.stringify(object)}`,
         () => {
           const group = furniture(object, options);
           group.userData = { ...meta(object, 'furniture'), category: object.category, componentId: object.componentId };
@@ -546,6 +549,8 @@ export function collides(scene: Scene, x: number, z: number) {
     }
   }
   return scene.objects.some((o) => {
+    // A scan's bounds enclose the room, not a solid furniture obstacle.
+    if (o.assetUrl) return false;
     if (o.position[1] > 1.85 || o.position[1] + o.dimensions[1] < 0.1) return false;
     const dx = x - o.position[0],
       dz = z - o.position[2],

@@ -4,6 +4,7 @@ import fixtureImage from '../../../contracts/fixtures/room.png?url';
 import servicesFixture from '../../../contracts/fixtures/services-apartment.scene.json';
 import servicesImage from '../../../contracts/fixtures/services-apartment.png?url';
 import { sceneSchema, validateScene, type Scene, type V2 } from './scene';
+import { loadSceneAssets } from './library';
 
 export type ProjectEnvelope = {
   project: { id: string; name: string; createdAt: string; hasScene: boolean };
@@ -125,6 +126,7 @@ export interface RoomshiftApi {
   reconstructMesh(id: string, maxViews?: number): Promise<{ job: Job }>;
   getMesh(id: string): Promise<MeshResult>;
   calibrateMesh(id: string, input: MeshCalibrationRequest): Promise<MeshResult>;
+  openCaptureScene(id: string): Promise<Scene>;
   getProject(id: string): Promise<ProjectEnvelope>;
   createAssembly(input: AssemblyInput): Promise<AssemblyEnvelope>;
   getAssembly(id: string): Promise<AssemblyEnvelope>;
@@ -328,7 +330,22 @@ export class HttpApi implements RoomshiftApi {
     return this.request<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}`);
   }
   async getScene(id: string) {
-    return sceneSchema.parse(await this.request(`/api/projects/${encodeURIComponent(id)}/scene`));
+    return loadSceneAssets(
+      sceneSchema.parse(await this.request(`/api/projects/${encodeURIComponent(id)}/scene`)),
+      (path) => this.imageUrl(path),
+    );
+  }
+  async openCaptureScene(id: string) {
+    return loadSceneAssets(
+      sceneSchema.parse(
+        await this.request(
+          `/api/projects/${encodeURIComponent(id)}/editor-scene`,
+          { method: 'POST' },
+          60_000,
+        ),
+      ),
+      (path) => this.imageUrl(path),
+    );
   }
   async saveScene(id: string, scene: Scene) {
     return sceneSchema.parse(
@@ -340,8 +357,9 @@ export class HttpApi implements RoomshiftApi {
     );
   }
   async getSourceScene(id: string) {
-    return sceneSchema.parse(
-      await this.request(`/api/projects/${encodeURIComponent(id)}/source-scene`),
+    return loadSceneAssets(
+      sceneSchema.parse(await this.request(`/api/projects/${encodeURIComponent(id)}/source-scene`)),
+      (path) => this.imageUrl(path),
     );
   }
 }
@@ -467,6 +485,9 @@ export class MockApi implements RoomshiftApi {
   }
   async calibrateMesh(_id: string, _input: MeshCalibrationRequest): Promise<MeshResult> {
     throw new Error('Mesh calibration requires the local API.');
+  }
+  async openCaptureScene(_id: string): Promise<Scene> {
+    throw new Error('Capture editing requires the local API.');
   }
   async getProject(id: string): Promise<ProjectEnvelope> {
     this.project(id);

@@ -12,7 +12,13 @@ import {
 import { CaptureGuide } from './CaptureGuide';
 import { CalibratedMesh } from './CalibratedMesh';
 
-export function CaptureWorkspace() {
+export function CaptureWorkspace({
+  onOpenEditor,
+  onMeshReady,
+}: {
+  onOpenEditor?: (id: string) => Promise<void>;
+  onMeshReady?: (id: string | null) => void;
+} = {}) {
   const [viewBudget, setViewBudget] = useState(40);
   const [mesh, setMesh] = useState<MeshResult | null>(null);
   const [capabilities, setCapabilities] = useState<WorkerCapabilities | null>(null);
@@ -29,6 +35,7 @@ export function CaptureWorkspace() {
   const [error, setError] = useState('');
   const polling = useRef<AbortController | null>(null);
   const mounted = useRef(true);
+  useEffect(() => onMeshReady?.(mesh?.projectId ?? null), [mesh?.projectId, onMeshReady]);
   useEffect(() => {
     mounted.current = true;
     void api
@@ -66,16 +73,20 @@ export function CaptureWorkspace() {
     polling.current = new AbortController();
     await pollJob(api, initial, setJob, { signal: polling.current.signal, timeoutMs: 300_000 });
     if (!mounted.current) return;
+    let result: MeshResult | null = null;
     if (initial.kind === 'mesh-reconstruction') {
-      setMesh(await api.getMesh(initial.projectId));
+      result = await api.getMesh(initial.projectId);
+      setMesh(result);
       setView('mesh');
     } else {
       setInput(await api.getCaptureInput(initial.projectId));
       setSelectedFrame(0);
       setView('source');
     }
-    setProject(await api.getCapture(initial.projectId));
+    const updated = await api.getCapture(initial.projectId);
+    setProject(updated);
     setCaptures(await api.listCaptures());
+    if (result && onOpenEditor) await onOpenEditor(initial.projectId);
   }
   async function openCapture(id: string) {
     polling.current?.abort();
@@ -290,6 +301,24 @@ export function CaptureWorkspace() {
             </a>
           )}
         </header>
+        {mesh && onOpenEditor && (
+          <section className="mesh-calibration" aria-label="Edit capture">
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() => void action(async () => onOpenEditor(mesh.projectId))}
+            >
+              {project?.project.hasScene
+                ? 'Continue editing in 3D workspace'
+                : 'Edit in 3D workspace'}
+            </button>
+            <p className="hint">
+              {mesh.units !== 'meters' && !project?.project.hasScene
+                ? 'Uncalibrated: the editor will show approximate dimensions. Set a known distance and align the floor below first for real metres.'
+                : 'Use the shared editor for furniture, transforms, measurements, undo, save and export. Demo layouts include editable walls and openings; scans remain a surface mesh.'}
+            </p>
+          </section>
+        )}
         <div className="capture-pipeline" aria-label="Reconstruction steps">
           <div className={project ? 'complete' : 'current'}>
             <b>01</b>

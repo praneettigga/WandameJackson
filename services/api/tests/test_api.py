@@ -206,6 +206,11 @@ def test_dev_seed_is_opt_in(tmp_path):
         assert c.get("/api/projects/demo-room/blueprint").content == (CONTRACTS / "fixtures" / "room.png").read_bytes()
         cal = {"pointA": [50, 50], "pointB": [150, 50], "distanceMeters": 2}
         assert_error(c.post("/api/projects/demo-room/reconstruct", json={"calibration": cal}), 400, "VALIDATION_ERROR")
+        services = json.loads((CONTRACTS / "fixtures" / "services-apartment.scene.json").read_text(encoding="utf-8"))
+        assert c.get("/api/projects/services-apartment/scene").json() == services
+        assert c.get("/api/projects/services-apartment/blueprint").content == (
+            CONTRACTS / "fixtures" / "services-apartment.png"
+        ).read_bytes()
 
 
 def test_reconstruction_never_reuses_an_editable_revision(client):

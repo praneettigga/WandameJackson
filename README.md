@@ -56,6 +56,29 @@ Select a wall and drag its amber end handles or cyan middle handle. Connected wa
 
 The review dock lists completeness checks: wall ends that meet nothing (also shown as red dots), walls that bound no room, rooms without a door, and furniture that blocks a door or sits outside every room. Unsaved edits are kept as a local draft and offered back after a refresh.
 
+## Invisible infrastructure (wiring and plumbing)
+
+The **Invisible infrastructure** section of the left panel lays out electrical wiring and plumbing inside the walls from the current plan. It recalculates after every wall, door or furniture edit.
+
+- **Walls: Solid / See-through** (also in the bar under the viewport, shortcut `I`). Solid is the normal view, with services hidden. See-through makes walls, floors and ceilings translucent so you can see the cables and pipes inside them. Furniture stays solid.
+- **What gets placed:** a distribution board by the entrance; sockets spread around each room; light switches on the latch side of each door (outside the door for bathrooms); a ceiling light in each room; a water main and water heater; a sink, shower, toilet and basin in wet rooms; and a soil stack in a wet-room corner. Cables and pipes follow the wall centrelines. Low runs pass under doorways in the floor, high runs pass over tall openings through the ceiling void, and waste pipes fall 1:50 towards the stack.
+- **Layouts:** four alternatives (ceiling-fed or skirting-level power × water in the walls or under the floor). Each shows the length of each service and its number of clashes. The best one is marked **Recommended**.
+- **Clashes and checks:**
+  - cables crossing or running within 100 mm of pipes
+  - runs passing through openings
+  - pipes or the stack too large for the wall thickness
+  - sockets within 0.6 m of open water
+  - furniture covering a fitting
+  - unreachable fittings
+  - over-long circuits and over-deep waste runs
+
+  **Show** highlights the clash and frames its wall.
+- **Room uses:** the app guesses which room is a bathroom, kitchen and so on from room names, then from size and layout. Under **Room uses** you can override the guess. Overrides are stored in this browser and are not saved with the scene.
+
+This is a concept layout based on rules of thumb, not a design that complies with building codes.
+
+**Demo plan:** `contracts/fixtures/services-apartment.png` with `services-apartment.scene.json` is a two-bedroom apartment. Its rooms are named, so the wet rooms are known. In mock mode, or with the dev API (which seeds it next to `demo-room`), type `services-apartment` in the **Project** field, choose **Open project**, then press `I`. To regenerate it, run `python -m eval.make_services_fixture` from `services/api`.
+
 ## Verify
 
 ```bash

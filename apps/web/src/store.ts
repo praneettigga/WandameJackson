@@ -30,6 +30,17 @@ import {
 import { defaultSnapSettings, type SnapSettings } from './snapping';
 import { deleteWall, recomputeRooms } from './wallGraph';
 import { rememberUnit, storedUnit, type LengthUnit } from './units';
+import { serviceKinds, type RoomUse, type ServiceKind } from './infrastructure';
+
+const USES_KEY = 'roomshift.roomUses';
+function storedRoomUses(): Record<string, Record<string, RoomUse>> {
+  try {
+    const value = JSON.parse(localStorage.getItem(USES_KEY) ?? '{}');
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
+  }
+}
 
 type Workspace = 'Reconstruct' | 'Edit' | 'Inspect' | 'Explore';
 type Mode = 'translate' | 'rotate' | 'scale';
@@ -90,6 +101,16 @@ export type EditorState = {
   /** Unit for the scale reference and measurements (UI only; the scene stays in metres). */
   lengthUnit: LengthUnit;
   setLengthUnit: (unit: LengthUnit) => void;
+  /** Walls, floors and ceilings turn translucent to show the services inside them. */
+  seeThrough: boolean;
+  serviceLayers: Record<ServiceKind, boolean>;
+  /** Chosen infrastructure proposal; null follows the recommended one. */
+  serviceProposal: string | null;
+  /** Clash highlighted in the viewport. */
+  serviceFocus: string | null;
+  /** User-chosen room uses per scene ID (UI only; kept in this browser, never in the scene). */
+  roomUses: Record<string, Record<string, RoomUse>>;
+  setRoomUse: (roomId: string, use: RoomUse | null) => void;
   load: (scene: Scene | null) => void;
   select: (id: string | null) => void;
   commit: (mutate: (scene: Scene) => void) => boolean;
@@ -237,6 +258,25 @@ export const useEditor = create<EditorState>((set, get) => ({
     rememberUnit(unit);
     set({ lengthUnit: unit });
   },
+  seeThrough: false,
+  serviceLayers: Object.fromEntries(serviceKinds.map((k) => [k, true])) as Record<ServiceKind, boolean>,
+  serviceProposal: null,
+  serviceFocus: null,
+  roomUses: storedRoomUses(),
+  setRoomUse: (roomId, use) => {
+    const sceneId = get().scene?.id;
+    if (!sceneId) return;
+    const current = { ...(get().roomUses[sceneId] ?? {}) };
+    if (use) current[roomId] = use;
+    else delete current[roomId];
+    const roomUses = { ...get().roomUses, [sceneId]: current };
+    set({ roomUses });
+    try {
+      localStorage.setItem(USES_KEY, JSON.stringify(roomUses));
+    } catch {
+      // Room uses are a convenience; the plan still works with assumed uses.
+    }
+  },
   load: (scene) =>
     set({
       assembly: null,
@@ -261,6 +301,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       measures: [],
       tool: 'select',
       notice: null,
+      serviceFocus: null,
       workspace: scene ? 'Edit' : 'Reconstruct',
       frame: get().frame + 1,
     }),

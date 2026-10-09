@@ -1,6 +1,8 @@
 import { assemblySchema, floorsOf, type Assembly, type AssemblyInput } from './assembly';
 import fixture from '../../../contracts/fixtures/room.scene.json';
 import fixtureImage from '../../../contracts/fixtures/room.png?url';
+import servicesFixture from '../../../contracts/fixtures/services-apartment.scene.json';
+import servicesImage from '../../../contracts/fixtures/services-apartment.png?url';
 import { sceneSchema, validateScene, type Scene, type V2 } from './scene';
 
 export type ProjectEnvelope = {
@@ -212,6 +214,8 @@ export class HttpApi implements RoomshiftApi {
   }
 }
 export const demoScene = () => sceneSchema.parse(structuredClone(fixture));
+/** Two-bedroom apartment with named wet rooms, for viewing the wiring and plumbing layer. */
+export const servicesScene = () => sceneSchema.parse(structuredClone(servicesFixture));
 export class MockApi implements RoomshiftApi {
   readonly mock = true;
   private scene: Scene;
@@ -235,6 +239,25 @@ export class MockApi implements RoomshiftApi {
       this.grouped = data;
       this.jobs = new Map(data.jobs ?? []);
     }
+    this.seedServices();
+  }
+  /** The services fixture is a ready-made project, like demo-room on a dev API. */
+  private seedServices() {
+    const id = servicesFixture.id;
+    if (this.grouped.projects[id]) return;
+    const scene = servicesScene();
+    this.grouped.projects[id] = {
+      project: { id, name: scene.name, createdAt: scene.reconstruction.createdAt, hasScene: true },
+      image: {
+        url: scene.source.imageUrl,
+        width: scene.source.imageWidth,
+        height: scene.source.imageHeight,
+        mimeType: 'image/png',
+      },
+    };
+    this.grouped.scenes[id] = scene;
+    this.grouped.sources[id] = servicesScene();
+    this.persistGrouped();
   }
   constructor(private storage?: Pick<Storage, 'getItem' | 'setItem'>) {
     try {
@@ -254,8 +277,8 @@ export class MockApi implements RoomshiftApi {
     if (id !== fixture.id && !this.grouped.projects[id])
       throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Mock mode contains only demo-room.');
   }
-  imageUrl(_path: string) {
-    return fixtureImage;
+  imageUrl(path: string) {
+    return path.includes(`/${servicesFixture.id}/`) ? servicesImage : fixtureImage;
   }
   async health() {
     return { status: 'ok', schemaVersion: '0.1.0' } as const;
@@ -301,7 +324,10 @@ export class MockApi implements RoomshiftApi {
     };
   }
   async listProjects() {
-    return { projects: [await this.getProject(fixture.id)] };
+    this.refreshGrouped();
+    return {
+      projects: [await this.getProject(fixture.id), await this.getProject(servicesFixture.id)],
+    };
   }
   async cancelJob(id: string) {
     const job = this.jobs.get(id);
@@ -321,7 +347,7 @@ export class MockApi implements RoomshiftApi {
     this.project(id);
     return {
       calibration: {
-        ...fixture.source.calibration,
+        ...(id === servicesFixture.id ? servicesFixture : fixture).source.calibration,
         notes: ['Synthetic fixture scale; no image analysis was performed.'],
       } as ScaleCalibration,
     };
@@ -361,7 +387,7 @@ export class MockApi implements RoomshiftApi {
         this.scene.revision = revision;
         this.storage?.setItem('roomshift.mock.scene.v1', JSON.stringify(this.scene));
       } else {
-        const scene = demoScene();
+        const scene = job.projectId === servicesFixture.id ? servicesScene() : demoScene();
         scene.id = job.projectId;
         scene.name = this.grouped.projects[job.projectId].project.name;
         scene.source.imageUrl = `/api/projects/${job.projectId}/blueprint`;

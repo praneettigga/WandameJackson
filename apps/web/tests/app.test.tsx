@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useEditor } from '../src/store';
 import App from '../src/App';
 import { api } from '../src/api';
@@ -28,6 +28,25 @@ beforeEach(() => {
   });
 });
 describe('application integration without WebGL', () => {
+  it('switches walls to see-through, compares service layouts and records room uses', async () => {
+    useEditor.setState({ seeThrough: false, serviceProposal: null, roomUses: {} });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    const panel = screen.getByRole('region', { name: 'Invisible infrastructure' });
+    expect(within(panel).getAllByRole('radio')).toHaveLength(4);
+    fireEvent.click(within(panel).getByRole('button', { name: /See-through/ }));
+    expect(useEditor.getState().seeThrough).toBe(true);
+    fireEvent.keyDown(window, { key: 'i' });
+    expect(useEditor.getState().seeThrough).toBe(false);
+    const crowded = within(panel).getByRole('radio', { name: /Skirting power · water in the walls/ });
+    fireEvent.click(crowded);
+    expect(useEditor.getState().serviceProposal).toBe('skirting-wall');
+    expect(useEditor.getState().seeThrough).toBe(true);
+    expect(within(panel).getAllByRole('button', { name: 'Show' }).length).toBeGreaterThan(0);
+    fireEvent.change(within(panel).getByLabelText('Use of Room'), { target: { value: 'bedroom' } });
+    expect(useEditor.getState().roomUses['demo-room']).toEqual({ 'room-1': 'bedroom' });
+    expect(JSON.parse(localStorage.getItem('roomshift.roomUses')!)).toEqual({ 'demo-room': { 'room-1': 'bedroom' } });
+  });
   it('blocks edits while reload is pending so they cannot be silently discarded', async () => {
     render(<App />);
     await screen.findByRole('button', { name: 'Select Table' });

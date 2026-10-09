@@ -2,7 +2,7 @@
 
 Upload a floor-plan PNG/JPEG, automatically read printed dimensions or estimate scale, reconstruct a metric room, add and edit furniture, save/reload, and export Scene JSON or GLB.
 
-Mode 2 accepts a 30–60 second room video or 20–40 overlapping photos, prepares
+Mode 2 accepts a 10–60 second room video or 20–40 overlapping photos, prepares
 traceable frames, and runs Meshroom (AliceVision photogrammetry) in a separate
 worker to export a colored triangle mesh. Known demo videos can be pre-baked and served
 instantly. See [worker setup and validation status](services/reconstruction/README.md).

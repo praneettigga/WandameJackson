@@ -127,7 +127,7 @@ export function CaptureWorkspace() {
                 setFiles([]);
               }}
             >
-              <option value="video">30–60 second video</option>
+              <option value="video">10–60 second video</option>
               <option value="photo-set">20–40 overlapping photos</option>
             </select>
           </label>

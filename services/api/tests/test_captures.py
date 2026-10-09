@@ -108,7 +108,9 @@ def test_video_success_and_timestamps(client, tmp_path):
     path = tmp_path / 'room.mp4'
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*'mp4v'), 10, (320, 240))
     assert writer.isOpened()
-    for i in range(300):
+    # A 10-second walkthrough is accepted when it still contains enough distinct,
+    # overlapping views for the quality checks.
+    for i in range(100):
         writer.write(texture[:, i * 2:i * 2 + 320])
     writer.release()
     response = upload(client, [('files', ('room.mp4', path.read_bytes(), 'video/mp4'))], 'video')
@@ -120,7 +122,7 @@ def test_video_success_and_timestamps(client, tmp_path):
     assert all((f['width'], f['height']) == (320, 240) for f in manifest['frames']), 'Do not upscale video frames'
     times = [f['timestampSeconds'] for f in manifest['frames']]
     assert times == sorted(times)
-    assert times[0] < 2 and times[-1] > 28
+    assert times[0] < 2 and times[-1] > 8
     assert all(f['sourceId'] == 'source_0000' for f in manifest['frames'])
     assert not list(client.app.state.storage.projects_dir.glob('*/captures/*/candidates'))
     # Short video yields actionable rejection, not an empty successful input.

@@ -183,7 +183,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if kind not in {"video", "photo-set"}:
             raise ApiError(400, "VALIDATION_ERROR", "Choose video or photo-set.")
         if (kind == "video" and len(files) != 1) or (kind == "photo-set" and not 20 <= len(files) <= 40):
-            raise ApiError(400, "VALIDATION_ERROR", "Upload one 30–60 second video or 20–40 photos in capture order.")
+            raise ApiError(400, "VALIDATION_ERROR", "Upload one 10–60 second video or 20–40 photos in capture order.")
         pid = "p_" + uuid.uuid4().hex[:12]
         root = storage.project_dir(pid)
         originals = []

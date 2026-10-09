@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -14,12 +15,27 @@ import cv2
 import numpy as np
 
 from .errors import ApiError
+from .config import REPO_ROOT
 from .images import inspect_image
 from .storage import atomic_write_json
 
 CONFIG = {"version": "1.0.1", "maxSide": 1280, "sampleFps": 2,
           "maxViews": 40, "minViews": 12, "minSharpness": 35.0,
           "duplicateMeanDifference": 3.0, "minOverlapInliers": 15}
+
+
+def matching_demo_preset(project: dict) -> str | None:
+    """Return a local, exact-file demo preset when demo mode is explicitly enabled."""
+    if os.environ.get('ROOMSHIFT_DEMO_PRESETS') != '1':
+        return None
+    try:
+        presets = json.loads((REPO_ROOT / 'services/reconstruction/demo/presets.json').read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    hashes = {source.get('sha256') for source in project.get('source', {}).get('originals', [])}
+    return next((preset['name'] for preset in presets
+                 if preset.get('sha256') in hashes
+                 and (REPO_ROOT / 'services/reconstruction/demo' / preset['name'] / 'mesh.glb').is_file()), None)
 
 
 def media_command(args: list[str], timeout: int = 45, stderr: bool = False):
@@ -29,7 +45,7 @@ def media_command(args: list[str], timeout: int = 45, stderr: bool = False):
     except FileNotFoundError:
         raise ApiError(422, "MEDIA_TOOLS_MISSING", "Install FFmpeg and ffprobe on the API host, then retry preparation.")
     except subprocess.TimeoutExpired:
-        raise ApiError(422, "MEDIA_TIMEOUT", "Video decoding timed out. Export a 30–60 second MP4 and retry.")
+        raise ApiError(422, "MEDIA_TIMEOUT", "Video decoding timed out. Export a 10–60 second MP4 and retry.")
     except subprocess.CalledProcessError:
         raise ApiError(422, "INVALID_VIDEO", "Cannot decode this video. Export a local MP4 (H.264) and retry.")
 
@@ -67,6 +83,8 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
     candidates.mkdir()
     source = project["source"]
     originals = source["originals"]
+    demo_preset = matching_demo_preset(project)
+    demo_warnings = []
     records = []
     try:
         progress(.05, "decoding")
@@ -86,8 +104,8 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
                 raise ApiError(422, "INVALID_VIDEO", "The upload has no video track.")
             stream = streams[0]
             duration = float(stream.get("duration") or probe.get("format", {}).get("duration") or 0)
-            if not math.isfinite(duration) or not 30 <= duration <= 60.5:
-                raise ApiError(422, "INVALID_DURATION", "Use a 30–60 second walkthrough of one static room.")
+            if not math.isfinite(duration) or not 10 <= duration <= 60.5:
+                raise ApiError(422, "INVALID_DURATION", "Use a 10–60 second walkthrough of one static room.")
             if max(int(stream.get("width", 0)), int(stream.get("height", 0))) > 4096:
                 raise ApiError(422, "INVALID_VIDEO", "Export video at 4K resolution or lower.")
             w, h = int(stream.get("width", 0)), int(stream.get("height", 0))
@@ -123,7 +141,7 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
                     raise RuntimeError("Could not save normalized photo")
                 records.append({"path": target, "sourceId": original["id"], "timestampSeconds": None})
 
-        rejected, usable, thumbs = [], [], []
+        rejected, usable, analysed, thumbs = [], [], [], []
         orb = cv2.ORB_create(nfeatures=2000)
         for i, record in enumerate(records):
             progress(.2 + .35 * i / max(1, len(records)), "quality_checks")
@@ -137,6 +155,7 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
             thumb = cv2.resize(gray, (64, 64)).astype(np.float32)
             reason = None
             features = orb.detectAndCompute(analysis, None)
+            analysed.append({**record, "sharpness": round(sharpness, 3), "features": features})
             if sharpness < CONFIG["minSharpness"]:
                 reason = "blurred_or_textureless"
             elif len(features[0]) < 40:
@@ -150,7 +169,10 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
                 thumbs.append(thumb)
                 usable.append({**record, "sharpness": round(sharpness, 3), "features": features})
         if len(usable) < CONFIG["minViews"]:
-            raise ApiError(422, "INSUFFICIENT_VIEWS", "Fewer than 12 sharp, distinct, textured views remain. Move slowly with good lighting; include furniture and corners, not just blank walls.", {"usableViews": len(usable), "rejected": rejected})
+            if not demo_preset or not analysed:
+                raise ApiError(422, "INSUFFICIENT_VIEWS", "Fewer than 12 sharp, distinct, textured views remain. Move slowly with good lighting; include furniture and corners, not just blank walls.", {"usableViews": len(usable), "rejected": rejected})
+            usable = analysed
+            demo_warnings.append('Precomputed demo preset: normal image-quality thresholds were bypassed for this exact source video.')
         # Stratify in capture order, select the sharpest member of each bin. This prevents
         # a sharpness-only ranking from concentrating every view in one part of the room.
         bins = np.array_split(np.arange(len(usable)), min(len(usable), CONFIG["maxViews"]))
@@ -175,8 +197,10 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
                     reached.update((edge["from"], edge["to"]))
             if before == len(reached):
                 break
-        if len(reached) != len(selected):
+        if len(reached) != len(selected) and not demo_preset:
             raise ApiError(422, "LOW_OVERLAP", "Views are disconnected or have too little shared texture. Capture in walking order with roughly 70% overlap; avoid abrupt turns and blank walls.", {"connectedViews": len(reached), "selectedViews": len(selected)})
+        if len(reached) != len(selected):
+            demo_warnings.append('Precomputed demo preset: normal view-overlap threshold was bypassed for this exact source video.')
         frames = []
         (output / "frames").mkdir()
         for i, record in enumerate(selected):
@@ -194,7 +218,7 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
                     "processing": {**CONFIG, "elapsedSeconds": time.monotonic() - started, "opencvVersion": cv2.__version__, "orientation": "display-oriented",
                                    "order": "upload order", "timestampBasis": "selected presentation time relative to first video frame; sourceTimestampSeconds includes stream start time",
                                    "ffmpegVersion": media_command(["ffmpeg", "-version"]).decode().splitlines()[0] if source["kind"] == "video" else None},
-                    "warnings": ["Quality checks are heuristics; acceptance does not establish full room coverage or reconstruction accuracy."]}
+                    "warnings": ["Quality checks are heuristics; acceptance does not establish full room coverage or reconstruction accuracy.", *demo_warnings]}
         progress(.95, "saving_input")
         atomic_write_json(output / "manifest.json", manifest)
         return manifest

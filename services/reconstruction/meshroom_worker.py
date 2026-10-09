@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 
@@ -87,20 +88,71 @@ def run_meshroom(images, work, progress, overrides=()):
     if process.returncode != 0 or not (output / 'texturedMesh.obj').is_file():
         if gpu_error:
             raise RuntimeError('GPU_UNAVAILABLE: Meshroom depth maps need an NVIDIA CUDA GPU.')
-        tail = ''.join(log[-5:]).strip()
+        full_log = ''.join(log)
+        if 'Application Control policy has blocked' in full_log or 'WinError 4551' in full_log:
+            raise RuntimeError(
+                'MESHROOM_APPLICATION_CONTROL_BLOCKED: Windows Smart App Control blocked '
+                "Meshroom's meshroom_compute.exe. Allow Meshroom through your organization's "
+                'application-control policy (or turn off Smart App Control) and retry.'
+            )
+        tail = full_log[-400:].strip()
         raise RuntimeError(f'Meshroom failed (exit {process.returncode}). {tail[-400:]}')
-    return output, cache
+    # Meshroom 2025.1 on Windows currently ignores --cache for the batch pipeline
+    # and writes to %TEMP%/MeshroomCache. Prefer the configured cache but accept the
+    # release's actual location so camera poses are retained for publication.
+    actual_cache = next((candidate for candidate in (cache, Path(tempfile.gettempdir()) / 'MeshroomCache')
+                         if list(candidate.glob('StructureFromMotion/*/cameras.sfm'))), cache)
+    return output, actual_cache
+
+
+def texture_pixels(path):
+    """Decode Meshroom's EXR atlas through FFmpeg, which ships with the API video toolchain."""
+    import numpy as np
+    from PIL import Image
+    if not shutil.which('ffmpeg'):
+        raise RuntimeError('FFMPEG_NOT_FOUND: Install FFmpeg to export Meshroom texture atlases.')
+    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temporary:
+        png = Path(temporary.name)
+    try:
+        subprocess.run(['ffmpeg', '-y', '-v', 'error', '-i', str(path), '-frames:v', '1', str(png)], check=True)
+        with Image.open(png) as image:
+            # AliceVision's EXR is linear; write_glb expects sRGB source colors.
+            linear = np.asarray(image.convert('RGB'), dtype=float) / 255
+        return np.where(linear <= .0031308, linear * 12.92, 1.055 * linear ** (1 / 2.4) - .055)
+    finally:
+        png.unlink(missing_ok=True)
 
 
 def textured_to_vertex_colored(obj_path):
-    """Load Meshroom's textured OBJ and bake the atlas into per-vertex colors (sRGB, 0-1)."""
+    """Load Meshroom's textured OBJ and sample its EXR atlas into vertex colors (sRGB, 0-1)."""
     import numpy as np
     import trimesh
     loaded = trimesh.load(str(obj_path), process=False)
     geometries = list(loaded.geometry.values()) if isinstance(loaded, trimesh.Scene) else [loaded]
+    atlas_cache = {}
+
+    def atlas_for(mesh):
+        material = getattr(mesh.visual, 'material', None)
+        name = str(getattr(material, 'name', '') or '')
+        suffix = name.rsplit('_', 1)[-1]
+        candidates = [obj_path.with_name(f'texture_{suffix}.exr'), *sorted(obj_path.parent.glob('texture_*.exr'))]
+        texture = next((path for path in candidates if path.is_file()), None)
+        if texture is None:
+            raise RuntimeError('Meshroom did not publish a texture atlas beside texturedMesh.obj.')
+        if texture not in atlas_cache:
+            atlas_cache[texture] = texture_pixels(texture)
+        return atlas_cache[texture]
+
     parts = []
     for mesh in geometries:
-        colors = mesh.visual.to_color().vertex_colors if hasattr(mesh.visual, 'to_color') else mesh.visual.vertex_colors
+        uv = getattr(mesh.visual, 'uv', None)
+        if uv is None or len(uv) != len(mesh.vertices):
+            raise RuntimeError('Meshroom published a mesh without usable texture coordinates.')
+        texture = atlas_for(mesh)
+        height, width = texture.shape[:2]
+        x = np.clip(np.rint(np.asarray(uv)[:, 0] * (width - 1)).astype(int), 0, width - 1)
+        y = np.clip(np.rint((1 - np.asarray(uv)[:, 1]) * (height - 1)).astype(int), 0, height - 1)
+        colors = (texture[y, x] * 255).round().astype(np.uint8)
         parts.append(trimesh.Trimesh(mesh.vertices, mesh.faces, vertex_colors=colors, process=False))
     mesh = trimesh.util.concatenate(parts)
     mesh.update_faces(mesh.nondegenerate_faces(height=1e-6))
@@ -124,6 +176,21 @@ def decimate(mesh, target):
     result = trimesh.Trimesh(np.asarray(o3d_mesh.vertices), np.asarray(o3d_mesh.triangles), vertex_colors=colors, process=False)
     result.update_faces(result.nondegenerate_faces(height=1e-6))
     return result
+
+
+def vertex_normals(vertices, faces):
+    """Compute smooth normals without Trimesh's optional SciPy dependency."""
+    import numpy as np
+    vertices, faces = np.asarray(vertices, dtype=float), np.asarray(faces, dtype=np.int64)
+    triangles = vertices[faces]
+    face_normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    normals = np.zeros_like(vertices)
+    for corner in range(3):
+        np.add.at(normals, faces[:, corner], face_normals)
+    lengths = np.linalg.norm(normals, axis=1)
+    normals[lengths > 1e-12] /= lengths[lengths > 1e-12, None]
+    normals[lengths <= 1e-12] = [0, 1, 0]
+    return normals
 
 
 def read_cameras(cache, frames):
@@ -165,7 +232,7 @@ def export_mesh(mesh_dir, output):
     from geometry import write_glb, WORLD_TO_VIEWER
     mesh, colors = textured_to_vertex_colored(mesh_dir / 'texturedMesh.obj')
     mesh.apply_transform(WORLD_TO_VIEWER)
-    write_glb(output / 'mesh.glb', mesh.vertices, mesh.faces, colors, mesh.vertex_normals)
+    write_glb(output / 'mesh.glb', mesh.vertices, mesh.faces, colors, vertex_normals(mesh.vertices, mesh.faces))
     mesh.export(output / 'diagnostic.ply')
     return {'vertices': len(mesh.vertices), 'triangles': len(mesh.faces)}
 
@@ -219,6 +286,7 @@ def reconstruct(request, output, progress):
 
 def serve_demo(request, output, progress):
     """Serve a mesh baked offline by bake_demo.py, replaying the real stage sequence."""
+    import numpy as np
     preset = DEMO_DIR / request['input']['demoPreset']
     delay = float(os.environ.get('ROOMSHIFT_DEMO_DELAY', '30'))
     stages = sorted(STAGES, key=lambda s: s[1])
@@ -234,11 +302,25 @@ def serve_demo(request, output, progress):
     cameras = []
     for i, frame in enumerate(frames):
         # Spread the baked (denser) camera path over the prepared frames in capture order.
-        camera = dict(registered[round(i * (len(registered)-1) / max(1, len(frames)-1))])
+        if registered:
+            camera = dict(registered[round(i * (len(registered)-1) / max(1, len(frames)-1))])
+        else:
+            # A modeled architectural demo has no measured camera track. Supply a
+            # valid placeholder pose so the artifact contract remains explicit and
+            # the viewer can still associate every prepared frame with the preset.
+            width, height = frame.get('width', 1280), frame.get('height', 720)
+            focal = max(width, height)
+            camera = {'registered': True, 'imageSize': [width, height],
+                      'intrinsics': [[focal, 0, width / 2], [0, focal, height / 2], [0, 0, 1]],
+                      'worldToCamera': np.eye(4).tolist(), 'cameraToWorld': np.eye(4).tolist()}
         camera.update(frameId=frame['id'], sourceId=frame.get('sourceId'), timestampSeconds=frame.get('timestampSeconds'))
         cameras.append(camera)
     result = manifest_for(request, cameras, baked['statistics'], baked.get('processing'))
-    result['provenance']['precomputed'] = True
+    if baked.get('provenance', {}).get('origin') == 'generated':
+        result['provenance'] = {**baked['provenance'], 'precomputed': True}
+        result['warnings'] = baked.get('warnings', result['warnings'])
+    else:
+        result['provenance']['precomputed'] = True
     save_json(output / 'manifest.json', result)
     progress(1, 'complete')
 

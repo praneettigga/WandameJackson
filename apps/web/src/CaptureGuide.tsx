@@ -14,7 +14,7 @@ export function CaptureGuide() {
           <br />A colored mesh you can orbit and export.
         </p>
         <div className="capture-format-tags">
-          <span>30–60 sec video</span>
+          <span>10–60 sec video</span>
           <span>20–40 photos</span>
         </div>
       </div>

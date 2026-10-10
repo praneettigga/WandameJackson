@@ -1,4 +1,4 @@
-# Scene Studio web app
+# RoomShift web app
 
 From the repository root:
 

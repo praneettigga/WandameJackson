@@ -1,14 +1,14 @@
-# Scene Studio
+# RoomShift
 
-Scene Studio turns a floor plan, photo set, or short room walkthrough into an editable 3D space. Upload a blueprint to build a metric room layout, or capture a room from photos/video to create a mesh. Then inspect the result, edit walls and furniture, plan basic services, and export the scene.
+RoomShift turns a floor plan, photo set, or short room walkthrough into an editable 3D space. Upload a blueprint to build a metric room layout, or capture a room from photos/video to create a mesh. Then inspect the result, edit walls and furniture, plan basic services, and export the scene.
 
-![Scene Studio interface](docs/architecture/screenshot-prototype.png)
+![RoomShift interface](docs/architecture/screenshot-prototype.png)
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Input[Blueprint or photo/video capture] --> Web[Scene Studio web app\nReact + Three.js]
+  Input[Blueprint or photo/video capture] --> Web[RoomShift web app\nReact + Three.js]
   Web <--> API[Local API\nFastAPI]
   API --> Blueprint[Blueprint parser\nOpenCV + local OCR]
   API --> Capture[Capture preparation\nFFmpeg + OpenCV]
@@ -33,7 +33,7 @@ The web app provides the editor, 3D viewport, project controls, and exports. The
 
 ## Run locally
 
-Scene Studio requires Python 3.12+ and Node 22.12+.
+RoomShift requires Python 3.12+ and Node 22.12+.
 
 Start the API in one terminal:
 

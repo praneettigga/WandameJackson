@@ -1,4 +1,4 @@
-"""Scene Studio API (frozen contract v0.1.0, see contracts/api-contract.md)."""
+"""RoomShift API (frozen contract v0.1.0, see contracts/api-contract.md)."""
 from __future__ import annotations
 
 import json
@@ -126,7 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         runner.stop()
 
-    app = FastAPI(title="Scene Studio API", version=SCHEMA_VERSION, lifespan=lifespan)
+    app = FastAPI(title="RoomShift API", version=SCHEMA_VERSION, lifespan=lifespan)
     app.state.settings, app.state.storage, app.state.runner = settings, storage, runner
     app.add_middleware(
         CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"], allow_headers=["*"],

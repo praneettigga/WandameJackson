@@ -1,4 +1,4 @@
-# Scene Studio prototype scope
+# RoomShift prototype scope
 
 ## Goal
 

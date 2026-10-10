@@ -1,0 +1,252 @@
+{
+  "date": "2026-10-09",
+  "purpose": "Pipeline smoke tests; not real-room acceptance or dimensional accuracy validation",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "vramMiB": 8188
+  },
+  "checkpointSha256": "d15bf50a8615c8225ed48b51ea5cac673d82442ec0309036df555a053253afe0",
+  "source": "https://github.com/facebookresearch/vggt/tree/a288dd0f14786c93483e45524328726ab7b1b4ce/examples/kitchen",
+  "selection": {
+    "note": "Official tabletop example: 21 connected photos reordered by production overlap, four disconnected views excluded; smoke test only",
+    "excluded": [
+      "08.png",
+      "09.png",
+      "10.png",
+      "11.png"
+    ],
+    "order": [
+      "00.png",
+      "01.png",
+      "02.png",
+      "15.png",
+      "05.png",
+      "06.png",
+      "04.png",
+      "07.png",
+      "03.png",
+      "12.png",
+      "13.png",
+      "21.png",
+      "14.png",
+      "20.png",
+      "17.png",
+      "19.png",
+      "16.png",
+      "18.png",
+      "24.png",
+      "22.png",
+      "23.png"
+    ]
+  },
+  "runs": [
+    {
+      "sourceKind": "photo-set",
+      "label": "Official VGGT tabletop sample: 21 connected reordered photos, 12 reconstruction views; not room acceptance",
+      "status": "succeeded",
+      "observedAcceptedInputToMeshSeconds": 18.245635154009506,
+      "statistics": {
+        "voxelLength": 0.003552850103005767,
+        "sdfTruncation": 0.014211400412023067,
+        "vertices": 209644,
+        "triangles": 403225,
+        "workerSeconds": 10.931130921002477,
+        "peakGpuBytes": 4639078400,
+        "peakSystemBytes": 5719973888,
+        "stageSeconds": {
+          "starting": 6.709960871376097e-07,
+          "loading_input": 0.005936023000685964,
+          "loading_model": 3.9362452080022194,
+          "estimating_cameras_depth": 5.5542664099994,
+          "filtering_depth": 0.42131648999929894,
+          "fusing_surfaces": 0.21503017900249688,
+          "extracting_mesh": 0.7047360750002554,
+          "exporting_mesh": 0.0933904569974402
+        },
+        "bounds": [
+          [
+            -1.1506781578063965,
+            -0.29613643884658813,
+            -1.5700560808181763
+          ],
+          [
+            0.9774909019470215,
+            0.24771881103515625,
+            -0.09415052831172943
+          ]
+        ],
+        "executionSeconds": 16.441029934001563,
+        "preparationSeconds": 1.2050362449954264,
+        "endToEndSeconds": 17.64606617899699
+      },
+      "processing": {
+        "workerVersion": "1.0.0",
+        "torchVersion": "2.8.0+cu128",
+        "open3dVersion": "0.19.0",
+        "preprocessing": "518-square-pad",
+        "transformerPrecision": "torch.bfloat16",
+        "headPrecision": "float32",
+        "depthHeadChunkSize": 2,
+        "fusion": "Open3D scalable TSDF",
+        "viewSelection": {
+          "maxViews": 12,
+          "availableViews": 21,
+          "selectedIndices": [
+            0,
+            2,
+            4,
+            5,
+            7,
+            9,
+            11,
+            13,
+            15,
+            16,
+            18,
+            20
+          ],
+          "strategy": "uniform in capture order, including endpoints"
+        },
+        "supportedPixels": [
+          117452,
+          129028,
+          132394,
+          131128,
+          132685,
+          129097,
+          128737,
+          131808,
+          131214,
+          131955,
+          132464,
+          107276
+        ],
+        "supportedFraction": 0.47679857187579194,
+        "relativeDepthTolerance": 0.04,
+        "confidenceQuantileRemoved": 0.25,
+        "retainedDepthQuantiles": [
+          0.005,
+          0.995
+        ]
+      }
+    },
+    {
+      "sourceKind": "video",
+      "label": "Lossless MP4 encoded from official tabletop photos; video pipeline smoke test, not genuine walkthrough",
+      "status": "succeeded",
+      "observedAcceptedInputToMeshSeconds": 19.10395695299667,
+      "statistics": {
+        "voxelLength": 0.003552850103005767,
+        "sdfTruncation": 0.014211400412023067,
+        "vertices": 209644,
+        "triangles": 403225,
+        "workerSeconds": 11.111493324999174,
+        "peakGpuBytes": 4639078400,
+        "peakSystemBytes": 5738090496,
+        "stageSeconds": {
+          "starting": 6.920017767697573e-07,
+          "loading_input": 0.005872809997526929,
+          "loading_model": 4.11680429399712,
+          "estimating_cameras_depth": 5.554479769001773,
+          "filtering_depth": 0.41675478300021496,
+          "fusing_surfaces": 0.22309360600047512,
+          "extracting_mesh": 0.7168786430047476,
+          "exporting_mesh": 0.07737359399470733
+        },
+        "bounds": [
+          [
+            -1.1506781578063965,
+            -0.29613643884658813,
+            -1.5700560808181763
+          ],
+          [
+            0.9774909019470215,
+            0.24771881103515625,
+            -0.09415052831172943
+          ]
+        ],
+        "executionSeconds": 15.973964049000642,
+        "preparationSeconds": 2.775323344998469,
+        "endToEndSeconds": 18.74928739399911
+      },
+      "processing": {
+        "workerVersion": "1.0.0",
+        "torchVersion": "2.8.0+cu128",
+        "open3dVersion": "0.19.0",
+        "preprocessing": "518-square-pad",
+        "transformerPrecision": "torch.bfloat16",
+        "headPrecision": "float32",
+        "depthHeadChunkSize": 2,
+        "fusion": "Open3D scalable TSDF",
+        "viewSelection": {
+          "maxViews": 12,
+          "availableViews": 21,
+          "selectedIndices": [
+            0,
+            2,
+            4,
+            5,
+            7,
+            9,
+            11,
+            13,
+            15,
+            16,
+            18,
+            20
+          ],
+          "strategy": "uniform in capture order, including endpoints"
+        },
+        "supportedPixels": [
+          117452,
+          129028,
+          132394,
+          131128,
+          132685,
+          129097,
+          128737,
+          131808,
+          131214,
+          131955,
+          132464,
+          107276
+        ],
+        "supportedFraction": 0.47679857187579194,
+        "relativeDepthTolerance": 0.04,
+        "confidenceQuantileRemoved": 0.25,
+        "retainedDepthQuantiles": [
+          0.005,
+          0.995
+        ]
+      }
+    }
+  ],
+  "glbValidation": {
+    "validator": "Khronos glTF Validator",
+    "photoMeshErrors": 0,
+    "photoMeshWarnings": 0
+  },
+  "limitations": [
+    "Tabletop object example, not a guided room capture",
+    "Video is a lossless MP4 encoded from the same photos, not an independently captured walkthrough",
+    "Four disconnected source views excluded; remaining views explicitly reordered using overlap evidence",
+    "Scale uncalibrated; independent dimension error and room coverage unmeasured",
+    "Held-out room captures, 32-view benchmark, and COLMAP comparison still required"
+  ],
+  "liveAppVerification": {
+    "api": "http://127.0.0.1:8000",
+    "frontend": "http://127.0.0.1:5173",
+    "sampleProjectId": "p_68c5fa562da8",
+    "actualMeshRendered": true,
+    "reloadPassed": true,
+    "browserExportMatchesPublishedBytes": true,
+    "pageErrors": []
+  },
+  "checks": {
+    "targetedApiTests": 19,
+    "geometryTests": 4,
+    "captureUiTests": 7,
+    "browserMeshIntegration": "passed",
+    "productionBuild": "passed"
+  }
+}

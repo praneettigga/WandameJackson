@@ -1,0 +1,5 @@
+# Python 3.12; CPU fusion/export checks do not need CUDA or model weights.
+numpy==1.26.4
+open3d-cpu==0.19.0
+Pillow==11.3.0
+pytest==8.4.2

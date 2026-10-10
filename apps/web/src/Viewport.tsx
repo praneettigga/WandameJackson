@@ -191,7 +191,8 @@ function FirstPerson({ scene, placement }: { scene: Scene; placement?: Placement
         }
       if (spawn) break;
     }
-    const start = spawn ?? scene.rooms[0]?.polygon[0] ?? [0, 0];
+    const scan = scene.objects.find((o) => o.assetUrl);
+    const start = spawn ?? scene.rooms[0]?.polygon[0] ?? (scan ? [scan.position[0], scan.position[2]] : [0, 0]);
     const position = new THREE.Vector3(start[0], 1.65, start[1]);
     if (placement)
       position

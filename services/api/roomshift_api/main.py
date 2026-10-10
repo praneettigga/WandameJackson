@@ -4,9 +4,12 @@ from __future__ import annotations
 import json
 import logging
 import math
+import hashlib
+import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -19,9 +22,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .assemblies import Assembly, AssemblyCreate, AssemblyReconstruct
 from .auto_scale import estimate_scale
 from .calibration import compute_calibration
+from .capture_scene import open_editor_scene
 from .config import SCHEMA_VERSION, Settings
 from .errors import ApiError, error_body
 from .images import inspect_image, load_gray
+from .mesh_worker import capability_report
+from .mesh_calibration import current_mesh, mesh_response, save_calibration
 from .jobs import JobRunner, now_iso, public_job
 from .storage import Storage, atomic_write_json, read_json
 from .validation import validate_scene
@@ -44,10 +50,43 @@ class ReconstructIn(BaseModel):
     wallThickness: float | None = Field(default=None, gt=0, le=2)
 
 
+class MeshReconstructIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    maxViews: Literal[12, 20, 32, 40] = 40
+
+
+class MeshReferenceIn(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    pointA: tuple[float, float, float]
+    pointB: tuple[float, float, float]
+    distanceMeters: float = Field(gt=0, le=10000)
+
+
+class MeshFloorIn(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    points: tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]
+    flipNormal: bool = False
+
+
+class MeshCalibrationIn(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    jobId: str
+    expectedRevision: str | None = None
+    reference: MeshReferenceIn | None = None
+    floor: MeshFloorIn | None = None
+    rotationDegrees: tuple[float, float, float] = (0, 0, 0)
+
+
 def project_envelope(p: dict) -> dict:
     return {
         "project": {"id": p["id"], "name": p["name"], "createdAt": p["createdAt"], "hasScene": p.get("hasScene", False)},
-        "image": p["image"],
+        "image": p.get("image"),
+        "source": p.get("source", {"kind": "blueprint"}),
+        "captureJobId": p.get("captureJobId"),
+        "inputManifestUrl": p.get("inputManifestUrl"),
+        "meshManifestUrl": p.get("meshManifestUrl"),
+        "meshJobId": p.get("meshJobId"),
+        "hasMesh": p.get("hasMesh", False),
     }
 
 
@@ -134,6 +173,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for building in assembly["buildings"]:
             for floor in building["floors"]:
                 p = need_project(floor["projectId"])
+                need_blueprint(p)
                 scene = storage.get_scene(p["id"])
                 height = floor.get("storyHeight")
                 if height is not None and scene:
@@ -209,6 +249,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         job = previous
                     else:
                         p = need_project(pid)
+                        need_blueprint(p)
                         if p.get("synthetic"):
                             raise ApiError(400, "VALIDATION_ERROR", "Upload a blueprint rather than reconstructing the seeded demo.")
                         req = floor["settings"]
@@ -229,6 +270,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             assembly["revision"] += 1
             atomic_write_json(assembly_path(assembly_id), assembly)
         return {**assembly_envelope(assembly), "submittedJobs": jobs, "errors": errors}
+
+    def need_blueprint(p: dict):
+        if p.get("source", {}).get("kind", "blueprint") != "blueprint":
+            raise ApiError(400, "INVALID_SOURCE", "This endpoint requires a blueprint. Use the capture mesh endpoint for photo/video reconstruction.")
 
     # --- routes ---------------------------------------------------------
     @app.get("/api/health")
@@ -253,6 +298,143 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         storage.save_project(project)
         return project_envelope(project)
 
+    @app.post("/api/captures", status_code=201)
+    async def create_capture(kind: str = Form(...), files: list[UploadFile] = File(...), name: str = Form(default="")):
+        if kind not in {"video", "photo-set"}:
+            raise ApiError(400, "VALIDATION_ERROR", "Choose video or photo-set.")
+        if (kind == "video" and len(files) != 1) or (kind == "photo-set" and not 20 <= len(files) <= 40):
+            raise ApiError(400, "VALIDATION_ERROR", "Upload one 10–60 second video or 20–40 photos in capture order.")
+        pid = "p_" + uuid.uuid4().hex[:12]
+        root = storage.project_dir(pid)
+        originals = []
+        total = 0
+        try:
+            (root / "originals").mkdir(parents=True)
+            for i, upload in enumerate(files):
+                target = root / "originals" / f"source_{i:04d}"
+                size = 0
+                digest = hashlib.sha256()
+                with target.open("wb") as out:
+                    while chunk := await upload.read(1024 * 1024):
+                        size += len(chunk)
+                        total += len(chunk)
+                        limit = 512 * 1024 * 1024 if kind == "video" else settings.max_upload_bytes
+                        if size > limit or total > 512 * 1024 * 1024:
+                            raise ApiError(413, "UPLOAD_TOO_LARGE", "Capture limit is 512 MB total; each photo must fit the blueprint upload limit (20 MB by default).")
+                        digest.update(chunk)
+                        out.write(chunk)
+                if not size:
+                    raise ApiError(400, "VALIDATION_ERROR", "Capture files cannot be empty.")
+                if kind == "video":
+                    with target.open("rb") as header:
+                        if header.read(12)[4:8] != b"ftyp":
+                            raise ApiError(415, "UNSUPPORTED_MEDIA_TYPE", "Use an MP4 or MOV video with an ftyp container header.")
+                if kind == "photo-set":
+                    await run_in_threadpool(inspect_image, target.read_bytes(), settings.max_image_side)
+                originals.append({"id": f"source_{i:04d}", "filename": (upload.filename or "capture")[:200],
+                                  "path": target.relative_to(root).as_posix(), "bytes": size, "sha256": digest.hexdigest()})
+            project = {"id": pid, "name": (name.strip() or "Room capture")[:200], "createdAt": now_iso(),
+                       "hasScene": False, "source": {"kind": kind, "originals": originals}}
+            storage.save_project(project)
+            job = runner.submit_capture(project)
+            return {**project_envelope(storage.get_project(pid)), "job": public_job(job)}
+        except BaseException:
+            shutil.rmtree(root, ignore_errors=True)
+            raise
+        finally:
+            for upload in files:
+                await upload.close()
+
+    @app.post("/api/projects/{project_id}/prepare", status_code=202)
+    async def prepare(project_id: str):
+        p = need_project(project_id)
+        if p.get("source", {}).get("kind", "blueprint") == "blueprint":
+            raise ApiError(400, "INVALID_SOURCE", "Preparation requires photos or a video.")
+        return {"job": public_job(runner.submit_capture(p))}
+
+    @app.get("/api/reconstruction/capabilities")
+    async def mesh_capabilities():
+        return await run_in_threadpool(capability_report)
+
+    @app.post("/api/projects/{project_id}/reconstruct-mesh", status_code=202)
+    async def reconstruct_mesh(project_id: str, body: MeshReconstructIn | None = None):
+        p = need_project(project_id)
+        if p.get("source", {}).get("kind", "blueprint") == "blueprint":
+            raise ApiError(400, "INVALID_SOURCE", "Mesh reconstruction requires a photo or video capture.")
+        return {"job": public_job(runner.submit_mesh(p, (body or MeshReconstructIn()).maxViews))}
+
+    @app.get("/api/projects/{project_id}/mesh")
+    async def get_mesh(project_id: str):
+        p = need_project(project_id)
+        return mesh_response(current_mesh(storage, p))
+
+    @app.post('/api/projects/{project_id}/editor-scene')
+    async def capture_editor_scene(project_id: str):
+        return await run_in_threadpool(open_editor_scene, storage, project_id, settings.contracts_dir)
+
+    @app.get('/api/projects/{project_id}/editor-assets/{filename}')
+    async def editor_asset(project_id: str, filename: str):
+        need_project(project_id)
+        source = storage.get_source_scene(project_id)
+        base = f'/api/projects/{project_id}/editor-assets/'
+        allowed = ({source['source']['imageUrl'], *[o.get('assetUrl') for o in source['objects']]}
+                   if source else set())
+        if base+filename not in allowed:
+            raise ApiError(404, 'NOT_FOUND', 'Editor asset does not exist.')
+        return FileResponse(storage.project_dir(project_id)/'editor-assets'/filename,
+                            media_type='model/gltf-binary' if filename.endswith('.glb') else 'image/png')
+
+    @app.put('/api/projects/{project_id}/mesh/calibration')
+    async def calibrate_mesh(project_id: str, body: MeshCalibrationIn):
+        return await run_in_threadpool(save_calibration, storage, project_id, body.model_dump())
+
+    @app.get('/api/projects/{project_id}/mesh-calibrations/{revision}/{filename}')
+    async def calibrated_artifact(project_id: str, revision: str, filename: str):
+        p = need_project(project_id)
+        manifest = current_mesh(storage, p)
+        if filename not in {'mesh.glb', 'manifest.json'} or revision != manifest.get('calibrationRevision'):
+            raise ApiError(404, 'NOT_FOUND', 'This calibrated artifact is not the published result.')
+        return FileResponse(storage.project_dir(project_id)/'calibrations'/revision/filename,
+                            media_type='model/gltf-binary' if filename == 'mesh.glb' else 'application/json',
+                            filename=f'{project_id}-calibrated-{filename}')
+
+    @app.get("/api/projects/{project_id}/mesh-artifacts/{job_id}/{filename}")
+    async def mesh_artifact(project_id: str, job_id: str, filename: str):
+        p = need_project(project_id)
+        if not p.get("meshManifestPath") or filename not in {"mesh.glb", "diagnostic.ply"}:
+            raise ApiError(404, "NOT_FOUND", "Mesh artifact does not exist.")
+        manifest = json.loads((storage.project_dir(project_id) / p["meshManifestPath"]).read_text())
+        if manifest["jobId"] != job_id:
+            raise ApiError(404, "NOT_FOUND", "Mesh artifact is not the published result.")
+        return FileResponse(storage.project_dir(project_id) / "reconstructions" / job_id / filename,
+                            media_type="model/gltf-binary" if filename == "mesh.glb" else "application/octet-stream",
+                            filename=f"{project_id}-{filename}")
+
+    @app.get("/api/projects/{project_id}/capture-input")
+    async def capture_input(project_id: str):
+        p = need_project(project_id)
+        if not p.get("inputManifestPath"):
+            raise ApiError(404, "INPUT_NOT_READY", "No accepted reconstruction input exists yet.")
+        manifest = json.loads((storage.project_dir(project_id) / p["inputManifestPath"]).read_text())
+        for frame in manifest["frames"]:
+            frame["url"] = f"/api/projects/{project_id}/capture-artifacts/{frame['path']}"
+        return manifest
+
+    @app.get("/api/projects/{project_id}/capture-artifacts/{artifact_path:path}")
+    async def capture_artifact(project_id: str, artifact_path: str):
+        p = need_project(project_id)
+        root = storage.project_dir(project_id)
+        allowed = {o["path"] for o in p.get("source", {}).get("originals", [])}
+        if p.get("inputManifestPath"):
+            manifest = json.loads((root / p["inputManifestPath"]).read_text())
+            allowed.update(f["path"] for f in manifest["frames"])
+        if p.get("meshManifestPath"):
+            mesh_manifest = json.loads((root / p["meshManifestPath"]).read_text())
+            allowed.update(f["path"] for f in mesh_manifest.get("inputFrames", []))
+        if artifact_path not in allowed:
+            raise ApiError(404, "NOT_FOUND", "Capture artifact does not exist.")
+        return FileResponse(root / artifact_path)
+
     @app.get("/api/projects")
     async def list_projects():
         """Newest first. Additive to contract v0.1.0; the dev seed is included when enabled."""
@@ -266,11 +448,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/projects/{project_id}/blueprint")
     async def get_blueprint(project_id: str):
         p = need_project(project_id)
+        need_blueprint(p)
         return FileResponse(storage.blueprint_path(p), media_type=p["image"]["mimeType"])
 
     @app.get("/api/projects/{project_id}/scale")
     async def automatic_scale(project_id: str):
         p = need_project(project_id)
+        need_blueprint(p)
         if not p.get("automaticCalibration"):
             cal = await run_in_threadpool(estimate_scale, await run_in_threadpool(load_gray, storage.blueprint_path(p)))
             with storage.project_lock(project_id):
@@ -282,6 +466,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/projects/{project_id}/reconstruct", status_code=202)
     async def reconstruct(project_id: str, body: ReconstructIn):
         p = need_project(project_id)
+        need_blueprint(p)
         if p.get("synthetic"):
             raise ApiError(400, "VALIDATION_ERROR", "The synthetic demo project cannot be reconstructed; upload a real blueprint.")
         c = body.calibration
@@ -335,6 +520,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if scene.get(k) != current[k]:
                     raise ApiError(409, "IMMUTABLE_FIELD", f"'{k}' cannot be changed by saving a scene.")
             problems = validate_scene(scene, schema_path)
+            source = storage.get_source_scene(project_id)
+            allowed_assets = {None, *[o.get('assetUrl') for o in (source or current)['objects']]}
+            if not problems and any(o.get('assetUrl') not in allowed_assets for o in scene['objects']):
+                problems.append({'path': '/objects', 'message': 'Mesh assets must belong to this editor snapshot.'})
             if problems:
                 raise ApiError(400, "VALIDATION_ERROR", "Scene does not satisfy the contract.", problems)
             scene["revision"] = current["revision"] + 1

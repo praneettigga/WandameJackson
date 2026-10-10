@@ -135,6 +135,7 @@ export function completeness(scene: Scene): Issue[] {
       });
   }
   for (const object of scene.objects) {
+    if (object.assetUrl) continue;
     const fp = footprint(object);
     const centre: V2 = [object.position[0], object.position[2]];
     if (object.position[1] < 2 && scene.rooms.length && !scene.rooms.some((r) => insidePolygon(centre, r.polygon)))

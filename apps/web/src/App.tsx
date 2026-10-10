@@ -17,6 +17,7 @@ import {
   imagePoint,
   metersPerPixel,
   type V2,
+  type Scene,
 } from './scene';
 import { useEditor, editorScenes } from './store';
 import { BlueprintWizard, AssemblyControls, FloorViews } from './AssemblyPanel';
@@ -38,6 +39,7 @@ import { ComponentLibrary } from './ComponentLibrary';
 import { InfrastructurePanel, WallsToggle } from './InfrastructurePanel';
 import { loadLibrary } from './library';
 import { formatLength, fromMeters, lengthUnits, toMeters, type LengthUnit } from './units';
+import { CaptureWorkspace } from './CaptureWorkspace';
 
 class ViewportBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -72,7 +74,13 @@ export function ErrorBanner() {
   );
 }
 
-function UnitSelect({ label, onChange }: { label: string; onChange?: (from: LengthUnit, to: LengthUnit) => void }) {
+function UnitSelect({
+  label,
+  onChange,
+}: {
+  label: string;
+  onChange?: (from: LengthUnit, to: LengthUnit) => void;
+}) {
   const unit = useEditor((s) => s.lengthUnit);
   return (
     <select
@@ -239,7 +247,9 @@ function Calibration({
                 paintOrder="stroke"
               >
                 {Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]).toFixed(1)} px
-                {!ghost && distance && Number(distance) > 0 ? ` = ${formatLength(toMeters(Number(distance), unit), unit)}` : ''}
+                {!ghost && distance && Number(distance) > 0
+                  ? ` = ${formatLength(toMeters(Number(distance), unit), unit)}`
+                  : ''}
               </text>
             </>
           )}
@@ -294,6 +304,8 @@ export default function App() {
   const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
   const addFiles = useRef(false);
   const [exportScope, setExportScope] = useState<'all' | 'floor'>('all');
+  const [inputMode, setInputMode] = useState<'blueprint' | 'capture'>('blueprint');
+  const [captureMeshId, setCaptureMeshId] = useState<string | null>(null);
   const [project, setProject] = useState<ProjectEnvelope | null>(null);
   const [points, setPoints] = useState<V2[]>([]),
     [distance, setDistance] = useState('2');
@@ -372,7 +384,7 @@ export default function App() {
       setHealth('API offline');
       const detail = cause instanceof Error ? ` ${cause.message}` : '';
       throw new Error(
-        `The API is unavailable. From the repository root, run \"npm run dev\", wait for the API to connect, then retry.${detail}`,
+        `The API is unavailable. Start the backend from services/api using the README setup instructions, wait for the API to connect, then retry.${detail}`,
       );
     }
   }
@@ -412,6 +424,17 @@ export default function App() {
         );
       return;
     }
+    if (!api.mock) {
+      const candidate = await api.getCapture(id);
+      if (candidate.image === null) {
+        if (!candidate.project.hasScene)
+          throw new Error(
+            'Open this capture from Photos & video, then choose Edit in 3D workspace.',
+          );
+        loadCaptureScene(await api.getScene(id));
+        return;
+      }
+    }
     const envelope = await api.getProject(id);
     const scene = envelope.project.hasScene ? await api.getScene(id) : null;
     state.load(scene);
@@ -429,13 +452,38 @@ export default function App() {
     localStorage.setItem('roomshift.lastProject', id);
     setPoints(scene ? [scene.source.calibration.pointA, scene.source.calibration.pointB] : []);
     if (scene) {
-      setDistance(String(fromMeters(scene.source.calibration.distanceMeters, useEditor.getState().lengthUnit)));
+      setDistance(
+        String(
+          fromMeters(scene.source.calibration.distanceMeters, useEditor.getState().lengthUnit),
+        ),
+      );
       useEditor.setState({ workspace: 'Edit' });
     }
     setNotice(
       scene
         ? `Loaded revision ${scene.revision}`
         : 'Project loaded. Reconstruction will use automatic scale.',
+    );
+  }
+  function loadCaptureScene(scene: Scene) {
+    state.load(scene);
+    setDraftOffer(restorableDraft(scene));
+    setProject(null);
+    setProjectId(scene.id);
+    localStorage.setItem('roomshift.lastProject', scene.id);
+    setJob(null);
+    setShowBlueprint(false);
+    setPoints([]);
+    setAutomaticScale(null);
+    setInputMode('blueprint');
+    useEditor.setState({
+      workspace: 'Edit',
+      selectedId: scene.objects.find((o) => o.assetUrl)?.id ?? null,
+    });
+    setNotice(
+      scene.source.capture?.representation === 'layout'
+        ? 'Editable demo layout loaded. Select walls, doors, windows or furniture to edit them.'
+        : 'Capture loaded in the editor. Transform the scan, measure surfaces, and add furniture or walls. The scan is not segmented into individual objects.',
     );
   }
   useEffect(() => {
@@ -618,6 +666,7 @@ export default function App() {
       }
     };
     const key = (e: KeyboardEvent) => {
+      if (inputMode !== 'blueprint') return;
       const target = e.target;
       if (
         (target instanceof HTMLElement &&
@@ -673,11 +722,12 @@ export default function App() {
       window.removeEventListener('beforeunload', beforeUnload);
       window.removeEventListener('keydown', key);
     };
-  }, []);
+  }, [inputMode]);
   let scale: number | null = null;
   try {
     if (scaleMode === 'auto') scale = automaticScale?.metersPerPixel ?? null;
-    else if (points.length === 2) scale = metersPerPixel(points[0], points[1], toMeters(Number(distance), state.lengthUnit));
+    else if (points.length === 2)
+      scale = metersPerPixel(points[0], points[1], toMeters(Number(distance), state.lengthUnit));
   } catch {
     /* Inline readiness below. */
   }
@@ -755,7 +805,7 @@ export default function App() {
   }
   return (
     <div
-      className="app-shell"
+      className={`app-shell ${inputMode === 'capture' ? 'capture-mode' : ''}`}
       style={
         { '--left-panel': `${leftWidth}px`, '--right-panel': `${rightWidth}px` } as CSSProperties
       }
@@ -765,7 +815,12 @@ export default function App() {
           <span className="brand-mark">▱</span>ROOMSHIFT<span className="version">/ 0.1</span>
         </a>
         <div className="project-title">
-          {state.assembly?.name ?? state.scene?.name ?? project?.project.name ?? 'Untitled space'}
+          {inputMode === 'capture'
+            ? 'Room capture'
+            : (state.assembly?.name ??
+              state.scene?.name ??
+              project?.project.name ??
+              'Untitled space')}
           {state.dirty && <span title="Unsaved changes" className="dirty-dot" />}
         </div>
         <div className="header-actions">
@@ -795,9 +850,27 @@ export default function App() {
               key={name}
               aria-label={name}
               className={state.workspace === name ? 'active' : ''}
-              disabled={name !== 'Reconstruct' && !state.scene}
+              disabled={
+                name !== 'Reconstruct' &&
+                !(inputMode === 'capture' && captureMeshId) &&
+                !state.scene
+              }
               onClick={() => {
                 if (document.pointerLockElement) document.exitPointerLock();
+                if (inputMode === 'capture' && name !== 'Reconstruct') {
+                  const id = captureMeshId ?? state.scene?.id;
+                  if (!id) return;
+                  void (async () => {
+                    if (state.scene?.id === id && state.scene.source.capture)
+                      setInputMode('blueprint');
+                    else {
+                      if (!discard()) return;
+                      await guarded(async () => loadCaptureScene(await api.openCaptureScene(id)));
+                    }
+                    useEditor.setState({ workspace: name, measure: false });
+                  })();
+                  return;
+                }
                 useEditor.setState({ workspace: name, measure: false });
               }}
             >
@@ -836,7 +909,12 @@ export default function App() {
             <button
               className="primary small"
               onClick={() => {
-                useEditor.setState({ scene: draftOffer.draft.scene, dirty: true, past: [], future: [] });
+                useEditor.setState({
+                  scene: draftOffer.draft.scene,
+                  dirty: true,
+                  past: [],
+                  future: [],
+                });
                 setDraftOffer(null);
               }}
             >
@@ -853,12 +931,52 @@ export default function App() {
           </button>
         </div>
       )}
-      <main className="editor-layout">
+      <div className="input-mode" role="group" aria-label="Input mode">
+        {(['blueprint', 'capture'] as const).map((mode) => (
+          <button
+            key={mode}
+            aria-pressed={inputMode === mode}
+            disabled={disabled}
+            onClick={() => {
+              if (document.pointerLockElement) document.exitPointerLock();
+              setInputMode(mode);
+            }}
+          >
+            {mode === 'blueprint' ? 'Mode 1 · Blueprint' : 'Mode 2 · Photos & video'}
+          </button>
+        ))}
+      </div>
+      {inputMode === 'capture' && (
+        <CaptureWorkspace
+          onMeshReady={setCaptureMeshId}
+          onOpenEditor={async (id) => {
+            if (!discard()) return;
+            await guarded(async () => loadCaptureScene(await api.openCaptureScene(id)));
+          }}
+        />
+      )}
+      <main
+        className="editor-layout"
+        style={inputMode === 'capture' ? { display: 'none' } : undefined}
+      >
         <aside className="left-panel panel">
           {state.assembly && (
             <AssemblyControls onReconstruct={(ids) => void reconstructGroup(ids)} />
           )}
-          {state.workspace === 'Reconstruct' ? (
+          {state.workspace === 'Reconstruct' && state.scene?.source.capture ? (
+            <section className="project-section">
+              <h4>CAPTURE PROJECT</h4>
+              <p>
+                This scene uses a saved capture snapshot. Edit it here with the shared 3D tools.
+              </p>
+              <button onClick={() => setInputMode('capture')}>
+                Photos & video · source and calibration
+              </button>
+              <p className="hint">
+                Reconstruction and calibration changes do not overwrite saved editor work.
+              </p>
+            </section>
+          ) : state.workspace === 'Reconstruct' ? (
             <>
               <div className="panel-heading">
                 RECONSTRUCTION <span>01—03</span>
@@ -1127,19 +1245,20 @@ export default function App() {
                       {job.cancelRequested ? 'cancelling' : job.status} ·{' '}
                       {Math.round(job.progress * 100)}%
                     </span>
-                    {(job.status === 'queued' || job.status === 'running') && !job.cancelRequested && (
-                      <button
-                        className="small"
-                        onClick={() =>
-                          void api
-                            .cancelJob(job.id)
-                            .then((r) => setJob(r.job))
-                            .catch(error)
-                        }
-                      >
-                        Cancel
-                      </button>
-                    )}
+                    {(job.status === 'queued' || job.status === 'running') &&
+                      !job.cancelRequested && (
+                        <button
+                          className="small"
+                          onClick={() =>
+                            void api
+                              .cancelJob(job.id)
+                              .then((r) => setJob(r.job))
+                              .catch(error)
+                          }
+                        >
+                          Cancel
+                        </button>
+                      )}
                   </div>
                 )}
               </section>
@@ -1486,7 +1605,8 @@ export default function App() {
               <span>REVIEW & OUTPUT</span>
               <span>
                 {warnings.length} {warnings.length === 1 ? 'notice' : 'notices'}
-                {issues.length > 0 && ` · ${issues.length} completeness ${issues.length === 1 ? 'check' : 'checks'}`}
+                {issues.length > 0 &&
+                  ` · ${issues.length} completeness ${issues.length === 1 ? 'check' : 'checks'}`}
               </span>
             </div>
             <div className="dock-body">
@@ -1578,19 +1698,24 @@ export default function App() {
                   ↓ Scene JSON
                 </button>
                 <button
-                  disabled={!state.scene || disabled}
+                  disabled={!state.scene || !!state.scene.source.capture || disabled}
                   title="Download this scene with its blueprint image as an evaluation ground-truth pair (name.png + name.scene.json)"
                   onClick={() =>
                     void guarded(async () => {
                       if (!state.scene) return;
                       const scene = state.scene;
                       const image = await fetch(api.imageUrl(scene.source.imageUrl)).then((r) => {
-                        if (!r.ok) throw new Error(`Could not download the blueprint (HTTP ${r.status}).`);
+                        if (!r.ok)
+                          throw new Error(`Could not download the blueprint (HTTP ${r.status}).`);
                         return r.blob();
                       });
                       const ext = scene.source.mimeType === 'image/jpeg' ? 'jpg' : 'png';
                       download(image, scene.source.mimeType, `${scene.id}.${ext}`);
-                      download(exportSceneJson(scene), 'application/json', `${scene.id}.scene.json`);
+                      download(
+                        exportSceneJson(scene),
+                        'application/json',
+                        `${scene.id}.scene.json`,
+                      );
                       setNotice(
                         'Ground-truth pair downloaded. Put both files in services/api/data/gt and run python -m eval.run --set real.',
                       );
@@ -1718,16 +1843,28 @@ export default function App() {
       <footer className="status-bar">
         <span>
           <i className="online-dot" />
-          {working ? 'Working…' : state.hasUnsaved() ? 'Unsaved changes' : 'Ready'}
+          {inputMode === 'capture'
+            ? 'Capture workspace'
+            : working
+              ? 'Working…'
+              : state.hasUnsaved()
+                ? 'Unsaved changes'
+                : 'Ready'}
           <b>·</b>
-          {state.scene ? `Revision ${state.scene.revision}` : 'No scene loaded'}
+          {inputMode === 'capture'
+            ? 'Local project storage'
+            : state.scene
+              ? `Revision ${state.scene.revision}`
+              : 'No scene loaded'}
         </span>
         <span>
-          {state.scene
-            ? `${state.scene.rooms.length} rooms / ${state.scene.walls.length} walls / ${state.scene.objects.length} objects`
-            : state.assembly
-              ? `${state.assembly.buildings.length} buildings / ${floorsOf(state.assembly).length} floors`
-              : 'Single floor / Metric / Y up'}
+          {inputMode === 'capture'
+            ? 'Photo/video mesh · Scale & alignment in viewer'
+            : state.scene
+              ? `${state.scene.rooms.length} rooms / ${state.scene.walls.length} walls / ${state.scene.objects.length} objects`
+              : state.assembly
+                ? `${state.assembly.buildings.length} buildings / ${floorsOf(state.assembly).length} floors`
+                : 'Single floor / Metric / Y up'}
           <b>·</b>ROOMSHIFT PROTOTYPE
         </span>
       </footer>

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "0.1.0",
+  "id": "whatsapp-classroom-demo",
+  "name": "Classroom demo template",
+  "rooms": [
+    {"id": "classroom", "name": "Classroom", "polygon": [[0, 0], [9.6, 0], [9.6, 7.5], [0, 7.5]], "height": 3.25}
+  ],
+  "walls": [
+    {"id": "front", "start": [0, 0], "end": [9.6, 0], "height": 3.25, "thickness": 0.14},
+    {"id": "right", "start": [9.6, 0], "end": [9.6, 7.5], "height": 3.25, "thickness": 0.14},
+    {"id": "rear", "start": [9.6, 7.5], "end": [0, 7.5], "height": 3.25, "thickness": 0.14},
+    {"id": "left", "start": [0, 7.5], "end": [0, 0], "height": 3.25, "thickness": 0.14}
+  ],
+  "openings": [
+    {"id": "door-rear", "type": "door", "wallId": "rear", "offset": 0.6, "width": 1.0, "height": 2.25, "bottom": 0},
+    {"id": "window-right-1", "type": "window", "wallId": "right", "offset": 1.05, "width": 1.25, "height": 1.45, "bottom": 1.0},
+    {"id": "window-right-2", "type": "window", "wallId": "right", "offset": 3.15, "width": 1.25, "height": 1.45, "bottom": 1.0},
+    {"id": "window-right-3", "type": "window", "wallId": "right", "offset": 5.25, "width": 1.25, "height": 1.45, "bottom": 1.0},
+    {"id": "window-left-1", "type": "window", "wallId": "left", "offset": 1.05, "width": 1.25, "height": 1.45, "bottom": 1.0},
+    {"id": "window-left-2", "type": "window", "wallId": "left", "offset": 3.15, "width": 1.25, "height": 1.45, "bottom": 1.0},
+    {"id": "window-left-3", "type": "window", "wallId": "left", "offset": 5.25, "width": 1.25, "height": 1.45, "bottom": 1.0}
+  ],
+  "fixtures": [
+    {"kind": "box", "low": [0.2, 0, 0.15], "high": [9.4, 0.22, 1.15], "color": [0.44, 0.45, 0.42]},
+    {"kind": "board", "low": [2.2, 1.05, -0.105], "high": [7.4, 2.35, 0.02], "color": [0.06, 0.20, 0.11], "frameColor": [0.31, 0.22, 0.13]},
+    {"kind": "box", "low": [3.75, 0.22, 0.38], "high": [5.85, 0.92, 0.92], "color": [0.48, 0.30, 0.17]},
+    {"kind": "box", "low": [3.86, 0.22, 0.42], "high": [5.74, 0.82, 0.48], "color": [0.28, 0.32, 0.32]}
+  ],
+  "deskRows": [
+    {"start": [1.05, 1.6], "count": 5, "columns": 3, "deskWidth": 2.05, "deskDepth": 0.52, "rowSpacing": 1.04, "aisle": 0.42, "topY": 0.78}
+  ]
+}

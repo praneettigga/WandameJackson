@@ -8,17 +8,21 @@ from __future__ import annotations
 
 import logging
 import queue
+import shutil
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .mesh_worker import WORKER_DIR, demo_preset, run_worker
+from .captures import prepare_capture
 from .auto_scale import estimate_scale
 from .config import SCHEMA_VERSION
 from .errors import ApiError
 from .images import load_gray
 from .parser import PARSER_NAME, PARSER_VERSION, ParseError, parse_blueprint
-from .storage import Storage
+from .mesh_calibration import save_calibration
+from .storage import Storage, read_json
 from .validation import validate_scene
 
 log = logging.getLogger("roomshift.jobs")
@@ -43,11 +47,33 @@ class JobRunner:
         self._guard = threading.Lock()
         self._thread: threading.Thread | None = None
         self._cancel: set[str] = set()
+        self._stopping = threading.Event()
 
     # --- lifecycle --------------------------------------------------------
     def start(self) -> None:
+        self._stopping.clear()
         for job in self.storage.all_jobs():
             if job["status"] in ACTIVE:
+                if job.get("kind") == "mesh-reconstruction":
+                    project = self.storage.get_project(job["projectId"])
+                    relative = f"reconstructions/{job['id']}/manifest.json"
+                    if project and project.get("meshManifestPath") == relative:
+                        self._update(job, status="succeeded", stage="ready", progress=1.0, error=None,
+                                     meshManifestUrl=project["meshManifestUrl"])
+                        continue
+                    if project:
+                        shutil.rmtree(self.storage.project_dir(project["id"]) / "reconstructions" / job["id"], ignore_errors=True)
+                if job.get("kind") == "capture-preparation":
+                    project = self.storage.get_project(job["projectId"])
+                    relative = f"captures/{job['id']}/manifest.json"
+                    if project and project.get("inputManifestPath") == relative:
+                        manifest = read_json(self.storage.project_dir(project["id"]) / relative)
+                        if manifest and manifest.get("jobId") == job["id"]:
+                            self._update(job, status="succeeded", stage="ready", progress=1.0, error=None,
+                                         inputManifestUrl=project["inputManifestUrl"], selectedViews=len(manifest["frames"]))
+                            continue  # Publication completed just before the process stopped.
+                    if project and project.get("inputManifestPath") != relative:
+                        shutil.rmtree(self.storage.project_dir(project["id"]) / "captures" / job["id"], ignore_errors=True)
                 self._update(job, status="failed", error={
                     "code": "RECONSTRUCTION_FAILED",
                     "message": "The server restarted before this job finished. Submit the reconstruction again.",
@@ -58,6 +84,7 @@ class JobRunner:
 
     def stop(self) -> None:
         if self._thread:
+            self._stopping.set()
             self._queue.put(None)
             self._thread.join(timeout=10)
             self._thread = None
@@ -83,6 +110,104 @@ class JobRunner:
             self._active[project["id"]] = job["id"]
         self._queue.put(job["id"])
         return job
+
+    def submit_capture(self, project: dict) -> dict:
+        # Queue metadata and project pointer before exposing the job to the worker.
+        with self._guard:
+            if project["id"] in self._active:
+                raise ApiError(409, "JOB_IN_PROGRESS", "Capture preparation is already active.")
+            job = {"id": "j_" + uuid.uuid4().hex[:16], "projectId": project["id"],
+                   "kind": "capture-preparation", "stage": "queued", "status": "queued",
+                   "progress": 0.0, "sceneUrl": None, "inputManifestUrl": None, "error": None,
+                   "createdAt": now_iso(), "updatedAt": now_iso()}
+            self.storage.save_job(job)
+            with self.storage.project_lock(project["id"]):
+                current = self.storage.get_project(project["id"])
+                current["captureJobId"] = job["id"]
+                self.storage.save_project(current)
+            self._active[project["id"]] = job["id"]
+        self._queue.put(job["id"])
+        return job
+
+    def submit_mesh(self, project: dict, max_views: int = 40) -> dict:
+        with self._guard:
+            if project["id"] in self._active:
+                raise ApiError(409, "JOB_IN_PROGRESS", "This project already has an active job.")
+            with self.storage.project_lock(project["id"]):
+                current = self.storage.get_project(project["id"])
+                if not current.get("inputManifestPath"):
+                    raise ApiError(409, "INPUT_NOT_READY", "Prepare this capture before reconstructing a mesh.")
+                job = {"id": "j_" + uuid.uuid4().hex[:16], "projectId": project["id"],
+                       "kind": "mesh-reconstruction", "stage": "queued", "status": "queued",
+                       "progress": 0., "sceneUrl": None, "meshManifestUrl": None, "error": None,
+                       "createdAt": now_iso(), "updatedAt": now_iso(),
+                       "_inputManifestPath": current["inputManifestPath"], "maxViews": max_views}
+                self.storage.save_job(job)
+                current["meshJobId"] = job["id"]
+                self.storage.save_project(current)
+            self._active[project["id"]] = job["id"]
+        self._queue.put(job["id"])
+        return job
+
+    def _mesh(self, job: dict):
+        root = self.storage.project_dir(job["projectId"])
+        capture_input = read_json(root / job["_inputManifestPath"])
+        frames = capture_input["frames"]
+        count = min(len(frames), job["maxViews"])
+        indices = [round(i * (len(frames)-1)/(count-1)) for i in range(count)] if count > 1 else [0]
+        capture_input["frames"] = [frames[i] for i in indices]
+        capture_input["reconstructionSelection"] = {"maxViews": job["maxViews"], "availableViews": len(frames),
+                                                    "selectedIndices": indices, "strategy": "uniform in capture order, including endpoints"}
+        preset = demo_preset(self.storage.get_project(job["projectId"]))
+        if preset:
+            capture_input["demoPreset"] = preset
+        def cancelled():
+            return job["id"] in self._cancel or self._stopping.is_set()
+        def progress(value, stage):
+            if job.get("stage") != stage or abs(job["progress"] - value) > .01:
+                self._update(job, progress=value, stage=stage)
+        run_worker(root, job, capture_input, progress, cancelled)
+        with self._guard:
+            if cancelled():
+                shutil.rmtree(root / "reconstructions" / job["id"], ignore_errors=True)
+                raise Cancelled()
+            with self.storage.project_lock(job["projectId"]):
+                project = self.storage.get_project(job["projectId"])
+                project["meshManifestPath"] = f"reconstructions/{job['id']}/manifest.json"
+                project["meshManifestUrl"] = f"/api/projects/{job['projectId']}/mesh"
+                project["hasMesh"] = True
+                self.storage.save_project(project)
+            if preset:
+                self._apply_demo_calibration(job, preset)
+            self._update(job, status="succeeded", stage="ready", progress=1., meshManifestUrl=project["meshManifestUrl"])
+
+    def _apply_demo_calibration(self, job: dict, preset: str):
+        """Open a demo mesh already scaled/floor-aligned with the calibration recorded at bake time."""
+        spec = read_json(WORKER_DIR / "demo" / preset / "calibration.json")
+        if spec:
+            save_calibration(self.storage, job["projectId"], {"jobId": job["id"], "expectedRevision": None,
+                                                              "reference": spec.get("reference"), "floor": spec.get("floor"),
+                                                              "rotationDegrees": spec.get("rotationDegrees", [0, 0, 0])})
+
+    def _prepare(self, job: dict) -> None:
+        project = self.storage.get_project(job["projectId"])
+        def progress(value, stage):
+            if job["id"] in self._cancel:
+                raise Cancelled()
+            self._update(job, progress=value, stage=stage)
+        manifest = prepare_capture(self.storage.project_dir(project["id"]), project, job["id"], progress)
+        with self._guard:
+            if job["id"] in self._cancel:
+                shutil.rmtree(self.storage.project_dir(project["id"]) / "captures" / job["id"], ignore_errors=True)
+                raise Cancelled()
+            with self.storage.project_lock(project["id"]):
+                current = self.storage.get_project(project["id"])
+                current["inputManifestPath"] = f"captures/{job['id']}/manifest.json"
+                url = f"/api/projects/{project['id']}/capture-input"
+                current["inputManifestUrl"] = url
+                self.storage.save_project(current)
+            self._update(job, status="succeeded", stage="ready", progress=1.0,
+                         inputManifestUrl=url, selectedViews=len(manifest["frames"]))
 
     def cancel(self, job_id: str) -> dict:
         """Cancel a queued job immediately; ask a running job to stop at its next progress step.
@@ -120,6 +245,8 @@ class JobRunner:
                 self._run(job)
             except Cancelled:
                 self._update(job, status="failed", error={"code": "JOB_CANCELLED", "message": CANCELLED_MESSAGE, "details": None})
+            except ApiError as e:
+                self._update(job, status="failed", error=e.body()["error"])
             except ParseError as e:
                 self._update(job, status="failed", error={"code": "RECONSTRUCTION_FAILED", "message": str(e), "details": None})
             except Exception as e:  # never let one job kill the worker
@@ -127,11 +254,20 @@ class JobRunner:
                 self._update(job, status="failed", error={"code": "INTERNAL_ERROR", "message": f"Reconstruction crashed: {e}", "details": None})
             finally:
                 with self._guard:
-                    self._active.pop(job["projectId"], None)
+                    if self._active.get(job["projectId"]) == job_id:
+                        self._active.pop(job["projectId"], None)
                     self._cancel.discard(job_id)
 
     def _run(self, job: dict) -> None:
-        self._update(job, status="running", progress=0.05)
+        with self._guard:
+            latest = self.storage.get_job(job["id"])
+            if latest["status"] != "queued":
+                return
+            self._update(job, status="running", progress=0.05)
+        if job.get("kind") == "capture-preparation":
+            return self._prepare(job)
+        if job.get("kind") == "mesh-reconstruction":
+            return self._mesh(job)
         project = self.storage.get_project(job["projectId"])
         req = job["_request"]
         cal = req["calibration"]

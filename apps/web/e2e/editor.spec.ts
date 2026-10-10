@@ -70,6 +70,25 @@ test('renders the demo room with WebGL', async ({ page }) => {
   expect(new Set(shot.subarray(1000, 60000)).size).toBeGreaterThan(20);
 });
 
+test('resizes the review dock with pointer and keyboard while retaining the viewport', async ({ page }) => {
+  const splitter = page.getByRole('separator', { name: 'Resize bottom panel' });
+  const dock = page.locator('.bottom-dock');
+  const height = () => dock.evaluate((el) => el.getBoundingClientRect().height);
+  const original = await height();
+  const handle = (await splitter.boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y - 80, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(height).toBeGreaterThan(original + 60);
+  const enlarged = await height();
+  await splitter.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(height).toBeCloseTo(enlarged - 20, 0);
+  expect((await page.locator('.viewport canvas').boundingBox())!.height).toBeGreaterThan(100);
+  await page.screenshot({ path: 'test-results/merged-resizable-dock.png' });
+});
+
 test('selects a floor label, renames the room, toggles labels and reloads the saved name', async ({ page }) => {
   const room = (await state(page)).scene!.rooms[0];
   const labelPosition = await page.evaluate((id) => {

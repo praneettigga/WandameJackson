@@ -29,7 +29,7 @@ def test_group_validation_and_revision_conflicts(client):
     envelope = make_group(client, ids)
     a = envelope['assembly']; aid = a['id']
     assert len(envelope['projects']) == 2 and envelope['scenes'] == {}
-    assert client.get(f'/api/assemblies/{aid}').json() == envelopegit 
+    assert client.get(f'/api/assemblies/{aid}').json() == envelope
     edited = copy.deepcopy(a)
     edited['buildings'][0]['floors'].reverse()
     edited['buildings'][0]['floors'][0]['offset'] = [1.2, -.4]
@@ -46,6 +46,27 @@ def test_group_validation_and_revision_conflicts(client):
     invalid['buildings'][0]['floors'][0]['rotationY'] = 'nan'
     assert client.put(f'/api/assemblies/{aid}', json=invalid).status_code == 400
     assert client.get('/api/assemblies/a_missing').status_code == 404
+
+
+def test_captures_cannot_be_used_as_blueprint_floors(client):
+    pid = 'p_capture'
+    client.app.state.storage.save_project({
+        'id': pid, 'name': 'Room video', 'createdAt': '2026-10-09T00:00:00Z',
+        'source': {'kind': 'video'}, 'image': None,
+    })
+    response = client.post('/api/assemblies', json={
+        'name': 'Mixed sources',
+        'buildings': [{'id': 'building-1', 'name': 'North', 'floors': [floor(pid, 0)]}],
+    })
+    assert response.status_code == 400
+    assert response.json()['error']['code'] == 'INVALID_SOURCE'
+    envelope = make_group(client, [upload(client)])
+    assembly = copy.deepcopy(envelope['assembly'])
+    assembly['buildings'][0]['floors'][0]['projectId'] = pid
+    response = client.put(f"/api/assemblies/{assembly['id']}", json=assembly)
+    assert response.status_code == 400
+    assert response.json()['error']['code'] == 'INVALID_SOURCE'
+    assert client.get(f"/api/assemblies/{assembly['id']}").json() == envelope
 
 
 def test_independent_auto_scales_partial_failure_and_retry(client, monkeypatch):

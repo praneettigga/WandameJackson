@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { create } from 'zustand';
-import type { ComponentSpec, V3 } from './scene';
+import type { ComponentSpec, Scene, V3 } from './scene';
 
 // Custom components are the user's own 3D scans or models, imported from local files. The original
 // file bytes are kept in this browser's IndexedDB and re-parsed on load. Saved scenes carry only the
@@ -59,6 +59,37 @@ export const useLibrary = create<LibraryState>(() => ({
 
 /** Normalized meshes keyed by componentId: a unit footprint (x, z in ±0.5, y in 0–1) resting on the floor. */
 const templates = new Map<string, THREE.Object3D>();
+const serverLoads = new Map<string, Promise<void>>();
+
+/** Capture assets live on the API, so saved scenes reload on other browsers too. */
+export async function loadSceneAssets(scene: Scene, imageUrl: (path: string) => string) {
+  await Promise.all(
+    scene.objects
+      .filter((o) => o.assetUrl)
+      .map(async (o) => {
+        const key = o.assetUrl!;
+        if (templates.has(key)) return;
+        if (!serverLoads.has(key)) {
+          serverLoads.set(
+            key,
+            (async () => {
+              const response = await fetch(imageUrl(key));
+              if (!response.ok)
+                throw new Error(`Could not load captured mesh (HTTP ${response.status}).`);
+              const object = await parseScan(await response.arrayBuffer(), 'glb', o.name);
+              templates.set(key, buildTemplate(object, 'y'));
+              useLibrary.setState((s) => ({ revision: s.revision + 1 }));
+            })().catch((error) => {
+              serverLoads.delete(key);
+              throw error;
+            }),
+          );
+        }
+        await serverLoads.get(key);
+      }),
+  );
+  return scene;
+}
 export const customTemplate = (componentId: string | null) =>
   componentId ? templates.get(componentId) : undefined;
 

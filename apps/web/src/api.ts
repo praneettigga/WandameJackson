@@ -4,6 +4,7 @@ import fixtureImage from '../../../contracts/fixtures/room.png?url';
 import servicesFixture from '../../../contracts/fixtures/services-apartment.scene.json';
 import servicesImage from '../../../contracts/fixtures/services-apartment.png?url';
 import { sceneSchema, validateScene, type Scene, type V2 } from './scene';
+import { loadSceneAssets } from './library';
 
 export type ProjectEnvelope = {
   project: { id: string; name: string; createdAt: string; hasScene: boolean };
@@ -19,6 +20,65 @@ export type AssemblySubmission = AssemblyEnvelope & {
   submittedJobs: Job[];
   errors: { projectId: string; error: ApiErrorBody }[];
 };
+export type CaptureKind = 'video' | 'photo-set';
+export type CaptureEnvelope = {
+  project: ProjectEnvelope['project'];
+  image: null;
+  source: { kind: CaptureKind };
+  captureJobId: string | null;
+  meshJobId?: string | null;
+  meshManifestUrl?: string | null;
+  hasMesh?: boolean;
+  inputManifestUrl: string | null;
+};
+export type CaptureInput = {
+  schemaVersion: '1.0.0';
+  jobId?: string;
+  projectId: string;
+  frames: {
+    id: string;
+    url: string;
+    sourceId: string;
+    timestampSeconds: number | null;
+    width: number;
+    height: number;
+  }[];
+  originals: { id: string; filename: string }[];
+  rejected: { sourceId: string; timestampSeconds: number | null; reason: string }[];
+  warnings: string[];
+};
+export type MeshPoint = [number, number, number];
+export type MeshCalibration = {
+  reference: { pointA: MeshPoint; pointB: MeshPoint; distanceMeters: number } | null;
+  floor: { points: [MeshPoint, MeshPoint, MeshPoint]; flipNormal: boolean } | null;
+  rotationDegrees: MeshPoint;
+};
+export type MeshCalibrationRequest = MeshCalibration & {
+  jobId: string;
+  expectedRevision: string | null;
+};
+export type MeshResult = {
+  schemaVersion: '1.0.0' | '1.1.0';
+  jobId: string;
+  inputJobId: string;
+  projectId: string;
+  meshUrl: string;
+  diagnosticUrl: string;
+  units: 'uncalibrated' | 'meters';
+  calibration?: MeshCalibration | null;
+  calibrationRevision?: string | null;
+  reconstructionToWorld?: number[][];
+  manifestUrl?: string;
+  cameras: { frameId: string; worldToCamera: number[][]; cameraToWorld: number[][] }[];
+  statistics: {
+    vertices: number;
+    triangles: number;
+    executionSeconds: number;
+    endToEndSeconds: number | null;
+  };
+  warnings: string[];
+};
+export type WorkerCapabilities = { ready: boolean; code: string; message: string; device?: string };
 export type ScaleCalibration = Scene['source']['calibration'];
 export type ReconstructionRequest = {
   calibration?: { pointA: V2; pointB: V2; distanceMeters: number };
@@ -37,6 +97,10 @@ export type Job = {
   updatedAt: string;
   /** Set once a cancel was requested for a running job; it ends as failed/JOB_CANCELLED. */
   cancelRequested?: boolean;
+  kind?: 'capture-preparation' | 'mesh-reconstruction';
+  meshManifestUrl?: string | null;
+  stage?: string;
+  inputManifestUrl?: string | null;
 };
 export class ApiError extends Error {
   constructor(
@@ -53,6 +117,16 @@ export interface RoomshiftApi {
   readonly mock: boolean;
   health(): Promise<{ status: 'ok'; schemaVersion: '0.1.0' }>;
   createProject(file: File, name?: string, independent?: boolean): Promise<ProjectEnvelope>;
+  createCapture(kind: CaptureKind, files: File[]): Promise<CaptureEnvelope & { job: Job }>;
+  listCaptures(): Promise<CaptureEnvelope[]>;
+  getCapture(id: string): Promise<CaptureEnvelope>;
+  getCaptureInput(id: string): Promise<CaptureInput>;
+  prepareCapture(id: string): Promise<{ job: Job }>;
+  reconstructionCapabilities(): Promise<WorkerCapabilities>;
+  reconstructMesh(id: string, maxViews?: number): Promise<{ job: Job }>;
+  getMesh(id: string): Promise<MeshResult>;
+  calibrateMesh(id: string, input: MeshCalibrationRequest): Promise<MeshResult>;
+  openCaptureScene(id: string): Promise<Scene>;
   getProject(id: string): Promise<ProjectEnvelope>;
   createAssembly(input: AssemblyInput): Promise<AssemblyEnvelope>;
   getAssembly(id: string): Promise<AssemblyEnvelope>;
@@ -88,7 +162,7 @@ export class HttpApi implements RoomshiftApi {
       throw new ApiError(
         0,
         'NETWORK_ERROR',
-        `Cannot reach the API at ${this.baseUrl}. For local development, run \"npm run dev\" from the repository root. Otherwise check VITE_API_BASE_URL and CORS configuration. ${error instanceof Error ? error.message : ''}`,
+        `Cannot reach the API at ${this.baseUrl}. Start the backend from services/api using the README setup instructions. Check VITE_API_BASE_URL and CORS configuration. ${error instanceof Error ? error.message : ''}`,
       );
     }
     const body = await response.json().catch(() => null);
@@ -159,14 +233,74 @@ export class HttpApi implements RoomshiftApi {
     );
     return { ...value, ...this.parseAssembly(value) };
   }
-  getProject(id: string) {
-    return this.request<ProjectEnvelope>(`/api/projects/${encodeURIComponent(id)}`);
+  async getProject(id: string) {
+    const value = await this.request<ProjectEnvelope | CaptureEnvelope>(
+      `/api/projects/${encodeURIComponent(id)}`,
+    );
+    if (value.image === null) throw new Error('Open this capture in Mode 2: Photos & video.');
+    return value as ProjectEnvelope;
   }
-  listProjects() {
-    return this.request<{ projects: ProjectEnvelope[] }>('/api/projects');
+  async listProjects() {
+    const result = await this.request<{ projects: (ProjectEnvelope | CaptureEnvelope)[] }>(
+      '/api/projects',
+    );
+    return { projects: result.projects.filter((p): p is ProjectEnvelope => p.image !== null) };
+  }
+  createCapture(kind: CaptureKind, files: File[]) {
+    const body = new FormData();
+    body.append('kind', kind);
+    files.forEach((file) => body.append('files', file));
+    return this.request<CaptureEnvelope & { job: Job }>(
+      '/api/captures',
+      { method: 'POST', body },
+      300_000,
+    );
+  }
+  async listCaptures() {
+    const result = await this.request<{ projects: (ProjectEnvelope | CaptureEnvelope)[] }>(
+      '/api/projects',
+    );
+    return result.projects.filter((p): p is CaptureEnvelope => p.image === null);
+  }
+  getCapture(id: string) {
+    return this.request<CaptureEnvelope>(`/api/projects/${encodeURIComponent(id)}`);
+  }
+  getCaptureInput(id: string) {
+    return this.request<CaptureInput>(`/api/projects/${encodeURIComponent(id)}/capture-input`);
+  }
+  prepareCapture(id: string) {
+    return this.request<{ job: Job }>(`/api/projects/${encodeURIComponent(id)}/prepare`, {
+      method: 'POST',
+    });
+  }
+  reconstructionCapabilities() {
+    return this.request<WorkerCapabilities>('/api/reconstruction/capabilities', undefined, 40_000);
+  }
+  reconstructMesh(id: string, maxViews = 40) {
+    return this.request<{ job: Job }>(`/api/projects/${encodeURIComponent(id)}/reconstruct-mesh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxViews }),
+    });
+  }
+  getMesh(id: string) {
+    return this.request<MeshResult>(`/api/projects/${encodeURIComponent(id)}/mesh`);
+  }
+  calibrateMesh(id: string, input: MeshCalibrationRequest) {
+    return this.request<MeshResult>(
+      `/api/projects/${encodeURIComponent(id)}/mesh/calibration`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+      60_000,
+    );
   }
   cancelJob(id: string) {
-    return this.request<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+    return this.request<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+    });
   }
   async getScale(id: string) {
     try {
@@ -196,7 +330,22 @@ export class HttpApi implements RoomshiftApi {
     return this.request<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}`);
   }
   async getScene(id: string) {
-    return sceneSchema.parse(await this.request(`/api/projects/${encodeURIComponent(id)}/scene`));
+    return loadSceneAssets(
+      sceneSchema.parse(await this.request(`/api/projects/${encodeURIComponent(id)}/scene`)),
+      (path) => this.imageUrl(path),
+    );
+  }
+  async openCaptureScene(id: string) {
+    return loadSceneAssets(
+      sceneSchema.parse(
+        await this.request(
+          `/api/projects/${encodeURIComponent(id)}/editor-scene`,
+          { method: 'POST' },
+          60_000,
+        ),
+      ),
+      (path) => this.imageUrl(path),
+    );
   }
   async saveScene(id: string, scene: Scene) {
     return sceneSchema.parse(
@@ -208,8 +357,9 @@ export class HttpApi implements RoomshiftApi {
     );
   }
   async getSourceScene(id: string) {
-    return sceneSchema.parse(
-      await this.request(`/api/projects/${encodeURIComponent(id)}/source-scene`),
+    return loadSceneAssets(
+      sceneSchema.parse(await this.request(`/api/projects/${encodeURIComponent(id)}/source-scene`)),
+      (path) => this.imageUrl(path),
     );
   }
 }
@@ -304,6 +454,40 @@ export class MockApi implements RoomshiftApi {
     this.grouped.projects[id] = envelope;
     this.persistGrouped();
     return structuredClone(envelope);
+  }
+  async createCapture(_kind: CaptureKind, _files: File[]): Promise<CaptureEnvelope & { job: Job }> {
+    throw new Error('Photo/video preparation requires the local API. Disable mock mode.');
+  }
+  async listCaptures(): Promise<CaptureEnvelope[]> {
+    return [];
+  }
+  async getCapture(_id: string): Promise<CaptureEnvelope> {
+    throw new Error('No captures in mock mode.');
+  }
+  async getCaptureInput(_id: string): Promise<CaptureInput> {
+    throw new Error('No captures in mock mode.');
+  }
+  async prepareCapture(_id: string): Promise<{ job: Job }> {
+    throw new Error('No captures in mock mode.');
+  }
+  async reconstructionCapabilities(): Promise<WorkerCapabilities> {
+    return {
+      ready: false,
+      code: 'MOCK_MODE',
+      message: 'Connect the local API to reconstruct your room.',
+    };
+  }
+  async reconstructMesh(_id: string): Promise<{ job: Job }> {
+    throw new Error('Reconstruction requires the local API.');
+  }
+  async getMesh(_id: string): Promise<MeshResult> {
+    throw new Error('No reconstructed mesh in mock mode.');
+  }
+  async calibrateMesh(_id: string, _input: MeshCalibrationRequest): Promise<MeshResult> {
+    throw new Error('Mesh calibration requires the local API.');
+  }
+  async openCaptureScene(_id: string): Promise<Scene> {
+    throw new Error('Capture editing requires the local API.');
   }
   async getProject(id: string): Promise<ProjectEnvelope> {
     this.project(id);
@@ -558,7 +742,9 @@ export async function pollJob(
   onProgress: (job: Job) => void,
   options: { timeoutMs?: number; intervalMs?: number; signal?: AbortSignal } = {},
 ) {
-  const deadline = Date.now() + (options.timeoutMs ?? 180_000);
+  // Meshroom's default server budget is one hour; allow time for publication too.
+  const defaultTimeout = initial.kind === 'mesh-reconstruction' ? 3_900_000 : 180_000;
+  const deadline = Date.now() + (options.timeoutMs ?? defaultTimeout);
   let job = initial;
   while (true) {
     options.signal?.throwIfAborted();
@@ -571,12 +757,19 @@ export async function pollJob(
         job.error?.details,
       );
     if (job.status === 'succeeded') {
-      if (!job.sceneUrl) throw new Error('The completed job has no persisted scene URL.');
+      if (
+        job.kind === 'capture-preparation'
+          ? !job.inputManifestUrl
+          : job.kind === 'mesh-reconstruction'
+            ? !job.meshManifestUrl
+            : !job.sceneUrl
+      )
+        throw new Error('The completed job has no persisted result URL.');
       return job;
     }
     if (Date.now() >= deadline)
       throw new Error(
-        'Reconstruction timed out. The server may still be working; reopen this project to retrieve its scene.',
+        'Reconstruction timed out. The server may still be working; reopen this project to retrieve its result.',
       );
     await new Promise<void>((resolve, reject) => {
       const abort = () => {

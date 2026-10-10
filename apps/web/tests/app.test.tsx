@@ -28,6 +28,29 @@ beforeEach(() => {
   });
 });
 describe('application integration without WebGL', () => {
+  it('preserves blueprint edits and isolates editor shortcuts while viewing captures', async () => {
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    fireEvent.click(screen.getByRole('button', { name: 'Select Table' }));
+    fireEvent.change(screen.getByLabelText('Width'), { target: { value: '1.6' } });
+    fireEvent.blur(screen.getByLabelText('Width'));
+    const edited = structuredClone(useEditor.getState().scene);
+    expect(useEditor.getState().dirty).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: /Mode 2/ }));
+    await screen.findByLabelText('Choose capture files');
+    fireEvent.keyDown(window, { key: 'Delete' });
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+    expect(useEditor.getState().scene).toEqual(edited);
+    expect(useEditor.getState().dirty).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: /Mode 1/ }));
+    expect(screen.getByLabelText('Width')).toHaveValue(1.6);
+    vi.spyOn(api, 'saveScene').mockResolvedValueOnce({
+      ...edited!,
+      revision: edited!.revision + 1,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save scene' }));
+    await waitFor(() => expect(useEditor.getState().dirty).toBe(false));
+  });
   it('switches walls to see-through, compares service layouts and records room uses', async () => {
     useEditor.setState({ seeThrough: false, serviceProposal: null, roomUses: {} });
     render(<App />);
@@ -38,14 +61,18 @@ describe('application integration without WebGL', () => {
     expect(useEditor.getState().seeThrough).toBe(true);
     fireEvent.keyDown(window, { key: 'i' });
     expect(useEditor.getState().seeThrough).toBe(false);
-    const crowded = within(panel).getByRole('radio', { name: /Skirting power · water in the walls/ });
+    const crowded = within(panel).getByRole('radio', {
+      name: /Skirting power · water in the walls/,
+    });
     fireEvent.click(crowded);
     expect(useEditor.getState().serviceProposal).toBe('skirting-wall');
     expect(useEditor.getState().seeThrough).toBe(true);
     expect(within(panel).getAllByRole('button', { name: 'Show' }).length).toBeGreaterThan(0);
     fireEvent.change(within(panel).getByLabelText('Use of Room'), { target: { value: 'bedroom' } });
     expect(useEditor.getState().roomUses['demo-room']).toEqual({ 'room-1': 'bedroom' });
-    expect(JSON.parse(localStorage.getItem('roomshift.roomUses')!)).toEqual({ 'demo-room': { 'room-1': 'bedroom' } });
+    expect(JSON.parse(localStorage.getItem('roomshift.roomUses')!)).toEqual({
+      'demo-room': { 'room-1': 'bedroom' },
+    });
   });
   it('blocks edits while reload is pending so they cannot be silently discarded', async () => {
     render(<App />);
@@ -222,6 +249,13 @@ describe('application integration without WebGL', () => {
     expect(useEditor.getState().activeProjectId).toBe(
       useEditor.getState().assembly!.buildings[0].floors[1].projectId,
     );
+    const grouped = useEditor.getState();
+    fireEvent.click(screen.getByRole('button', { name: /Mode 2/ }));
+    await screen.findByLabelText('Choose capture files');
+    fireEvent.click(screen.getByRole('button', { name: /Mode 1/ }));
+    expect(useEditor.getState().assembly).toEqual(grouped.assembly);
+    expect(useEditor.getState().activeProjectId).toBe(grouped.activeProjectId);
+    expect(useEditor.getState().scenes).toEqual(grouped.scenes);
     fireEvent.click(screen.getByRole('button', { name: 'Save project' }));
     await waitFor(() => expect(useEditor.getState().hasUnsaved()).toBe(false));
   });
@@ -284,7 +318,7 @@ describe('application integration without WebGL', () => {
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Floors of the same building' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create grouped project' }));
-    await screen.findByText(/From the repository root, run \"npm run dev\"/);
+    await screen.findByText(/Start the backend from services\/api/);
     expect(createProject).not.toHaveBeenCalled();
   });
   it('performs two-point visual calibration and mock job polling, then opens the fixture', async () => {

@@ -2,13 +2,15 @@
 
 Upload a floor-plan PNG/JPEG, automatically read printed dimensions or estimate scale, reconstruct a metric room, add and edit furniture, save/reload, and export Scene JSON or GLB.
 
+Mode 2 accepts a 10–60 second room video or 20–40 overlapping photos, prepares
+traceable frames, and runs Meshroom (AliceVision photogrammetry) in a separate
+worker to export a colored triangle mesh. Known demo videos can be pre-baked and served
+instantly. See [worker setup and validation status](services/reconstruction/README.md).
+
 ## Run locally
 
-Use Python 3.12+ and Node 22.12+. The current checkout directory contains `:`
-(`National-Round:Hacknex`), which Python and Vitest/Vite treat as a path/URL
-separator. Move or clone this repository into a directory without `:` before
-running it (for example, `~/Projects/WandameJackson`). From the repository
-root, start the backend:
+Use Python 3.12+ and Node 22.12+. Keep the checkout in a directory without `:`
+(for example, `~/Projects/WandameJackson`). From the repository root, start the backend:
 
 ```bash
 cd services/api
@@ -28,6 +30,44 @@ VITE_USE_MOCK_API=false VITE_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 Open http://127.0.0.1:5173. On Windows use `.venv\Scripts\python` and set environment variables with PowerShell. API data persists in `services/api/data/`; use one API worker for this local prototype.
 
 For an offline demo use `VITE_USE_MOCK_API=true npm run dev`. It loads the synthetic fixture and simulates reconstruction. Explicit environment variables override any local `.env.local` settings.
+
+## Photos and video
+
+Install FFmpeg/ffprobe and the [isolated reconstruction worker](services/reconstruction/README.md),
+then run the real API and frontend above. Choose **Mode 2 · Photos & video**,
+upload a capture with **Upload & prepare views**. Review the selected views, then
+choose **Reconstruct mesh**. The result opens in an orbit viewer with GLB export.
+Saved captures and meshes can be reopened from the sidebar. Cancellation and
+failed reruns preserve any previously completed mesh.
+
+Use one static room, good lighting, and substantial overlap. Photos must be in
+walking order. Meshes begin with uncalibrated scale and may contain missing surfaces.
+Under the viewer, use **Set scale · 2 points** with a known distance, **Align floor ·
+3 points**, and the manual orientation controls. Applied changes save automatically;
+GLB and JSON exports preserve the saved scale/orientation. Use **Measure · 2 points**
+to check another known distance. Choose **Edit in 3D workspace** to open the result
+in the same editor used for blueprints. Captures need metric scale and floor alignment
+first; the architectural presets already have metric layouts.
+
+The classroom and rectangular-room presets expose separate rooms, walls, doors,
+windows, and furniture. A photogrammetry result remains one editable surface object:
+move, rotate, resize, duplicate or delete it, measure actual surfaces, add furniture
+or draw walls, undo/redo, save/reload, and export Scene JSON or a combined GLB.
+Scanned furniture and walls are not automatically segmented. Room labels,
+infrastructure proposals, wall snapping and structural checks use semantic walls
+and rooms (from presets or ones you draw), not inferred parts of the raw scan.
+Walking collision checks cover semantic walls and furniture, not scan triangles.
+
+Editor snapshots and their mesh assets are stored on the API. Reopening a capture
+continues its saved edits, even after the capture is reconstructed or recalibrated;
+later capture processing never silently replaces editor work. Use **Save scene**
+and the editor's JSON/GLB exports for edits; the capture viewer's export remains
+the original reconstruction. Preset fixtures use the editor's procedural furniture
+and box geometry so each item is independently editable.
+Mock mode does not run the photo/video pipeline.
+
+Switching between input modes preserves the loaded blueprint or building assembly,
+including unsaved edits. Blueprint editing shortcuts are inactive in the capture workspace.
 
 ## First demo
 
@@ -103,6 +143,9 @@ Browser tests run the mock-data app in headless Chromium with real WebGL. They c
 cd apps/web
 npx playwright install chromium   # once
 npm run e2e
+# Photo/video mesh viewing, export, and calibration (requires the API virtualenv):
+npx playwright test --config playwright.capture.config.ts
+npx playwright test --config playwright.calibration.config.ts
 ```
 
 ## Evaluation (Mode A)
@@ -121,7 +164,7 @@ Results and their caveats are in [docs/eval/RESULTS.md](docs/eval/RESULTS.md). C
 
 ## Scope and limits
 
-The CPU parser targets clean line drawings. It handles solid or double-line walls, straight diagonal walls, and slightly rotated scans, which it straightens and maps back. It detects doors (with swing direction when an arc is drawn) and windows on horizontal/vertical walls. It does not extract furniture; users add furniture from the library. Door/window detection is heuristic, heights and ceilings are assumptions, and unsuccessful parsing never falls back to a fake room. Arbitrary architectural drawings, video, multi-floor plans, and benchmark superiority are not claimed.
+The Mode 1 CPU parser targets clean line drawings. It handles solid or double-line walls, straight diagonal walls, and slightly rotated scans, which it straightens and maps back. It detects doors (with swing direction when an arc is drawn) and windows on horizontal/vertical walls. It does not extract furniture; users add furniture from the library. Door/window detection is heuristic, heights and ceilings are assumptions, and unsuccessful parsing never falls back to a fake room. Arbitrary architectural drawings, multi-floor plans, and benchmark superiority are not claimed. Mode 2 uses the separate experimental imagery reconstruction pipeline described above.
 
 See [prototype scope](docs/architecture/prototype-scope.md), [workflow](docs/workflow/end-to-end-workflow.md), and the authoritative [API contract](contracts/api-contract.md) / [Scene schema](contracts/scene.schema.json). Schema version is `0.1.0`; older docs under `docs/contracts/` are superseded.
 

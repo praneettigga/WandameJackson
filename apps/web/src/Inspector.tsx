@@ -117,6 +117,9 @@ function ConfidencePanel({ entity }: { entity: Entity }) {
   );
 }
 
+const displayNumber = (value: number) =>
+  value !== 0 && Math.abs(value) < 0.0001 ? String(value) : String(Number(value.toFixed(4)));
+
 function NumberField({
   label,
   value,
@@ -130,8 +133,8 @@ function NumberField({
   step?: number;
   origin?: Origin;
 }) {
-  const [draft, setDraft] = useState(String(Number(value.toFixed(4))));
-  useEffect(() => setDraft(String(Number(value.toFixed(4)))), [value]);
+  const [draft, setDraft] = useState(displayNumber(value));
+  useEffect(() => setDraft(displayNumber(value)), [value]);
   return (
     <label className="number-field">
       <span>
@@ -154,7 +157,8 @@ function NumberField({
             useEditor.setState({ error: `${label} must be a finite number.` });
             return;
           }
-          if (n !== value) onCommit(n);
+          // Merely focusing a rounded value must not create an edit/undo entry.
+          if (n !== Number(displayNumber(value))) onCommit(n);
           const entity =
             useEditor.getState().scene &&
             entityById(useEditor.getState().scene!, useEditor.getState().selectedId);
@@ -402,8 +406,8 @@ export function Inspector() {
                   />
                 </label>
                 <p className="hint">
-                  Shown on the 3D floor. Names read from the blueprint can be corrected here;
-                  enter your own name when none was detected. Press Enter to apply, then Save to keep it.
+                  Shown on the 3D floor. Names read from the blueprint can be corrected here; enter
+                  your own name when none was detected. Press Enter to apply, then Save to keep it.
                 </p>
                 <OriginTag origin={fieldOrigin(entity, 'name')} />
                 <NumberField

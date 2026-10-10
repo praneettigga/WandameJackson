@@ -30,6 +30,10 @@ export const objectSchema = z.strictObject({
   name: z.string(),
   category: z.string(),
   componentId: z.string().nullable(),
+  assetUrl: z
+    .string()
+    .regex(/^\/api\/projects\/[A-Za-z0-9_.-]+\/editor-assets\/[a-f0-9]+\.glb$/)
+    .optional(),
   position: v3,
   rotationY: number,
   dimensions: z.tuple([positive, positive, positive]),
@@ -68,6 +72,14 @@ export const sceneSchema = z.strictObject({
   units: z.literal('meters'),
   upAxis: z.literal('Y'),
   source: z.strictObject({
+    capture: z
+      .strictObject({
+        kind: z.enum(['video', 'photo-set']),
+        jobId: id,
+        calibrationRevision: z.string().nullable(),
+        representation: z.enum(['layout', 'mesh']),
+      })
+      .optional(),
     imageUrl: z.string().regex(/^\//),
     imageWidth: positive.int(),
     imageHeight: positive.int(),

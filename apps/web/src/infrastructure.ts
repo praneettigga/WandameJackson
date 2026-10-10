@@ -1245,6 +1245,7 @@ function detectClashes(ctx: Context, runs: Run[], unreachable: Fixture[], deepes
     const y = f.position[1];
     const front: V2 = [f.position[0] + f.normal[0] * 0.15, f.position[2] + f.normal[1] * 0.15];
     for (const o of scene.objects) {
+      if (o.assetUrl) continue;
       if (o.position[1] > y + 0.1 || o.position[1] + o.dimensions[1] < y - 0.05) continue;
       if (insidePolygon(front, footprint(o)))
         add({

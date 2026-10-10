@@ -1,4 +1,4 @@
-# ROOMSHIFT web prototype
+# Scene Studio web app
 
 From the repository root:
 

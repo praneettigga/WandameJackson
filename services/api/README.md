@@ -1,4 +1,4 @@
-# ROOMSHIFT API (`services/api`)
+# Scene Studio API (`services/api`)
 
 FastAPI backend implementing the frozen contract in [`contracts/`](../../contracts/api-contract.md): upload a PNG/JPEG blueprint, automatically read dimension annotations or estimate scale (with an optional two-point manual override), reconstruct a metric Scene with a CPU OpenCV parser, then save, reload and compare against the immutable source scene.
 

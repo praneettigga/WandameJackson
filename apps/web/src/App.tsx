@@ -811,8 +811,8 @@ export default function App() {
       }
     >
       <header className="app-header">
-        <a className="brand" href="#" aria-label="ROOMSHIFT">
-          <span className="brand-mark">▱</span>ROOMSHIFT<span className="version">/ 0.1</span>
+        <a className="brand" href="#" aria-label="Scene Studio">
+          <span className="brand-mark">▱</span>SCENE STUDIO<span className="version">/ 0.1</span>
         </a>
         <div className="project-title">
           {inputMode === 'capture'
@@ -1764,7 +1764,7 @@ export default function App() {
                           `${state.scene.id}.glb`,
                         );
                         setNotice(
-                          'GLB exported at metre scale. Scene JSON preserves editable ROOMSHIFT semantics.',
+                          'GLB exported at metre scale. Scene JSON preserves editable Scene Studio semantics.',
                         );
                       }
                     })
@@ -1865,7 +1865,7 @@ export default function App() {
               : state.assembly
                 ? `${state.assembly.buildings.length} buildings / ${floorsOf(state.assembly).length} floors`
                 : 'Single floor / Metric / Y up'}
-          <b>·</b>ROOMSHIFT PROTOTYPE
+          <b>·</b>SCENE STUDIO
         </span>
       </footer>
     </div>

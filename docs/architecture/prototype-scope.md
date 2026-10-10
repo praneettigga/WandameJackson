@@ -1,4 +1,4 @@
-# Prototype scope
+# Scene Studio prototype scope
 
 ## Goal
 

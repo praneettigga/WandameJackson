@@ -21,6 +21,7 @@
 }
 body {
   margin: 0;
+  background: #181c1e;
 }
 button,
 input {
@@ -1892,6 +1893,7 @@ body:has(.explore-overlay) canvas {
   display: flex;
   gap: 8px;
   padding: 8px 16px;
+  background: #181c1e;
   border-bottom: 1px solid var(--border);
 }
 .input-mode button[aria-pressed='true'] {

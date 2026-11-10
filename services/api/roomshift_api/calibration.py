@@ -5,6 +5,10 @@ import math
 
 from .errors import ApiError
 
+# 0.01 mm to 10 m per pixel: anything outside is a typo (wrong unit) rather than a real drawing.
+MIN_METERS_PER_PIXEL = 1e-5
+MAX_METERS_PER_PIXEL = 10.0
+
 
 def compute_calibration(point_a, point_b, distance_meters, image_width: int, image_height: int) -> dict:
     def fail(msg: str):
@@ -21,8 +25,8 @@ def compute_calibration(point_a, point_b, distance_meters, image_width: int, ima
     if pixels < 1.0:
         fail("pointA and pointB must be at least 1 pixel apart")
     scale = distance_meters / pixels
-    if not math.isfinite(scale) or scale <= 0:
-        fail("The measurement is too small or too large to represent a usable scale")
+    if not math.isfinite(scale) or not MIN_METERS_PER_PIXEL <= scale <= MAX_METERS_PER_PIXEL:
+        fail(f"{distance_meters:g} m over {pixels:.0f} px is not a plausible drawing scale; check the distance and its unit")
     return {
         "pointA": [float(point_a[0]), float(point_a[1])],
         "pointB": [float(point_b[0]), float(point_b[1])],

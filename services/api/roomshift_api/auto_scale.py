@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from .config import ocr_timeout
 from .calibration import compute_calibration
 from .parser import estimate_thickness_px, normalize_drawing
 
@@ -30,6 +31,8 @@ UNITS = {"mm": .001, "cm": .01, "m": 1., "ft": .3048, "in": .0254}
 def parse_measurement(text: str, default_unit: str | None = None) -> float | None:
     """Accept explicit metric/imperial lengths; never guess units from magnitude."""
     text = text.lower().strip().replace("′", "'").replace("’", "'").replace("″", '"').replace('“', '"').replace('”', '"')
+    # OCR often reads the feet-inches hyphen as an underscore or dash variant (16'_5").
+    text = re.sub(r"(?<=')\s*[_–—]\s*", "-", text)
     # Thousands separators only; decimal commas remain ambiguous and are rejected.
     text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", text)
     metric = re.fullmatch(rf"({NUMBER})\s*(mm|cm|m|ft|in)", text)
@@ -73,7 +76,7 @@ def read_labels(gray: np.ndarray) -> list[Label]:
     if not executable and sys.platform == "darwin" and importlib.util.find_spec("Vision"):
         try:
             result = subprocess.run([sys.executable, str(Path(__file__).with_name("ocr_macos.py"))],
-                                    input=encoded.tobytes(), capture_output=True, timeout=8, check=True)
+                                    input=encoded.tobytes(), capture_output=True, timeout=ocr_timeout(), check=True)
             h, w = gray.shape
             return [Label(p["text"], p["x"] * w, p["y"] * h, p["w"] * w, p["h"] * h, p["confidence"])
                     for p in json.loads(result.stdout)]
@@ -83,8 +86,8 @@ def read_labels(gray: np.ndarray) -> list[Label]:
         raise RuntimeError("Printed measurements could not be read: install Tesseract OCR (or the macOS Vision dependencies).")
     try:
         result = subprocess.run(
-            [executable, "stdin", "stdout", "-l", "eng", "--psm", "11", "tsv"],
-            input=encoded.tobytes(), capture_output=True, timeout=6, check=True,
+            [executable, "stdin", "stdout", "-l", "eng", "--psm", "11", "--dpi", "300", "tsv"],
+            input=encoded.tobytes(), capture_output=True, timeout=ocr_timeout(), check=True,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError("Printed measurement reading failed or timed out; automatic scale is estimated.") from exc
@@ -225,10 +228,15 @@ def estimate_scale(gray: np.ndarray) -> dict:
     sy, sx = work.shape[0] / original_h, work.shape[1] / original_w
     candidates = []
     warnings = []
+    # OCR reads native resolution best (upscaling blurs decimal points); labels are mapped to `work`.
+    ocr_ratio = min(ratio, 1.)
+    ocr_image = work if ocr_ratio == ratio else gray
     for rotation in (0, 1, 3):
         view = np.ascontiguousarray(np.rot90(work, rotation))
         try:
-            labels = read_labels(view)
+            k = ratio / ocr_ratio
+            labels = [Label(l.text, l.x * k, l.y * k, l.w * k, l.h * k, l.confidence)
+                      for l in read_labels(np.ascontiguousarray(np.rot90(ocr_image, rotation)))]
         except RuntimeError as exc:
             warnings.append(str(exc))
             break

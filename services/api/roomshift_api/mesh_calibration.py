@@ -110,6 +110,8 @@ def current_mesh(storage, project):
     if not project.get('meshManifestPath'):
         raise ApiError(404, 'MESH_NOT_READY', 'Reconstruct a mesh before calibrating it.')
     base = read_json(root/project['meshManifestPath'])
+    if base is None:
+        raise ApiError(404, 'MESH_NOT_READY', 'The reconstructed mesh is missing. Reconstruct it again.')
     pointer = project.get('meshCalibration')
     if pointer and pointer['jobId'] == base['jobId']:
         return read_json(root/pointer['manifestPath'])

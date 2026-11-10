@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import re
 import shutil
 import subprocess
@@ -15,27 +14,13 @@ import cv2
 import numpy as np
 
 from .errors import ApiError
-from .config import REPO_ROOT
 from .images import inspect_image
+from .mesh_worker import demo_preset as matching_demo_preset
 from .storage import atomic_write_json
 
 CONFIG = {"version": "1.0.1", "maxSide": 1280, "sampleFps": 2,
           "maxViews": 40, "minViews": 12, "minSharpness": 35.0,
           "duplicateMeanDifference": 3.0, "minOverlapInliers": 15}
-
-
-def matching_demo_preset(project: dict) -> str | None:
-    """Return a local, exact-file demo preset when demo mode is explicitly enabled."""
-    if os.environ.get('ROOMSHIFT_DEMO_PRESETS') != '1':
-        return None
-    try:
-        presets = json.loads((REPO_ROOT / 'services/reconstruction/demo/presets.json').read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
-    hashes = {source.get('sha256') for source in project.get('source', {}).get('originals', [])}
-    return next((preset['name'] for preset in presets
-                 if preset.get('sha256') in hashes
-                 and (REPO_ROOT / 'services/reconstruction/demo' / preset['name'] / 'mesh.glb').is_file()), None)
 
 
 def media_command(args: list[str], timeout: int = 45, stderr: bool = False):
@@ -83,7 +68,7 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
     candidates.mkdir()
     source = project["source"]
     originals = source["originals"]
-    demo_preset = matching_demo_preset(project)
+    demo_preset = matching_demo_preset(project)  # exact-file match against offline-baked demo meshes
     demo_warnings = []
     records = []
     try:

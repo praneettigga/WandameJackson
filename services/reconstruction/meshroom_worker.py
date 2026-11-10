@@ -3,13 +3,16 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 
@@ -54,7 +57,7 @@ def capabilities():
     if not binary:
         return {'ready': False, 'code': 'WORKER_NOT_CONFIGURED',
                 'message': 'Install Meshroom and set ROOMSHIFT_MESHROOM_BIN. See services/reconstruction/README.md.'}
-    missing = [m for m in ('numpy', 'trimesh', 'PIL') if __import__('importlib.util').util.find_spec(m) is None]
+    missing = [m for m in ('numpy', 'trimesh', 'PIL') if importlib.util.find_spec(m) is None]
     if missing:
         return {'ready': False, 'code': 'WORKER_NOT_CONFIGURED', 'message': 'Install requirements-meshroom.txt.', 'missing': missing}
     return {'ready': True, 'code': 'READY', 'device': 'Meshroom (AliceVision)',
@@ -99,7 +102,8 @@ def run_meshroom(images, work, progress, overrides=()):
         raise RuntimeError(f'Meshroom failed (exit {process.returncode}). {tail[-400:]}')
     # Meshroom 2025.1 on Windows currently ignores --cache for the batch pipeline
     # and writes to %TEMP%/MeshroomCache. Prefer the configured cache but accept the
-    # release's actual location so camera poses are retained for publication.
+    # release's actual location so camera poses are retained for publication. That
+    # folder is shared, so read_cameras only trusts views whose images are this job's.
     actual_cache = next((candidate for candidate in (cache, Path(tempfile.gettempdir()) / 'MeshroomCache')
                          if list(candidate.glob('StructureFromMotion/*/cameras.sfm'))), cache)
     return output, actual_cache
@@ -114,7 +118,8 @@ def texture_pixels(path):
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temporary:
         png = Path(temporary.name)
     try:
-        subprocess.run(['ffmpeg', '-y', '-v', 'error', '-i', str(path), '-frames:v', '1', str(png)], check=True)
+        subprocess.run(['ffmpeg', '-y', '-v', 'error', '-i', str(path), '-frames:v', '1', str(png)],
+                       check=True, timeout=300)
         with Image.open(png) as image:
             # AliceVision's EXR is linear; write_glb expects sRGB source colors.
             linear = np.asarray(image.convert('RGB'), dtype=float) / 255
@@ -198,15 +203,21 @@ def vertex_normals(vertices, faces):
     return normals
 
 
-def read_cameras(cache, frames):
-    """AliceVision cameras.sfm → per-frame cameras in the viewer convention (same as worker.py)."""
+def read_cameras(cache, frames, images=None):
+    """AliceVision cameras.sfm → per-frame cameras in the viewer convention (same as worker.py).
+
+    Frame IDs (frame_0000, …) repeat across jobs, so when `images` is given only views whose
+    image lives in this job's folder count; a stale shared cache can never lend its poses.
+    """
     import numpy as np
     from geometry import WORLD_TO_VIEWER
     sfm_files = sorted(cache.glob('StructureFromMotion/*/cameras.sfm'), key=lambda p: p.stat().st_mtime)
     data = json.loads(sfm_files[-1].read_text()) if sfm_files else {}
     intrinsics = {i['intrinsicId']: i for i in data.get('intrinsics', [])}
     poses = {p['poseId']: p['pose']['transform'] for p in data.get('poses', [])}
-    views = {Path(v['path']).stem: v for v in data.get('views', [])}
+    folder = Path(images).resolve() if images else None
+    views = {Path(v['path']).stem: v for v in data.get('views', [])
+             if folder is None or Path(v['path']).resolve().parent == folder}
     cameras = []
     for frame in frames:
         view = views.get(frame['id'])
@@ -233,7 +244,6 @@ def read_cameras(cache, frames):
 
 def export_mesh(mesh_dir, output):
     """texturedMesh.obj → mesh.glb + diagnostic.ply in the viewer convention."""
-    import numpy as np
     from geometry import write_glb, WORLD_TO_VIEWER
     mesh, colors = textured_to_vertex_colored(mesh_dir / 'texturedMesh.obj')
     mesh.apply_transform(WORLD_TO_VIEWER)
@@ -279,7 +289,7 @@ def reconstruct(request, output, progress):
         mesh_dir, cache = run_meshroom(images, output, progress)
         progress(.92, 'exporting_mesh')
         stats = export_mesh(mesh_dir, output)
-        cameras = read_cameras(cache, frames)
+        cameras = read_cameras(cache, frames, images)
     finally:
         # Keep the private log and published artifacts only; Meshroom's cache is large.
         for name in ('images', 'meshroom_cache', 'meshroom_out'):
@@ -330,6 +340,24 @@ def serve_demo(request, output, progress):
     progress(1, 'complete')
 
 
+def watch_parent(parent_pid):
+    """POSIX: if the API dies, stop Meshroom too. The worker shares its process group with
+    meshroom_batch (the API kills that group on cancel), so killing the group stops everything."""
+    if os.name != 'posix' or not parent_pid:
+        return
+
+    def loop():
+        while True:
+            time.sleep(2)
+            if os.getppid() != parent_pid:
+                # Only kill the group we lead (the API starts us in a new session); never a shell's.
+                if os.getpgid(0) == os.getpid():
+                    os.killpg(os.getpid(), signal.SIGKILL)
+                os._exit(1)
+
+    threading.Thread(target=loop, name='parent-watch', daemon=True).start()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--check', action='store_true')
@@ -343,6 +371,7 @@ def main():
             print(json.dumps(status))
             return 0
         request = json.loads(args.request.read_text())
+        watch_parent(request.get('parentPid'))
         if not status['ready'] and not request['input'].get('demoPreset'):
             save_json(output / 'error.json', status)
             return 1

@@ -10,7 +10,6 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import shutil
 import sys
 
 import numpy as np
@@ -72,7 +71,6 @@ def build(scene):
                 za, zb = z0 + (z1-z0) * iz/5, z0 + (z1-z0) * (iz+1)/5
                 shade = .60 if (ix + iz) % 2 else .64
                 add_box(vertices, faces, colors, (xa, -.08, za), (xb, 0, zb), (shade, shade + .02, shade))
-    wall_by_id = {wall['id']: wall for wall in scene['walls']}
     openings_by_wall = {wall['id']: [] for wall in scene['walls']}
     for opening in scene.get('openings', []):
         if opening['wallId'] in openings_by_wall:

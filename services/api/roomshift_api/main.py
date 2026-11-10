@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import hashlib
 import shutil
 import uuid
@@ -19,33 +18,27 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .assemblies import Assembly, AssemblyCreate, AssemblyReconstruct
+from .assemblies import Assembly, AssemblyCreate, AssemblyReconstruct, CalibrationInput
 from .auto_scale import estimate_scale
 from .calibration import compute_calibration
 from .capture_scene import open_editor_scene
-from .config import SCHEMA_VERSION, Settings
+from .config import MB, SCHEMA_VERSION, Settings
 from .errors import ApiError, error_body
 from .images import inspect_image, load_gray
 from .mesh_worker import capability_report
 from .mesh_calibration import current_mesh, mesh_response, save_calibration
 from .jobs import JobRunner, now_iso, public_job
-from .storage import Storage, atomic_write_json, read_json
+from .middleware import LocalGuard
+from .storage import Storage, atomic_write_json, contained, read_json
 from .validation import validate_scene
 
 log = logging.getLogger("roomshift")
 DEMO_ID = "demo-room"
 
 
-class CalibrationIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    pointA: tuple[float, float]
-    pointB: tuple[float, float]
-    distanceMeters: float
-
-
 class ReconstructIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    calibration: CalibrationIn | None = None
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    calibration: CalibrationInput | None = None
     wallHeight: float | None = Field(default=None, gt=0, le=20)
     wallThickness: float | None = Field(default=None, gt=0, le=2)
 
@@ -128,6 +121,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="RoomShift API", version=SCHEMA_VERSION, lifespan=lifespan)
     app.state.settings, app.state.storage, app.state.runner = settings, storage, runner
+    # Order matters: CORS is outermost so the guard's rejections and 500s still carry CORS headers.
+    app.add_middleware(LocalGuard, settings=settings)
     app.add_middleware(
         CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"], allow_headers=["*"],
     )
@@ -147,10 +142,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         code = {404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED"}.get(e.status_code, "HTTP_ERROR")
         return JSONResponse(error_body(code, str(e.detail)), status_code=e.status_code)
 
-    @app.exception_handler(Exception)
-    async def _unexpected(_: Request, e: Exception):
-        log.exception("unhandled error")
-        return JSONResponse(error_body("INTERNAL_ERROR", "Unexpected server error."), status_code=500)
+    # Unexpected exceptions become INTERNAL_ERROR in LocalGuard (inside CORS, unlike an app handler).
 
     def need_project(project_id: str) -> dict:
         p = storage.get_project(project_id)
@@ -193,7 +185,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "scenes": {pid: scene for pid in ids if (scene := storage.get_scene(pid))}, "jobs": jobs}
 
     @app.post("/api/assemblies", status_code=201)
-    async def create_assembly(body: AssemblyCreate):
+    def create_assembly(body: AssemblyCreate):
         assembly = {**body.model_dump(mode="json"), "schemaVersion": "1.0", "id": "a_" + uuid.uuid4().hex[:12],
                     "revision": 0, "createdAt": now_iso()}
         for building in assembly["buildings"]:
@@ -204,14 +196,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return assembly_envelope(assembly)
 
     @app.get("/api/assemblies/{assembly_id}")
-    async def get_assembly(assembly_id: str):
+    def get_assembly(assembly_id: str):
         return assembly_envelope(need_assembly(assembly_id))
 
     @app.put("/api/assemblies/{assembly_id}")
-    async def save_assembly(assembly_id: str, body: Assembly):
+    def save_assembly(assembly_id: str, body: Assembly):
         assembly = body.model_dump(mode="json")
         if assembly["id"] != assembly_id:
-            raise ApiError(409, "PROJECT_ID_MISMATCH", "Grouped project ID does not match the URL.")
+            raise ApiError(409, "ASSEMBLY_ID_MISMATCH", "Grouped project ID does not match the URL.")
         with storage.project_lock(assembly_id):
             current = need_assembly(assembly_id)
             if assembly["revision"] != current["revision"]:
@@ -229,7 +221,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return assembly_envelope(assembly)
 
     @app.post("/api/assemblies/{assembly_id}/reconstruct", status_code=202)
-    async def reconstruct_assembly(assembly_id: str, body: AssemblyReconstruct):
+    def reconstruct_assembly(assembly_id: str, body: AssemblyReconstruct):
         jobs, errors = [], []
         with storage.project_lock(assembly_id):
             assembly = need_assembly(assembly_id)
@@ -318,9 +310,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     while chunk := await upload.read(1024 * 1024):
                         size += len(chunk)
                         total += len(chunk)
-                        limit = 512 * 1024 * 1024 if kind == "video" else settings.max_upload_bytes
-                        if size > limit or total > 512 * 1024 * 1024:
-                            raise ApiError(413, "UPLOAD_TOO_LARGE", "Capture limit is 512 MB total; each photo must fit the blueprint upload limit (20 MB by default).")
+                        limit = settings.max_capture_bytes if kind == "video" else settings.max_upload_bytes
+                        if size > limit or total > settings.max_capture_bytes:
+                            raise ApiError(413, "UPLOAD_TOO_LARGE",
+                                           f"Captures are limited to {settings.max_capture_bytes // MB} MB in total and "
+                                           f"{settings.max_upload_bytes // MB} MB per photo.")
                         digest.update(chunk)
                         out.write(chunk)
                 if not size:
@@ -336,7 +330,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             project = {"id": pid, "name": (name.strip() or "Room capture")[:200], "createdAt": now_iso(),
                        "hasScene": False, "source": {"kind": kind, "originals": originals}}
             storage.save_project(project)
-            job = runner.submit_capture(project)
+            job = await run_in_threadpool(runner.submit_capture, project)
             return {**project_envelope(storage.get_project(pid)), "job": public_job(job)}
         except BaseException:
             shutil.rmtree(root, ignore_errors=True)
@@ -346,7 +340,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await upload.close()
 
     @app.post("/api/projects/{project_id}/prepare", status_code=202)
-    async def prepare(project_id: str):
+    def prepare(project_id: str):
         p = need_project(project_id)
         if p.get("source", {}).get("kind", "blueprint") == "blueprint":
             raise ApiError(400, "INVALID_SOURCE", "Preparation requires photos or a video.")
@@ -357,14 +351,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return await run_in_threadpool(capability_report)
 
     @app.post("/api/projects/{project_id}/reconstruct-mesh", status_code=202)
-    async def reconstruct_mesh(project_id: str, body: MeshReconstructIn | None = None):
+    def reconstruct_mesh(project_id: str, body: MeshReconstructIn | None = None):
         p = need_project(project_id)
         if p.get("source", {}).get("kind", "blueprint") == "blueprint":
             raise ApiError(400, "INVALID_SOURCE", "Mesh reconstruction requires a photo or video capture.")
         return {"job": public_job(runner.submit_mesh(p, (body or MeshReconstructIn()).maxViews))}
 
     @app.get("/api/projects/{project_id}/mesh")
-    async def get_mesh(project_id: str):
+    def get_mesh(project_id: str):
         p = need_project(project_id)
         return mesh_response(current_mesh(storage, p))
 
@@ -403,8 +397,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         p = need_project(project_id)
         if not p.get("meshManifestPath") or filename not in {"mesh.glb", "diagnostic.ply"}:
             raise ApiError(404, "NOT_FOUND", "Mesh artifact does not exist.")
-        manifest = json.loads((storage.project_dir(project_id) / p["meshManifestPath"]).read_text())
-        if manifest["jobId"] != job_id:
+        manifest = read_json(storage.project_dir(project_id) / p["meshManifestPath"])
+        if not manifest or manifest["jobId"] != job_id:
             raise ApiError(404, "NOT_FOUND", "Mesh artifact is not the published result.")
         return FileResponse(storage.project_dir(project_id) / "reconstructions" / job_id / filename,
                             media_type="model/gltf-binary" if filename == "mesh.glb" else "application/octet-stream",
@@ -415,7 +409,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         p = need_project(project_id)
         if not p.get("inputManifestPath"):
             raise ApiError(404, "INPUT_NOT_READY", "No accepted reconstruction input exists yet.")
-        manifest = json.loads((storage.project_dir(project_id) / p["inputManifestPath"]).read_text())
+        manifest = read_json(storage.project_dir(project_id) / p["inputManifestPath"])
+        if manifest is None:
+            raise ApiError(404, "INPUT_NOT_READY", "No accepted reconstruction input exists yet.")
         for frame in manifest["frames"]:
             frame["url"] = f"/api/projects/{project_id}/capture-artifacts/{frame['path']}"
         return manifest
@@ -426,14 +422,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         root = storage.project_dir(project_id)
         allowed = {o["path"] for o in p.get("source", {}).get("originals", [])}
         if p.get("inputManifestPath"):
-            manifest = json.loads((root / p["inputManifestPath"]).read_text())
+            manifest = read_json(root / p["inputManifestPath"]) or {"frames": []}
             allowed.update(f["path"] for f in manifest["frames"])
         if p.get("meshManifestPath"):
-            mesh_manifest = json.loads((root / p["meshManifestPath"]).read_text())
+            mesh_manifest = read_json(root / p["meshManifestPath"]) or {}
             allowed.update(f["path"] for f in mesh_manifest.get("inputFrames", []))
-        if artifact_path not in allowed:
+        # Paths come from worker-written manifests; serve them only from inside this project.
+        target = contained(root, artifact_path) if artifact_path in allowed else None
+        if target is None or not target.is_file():
             raise ApiError(404, "NOT_FOUND", "Capture artifact does not exist.")
-        return FileResponse(root / artifact_path)
+        return FileResponse(target)
 
     @app.get("/api/projects")
     async def list_projects():
@@ -457,24 +455,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         need_blueprint(p)
         if not p.get("automaticCalibration"):
             cal = await run_in_threadpool(estimate_scale, await run_in_threadpool(load_gray, storage.blueprint_path(p)))
-            with storage.project_lock(project_id):
-                p = need_project(project_id)
-                p["automaticCalibration"] = cal
-                storage.save_project(p)
+
+            def store():
+                with storage.project_lock(project_id):
+                    current = need_project(project_id)
+                    current["automaticCalibration"] = cal
+                    storage.save_project(current)
+                    return current
+            p = await run_in_threadpool(store)
         return {"calibration": p["automaticCalibration"]}
 
     @app.post("/api/projects/{project_id}/reconstruct", status_code=202)
-    async def reconstruct(project_id: str, body: ReconstructIn):
+    def reconstruct(project_id: str, body: ReconstructIn):
         p = need_project(project_id)
         need_blueprint(p)
         if p.get("synthetic"):
             raise ApiError(400, "VALIDATION_ERROR", "The synthetic demo project cannot be reconstructed; upload a real blueprint.")
         c = body.calibration
         cal = compute_calibration(c.pointA, c.pointB, c.distanceMeters, p["image"]["width"], p["image"]["height"]) if c else p.get("automaticCalibration")
-        for k in ("wallHeight", "wallThickness"):
-            v = getattr(body, k)
-            if v is not None and not math.isfinite(v):
-                raise ApiError(400, "VALIDATION_ERROR", f"{k} must be finite.")
         job = runner.submit(p, cal, body.wallHeight, body.wallThickness)
         return {"job": public_job(job)}
 
@@ -486,7 +484,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"job": public_job(job)}
 
     @app.post("/api/jobs/{job_id}/cancel", status_code=202)
-    async def cancel_job(job_id: str):
+    def cancel_job(job_id: str):
         return {"job": public_job(runner.cancel(job_id))}
 
     @app.get("/api/projects/{project_id}/scene")
@@ -508,6 +506,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise ApiError(400, "VALIDATION_ERROR", "Body must be a JSON Scene object.")
         if scene.get("id") != project_id:
             raise ApiError(409, "PROJECT_ID_MISMATCH", f"Scene id {scene.get('id')!r} does not match project {project_id!r}.")
+        return await run_in_threadpool(save_scene_checked, project_id, scene)
+
+    def save_scene_checked(project_id: str, scene: dict) -> dict:
         with storage.project_lock(project_id):
             current = storage.get_scene(project_id)
             if current is None:

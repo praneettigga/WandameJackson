@@ -321,15 +321,17 @@ def _hatch_fill(gray: np.ndarray, ink: np.ndarray, mpp: float) -> np.ndarray | N
     base = cv2.bitwise_or(ink, hatch)
     # Close across walls (up to 0.35 m between boundary lines) and keep what runs along a wall. Unlike the
     # outline fill, the along-wall check includes the strokes, since hatch lines chop the gaps into short runs.
-    gap = max(3, int(round(0.35 / mpp))) | 1
-    long_k = max(3, int(round(0.15 / mpp)))
+    # Kernels never exceed the image: a tiny scale must not allocate an enormous structuring element.
+    side = max(base.shape)
+    gap = min(max(3, int(round(0.35 / mpp))), side) | 1
+    long_k = min(max(3, int(round(0.15 / mpp))), side)
     band_h = cv2.morphologyEx(cv2.morphologyEx(base, cv2.MORPH_CLOSE, np.ones((gap, 1), np.uint8)),
                               cv2.MORPH_OPEN, np.ones((1, long_k), np.uint8))
     band_v = cv2.morphologyEx(cv2.morphologyEx(base, cv2.MORPH_CLOSE, np.ones((1, gap), np.uint8)),
                               cv2.MORPH_OPEN, np.ones((long_k, 1), np.uint8))
     added = cv2.bitwise_and(cv2.bitwise_or(band_h, band_v), cv2.bitwise_not(base))
     # Only next to hatching: glazing between hatched wall ends and furniture against a wall stay open.
-    near = max(5, int(0.25 / mpp)) | 1
+    near = min(max(5, int(0.25 / mpp)), side) | 1
     added = cv2.bitwise_and(added, cv2.dilate(hatch, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (near, near))))
     n_c, labels, stats, _ = cv2.connectedComponentsWithStats(cv2.bitwise_or(added, hatch), connectivity=8)
     if n_c <= 1:

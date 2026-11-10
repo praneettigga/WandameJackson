@@ -1,6 +1,5 @@
 """Explicit, persistent editor snapshots of a capture. Never infer semantic walls from a mesh."""
 from copy import deepcopy
-from datetime import datetime, timezone
 import json
 import math
 import struct
@@ -11,7 +10,7 @@ import numpy as np
 
 from .errors import ApiError
 from .mesh_calibration import current_mesh
-from .storage import atomic_write_bytes, read_json
+from .storage import atomic_write_bytes, now_iso, read_json
 from .validation import validate_scene
 
 
@@ -141,7 +140,7 @@ def open_editor_scene(storage, project_id, contracts_dir):
                                             'metersPerPixel': meters_per_pixel,
                                             'notes': ['Generated top-down capture projection; not an uploaded blueprint.']}},
                  'reconstruction': {'parser': {'name': 'capture-editor', 'version': '1.0.0', 'checkpoint': None, 'license': None},
-                                    'createdAt': datetime.now(timezone.utc).isoformat(),
+                                    'createdAt': now_iso(),
                                     'defaults': {'wallHeight': 2.7, 'wallThickness': .12},
                                     'warnings': [*manifest.get('warnings', []),
                                         *(['Uncalibrated scan: 1 reconstruction unit is shown as 1 m. Set a known distance in Photos & video for real dimensions.'] if uncalibrated else []),
@@ -152,6 +151,8 @@ def open_editor_scene(storage, project_id, contracts_dir):
                  **entities}
         problems = validate_scene(scene, contracts_dir/'scene.schema.json')
         if problems:
+            for orphan in assets.glob(f'{token}.*'):
+                orphan.unlink(missing_ok=True)
             raise ApiError(422, 'INVALID_EDITOR_SCENE', 'The capture cannot be opened as an editor scene.', problems)
         storage.save_reconstruction(project_id, scene)
         project['hasScene'] = True

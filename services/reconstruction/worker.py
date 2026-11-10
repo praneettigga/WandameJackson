@@ -9,13 +9,21 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import resource
 import sys
 import time
 import traceback
 
 VERSION = '1.1.0'
 VGGT_REVISION = 'a288dd0f14786c93483e45524328726ab7b1b4ce'
+
+
+def peak_system_bytes():
+    """Peak resident memory; `resource` is Unix-only, so Windows reports None."""
+    try:
+        import resource
+    except ImportError:
+        return None
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
 
 
 def save_json(path, value):
@@ -169,7 +177,7 @@ def reconstruct(request, output):
                              'depthHeadChunkSize': 2,
                              'fusion': 'Open3D scalable TSDF', 'viewSelection': manifest.get('reconstructionSelection'), **evidence},
               'statistics': {**stats, 'workerSeconds': time.monotonic()-started,
-                             'peakGpuBytes': peak_gpu, 'peakSystemBytes': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024,
+                             'peakGpuBytes': peak_gpu, 'peakSystemBytes': peak_system_bytes(),
                              'stageSeconds': stages},
               'warnings': ['Geometry is inferred from imagery. Model confidence is not a calibrated probability.',
                            'Missing regions are preserved; this mesh is not guaranteed watertight.',

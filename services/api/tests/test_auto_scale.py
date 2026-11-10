@@ -79,7 +79,7 @@ def test_conflicting_measurements_fall_back(monkeypatch):
     calls = []
     def read(gray):
         calls.append(1)
-        return [Label(p.text, p.x * 2, p.y * 2, p.w * 2, p.h * 2, 99) for p in labels] if len(calls) == 1 else []
+        return [Label(p.text, p.x, p.y, p.w, p.h, 99) for p in labels] if len(calls) == 1 else []
     monkeypatch.setattr(auto_scale, 'read_labels', read)
     cal = estimate_scale(image)
     assert cal['method'] == 'wall-thickness'
@@ -153,10 +153,10 @@ def test_dimension_line_interrupted_by_text_and_chained_segments():
 def test_explicit_unit_note_and_low_confidence_rejection(monkeypatch):
     image, label = dimensioned_plan('5000')
     def read(gray):
-        if gray.shape != (1200, 1600):
+        if gray.shape != (600, 800):  # OCR runs at native resolution, never upscaled
             return []
-        return [Label(label.text, label.x * 2, label.y * 2, label.w * 2, label.h * 2, 99),
-                Label('ALL DIMENSIONS IN mm', 20, 1100, 400, 20, 99)]
+        return [Label(label.text, label.x, label.y, label.w, label.h, 99),
+                Label('ALL DIMENSIONS IN mm', 10, 550, 200, 10, 99)]
     monkeypatch.setattr(auto_scale, 'read_labels', read)
     assert estimate_scale(image)['metersPerPixel'] == pytest.approx(.01, rel=.01)
     stub_labels(monkeypatch, Label('5 m', label.x, label.y, label.w, label.h, 30))

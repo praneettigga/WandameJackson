@@ -25,7 +25,9 @@ export function useReviewSummary() {
             ...layoutErrors(assembly, all),
             ...floorsOf(assembly)
               .filter((f) => !all[f.projectId])
-              .map((f) => `${f.name}: not reconstructed; excluded from 3D geometry and GLB export.`),
+              .map(
+                (f) => `${f.name}: not reconstructed; excluded from 3D geometry and GLB export.`,
+              ),
           ]
         : []),
     ];

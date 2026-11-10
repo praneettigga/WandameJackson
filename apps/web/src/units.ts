@@ -15,7 +15,9 @@ export function formatLength(meters: number, unit: LengthUnit) {
     const feet = Math.floor(total / 12),
       inches = total % 12;
     if (!feet) return plural(inches, 'inch', 'inches');
-    return inches ? `${plural(feet, 'foot', 'feet')} ${plural(inches, 'inch', 'inches')}` : plural(feet, 'foot', 'feet');
+    return inches
+      ? `${plural(feet, 'foot', 'feet')} ${plural(inches, 'inch', 'inches')}`
+      : plural(feet, 'foot', 'feet');
   }
   if (unit === 'in') return `${Math.round(meters / lengthUnits.in)} in`;
   return `${(meters / lengthUnits[unit]).toFixed(unit === 'm' ? 2 : unit === 'cm' ? 1 : 0)} ${unit}`;

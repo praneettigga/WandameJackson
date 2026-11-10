@@ -20,7 +20,8 @@ describe('length units', () => {
     expect(toMeters(10, 'ft')).toBeCloseTo(3.048);
   });
   it('gives the same scale for one reference in any unit', () => {
-    const a: [number, number] = [0, 0], b: [number, number] = [100, 0];
+    const a: [number, number] = [0, 0],
+      b: [number, number] = [100, 0];
     const m = metersPerPixel(a, b, toMeters(2, 'm'));
     expect(metersPerPixel(a, b, toMeters(200, 'cm'))).toBeCloseTo(m);
     expect(metersPerPixel(a, b, toMeters(2000, 'mm'))).toBeCloseTo(m);

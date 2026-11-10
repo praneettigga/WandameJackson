@@ -48,7 +48,9 @@ export function DraftBanner({
             const parsed = sceneSchema.safeParse(draft.scene);
             if (!current || !parsed.success || current.revision !== draft.baseRevision) {
               onError(
-                new Error('This draft no longer matches the loaded scene; download it as JSON instead.'),
+                new Error(
+                  'This draft no longer matches the loaded scene; download it as JSON instead.',
+                ),
               );
               setDraftOffer({ ...draftOffer, stale: true });
               return;

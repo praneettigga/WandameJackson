@@ -22,7 +22,9 @@ export class ErrorBoundary extends Component<Props, State> {
   }
   reset = () => this.setState({ error: null });
   render() {
-    return this.state.error ? this.props.fallback(this.state.error, this.reset) : this.props.children;
+    return this.state.error
+      ? this.props.fallback(this.state.error, this.reset)
+      : this.props.children;
   }
 }
 
@@ -35,7 +37,9 @@ export function AppCrash({ error }: { error: Error }) {
     <div className="empty-viewport" role="alert">
       <h2>Something went wrong</h2>
       <p>{error.message}</p>
-      <p>Unsaved edits are kept as a local draft and will be offered when you reopen the project.</p>
+      <p>
+        Unsaved edits are kept as a local draft and will be offered when you reopen the project.
+      </p>
       <button className="primary" onClick={() => window.location.reload()}>
         Reload RoomShift
       </button>

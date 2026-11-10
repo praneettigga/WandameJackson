@@ -121,7 +121,12 @@ export function splitWall(scene: Scene, wallId: string, point: V2): [Wall, Wall]
 }
 
 /** Add a wall from a to b, splitting existing walls wherever it touches or crosses them. */
-export function addWall(scene: Scene, a: V2, b: V2, defaults?: { height: number; thickness: number }) {
+export function addWall(
+  scene: Scene,
+  a: V2,
+  b: V2,
+  defaults?: { height: number; thickness: number },
+) {
   if (same(a, b)) throw new Error('A wall needs two different points.');
   const height = defaults?.height ?? scene.reconstruction.defaults.wallHeight;
   const thickness = defaults?.thickness ?? scene.reconstruction.defaults.wallThickness;
@@ -140,7 +145,13 @@ export function addWall(scene: Scene, a: V2, b: V2, defaults?: { height: number;
       // Split whichever piece of the original wall now contains the hit.
       const host = scene.walls.find((y) => {
         const c = closestOnSegment(h, y.start, y.end);
-        return Math.hypot(c.point[0] - h[0], c.point[1] - h[1]) < EPS && c.t > 0 && c.t < 1 && !same(h, y.start) && !same(h, y.end);
+        return (
+          Math.hypot(c.point[0] - h[0], c.point[1] - h[1]) < EPS &&
+          c.t > 0 &&
+          c.t < 1 &&
+          !same(h, y.start) &&
+          !same(h, y.end)
+        );
       });
       if (host) splitWall(scene, host.id, h);
     }
@@ -154,7 +165,12 @@ export function addWall(scene: Scene, a: V2, b: V2, defaults?: { height: number;
     const start = ordered[i].p,
       end = ordered[i + 1].p;
     // Skip pieces that duplicate an existing wall.
-    if (scene.walls.some((w) => (same(w.start, start) && same(w.end, end)) || (same(w.start, end) && same(w.end, start))))
+    if (
+      scene.walls.some(
+        (w) =>
+          (same(w.start, start) && same(w.end, end)) || (same(w.start, end) && same(w.end, start)),
+      )
+    )
       continue;
     const wall: Wall = {
       id: newId('wall'),
@@ -162,7 +178,12 @@ export function addWall(scene: Scene, a: V2, b: V2, defaults?: { height: number;
       end,
       height,
       thickness,
-      provenance: userProvenance('Drawn by the user in the editor.', ['start', 'end', 'height', 'thickness']),
+      provenance: userProvenance('Drawn by the user in the editor.', [
+        'start',
+        'end',
+        'height',
+        'thickness',
+      ]),
     };
     scene.walls.push(wall);
     added.push(wall);
@@ -264,9 +285,14 @@ export function enclosedFaces(walls: Wall[]): V2[][] {
         changed = true;
       }
   }
-  const angle = (i: number, j: number) => Math.atan2(nodes[j][1] - nodes[i][1], nodes[j][0] - nodes[i][0]);
+  const angle = (i: number, j: number) =>
+    Math.atan2(nodes[j][1] - nodes[i][1], nodes[j][0] - nodes[i][0]);
   const sorted = new Map<number, number[]>();
-  for (const [i, set] of adj) sorted.set(i, [...set].sort((a, b) => angle(i, a) - angle(i, b)));
+  for (const [i, set] of adj)
+    sorted.set(
+      i,
+      [...set].sort((a, b) => angle(i, a) - angle(i, b)),
+    );
   const used = new Set<string>();
   const faces: V2[][] = [];
   for (const [u, list] of sorted)
@@ -372,4 +398,3 @@ export function danglingEnds(walls: Wall[]): V2[] {
   const { nodes, adj } = wallGraph(walls);
   return [...adj].filter(([, s]) => s.size === 1).map(([i]) => nodes[i]);
 }
-

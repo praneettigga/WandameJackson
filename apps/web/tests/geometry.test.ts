@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { demoScene } from '../src/api';
-import { GeometryCache, buildSceneGeometry, disposeGeometry, doorSwing, exportGlb, wallExtensions } from '../src/geometry';
+import {
+  GeometryCache,
+  buildSceneGeometry,
+  disposeGeometry,
+  doorSwing,
+  exportGlb,
+  wallExtensions,
+} from '../src/geometry';
 
 describe('output geometry quality', () => {
   it('closes each two-wall corner by extending exactly one wall by half the other thickness', () => {
@@ -33,7 +40,9 @@ describe('output geometry quality', () => {
   });
   it('adds a door leaf on the recorded swing side and a window sill', () => {
     const scene = demoScene();
-    scene.openings[0].provenance.notes.push('Swing: hinge at the far edge, opens to the right side of the wall.');
+    scene.openings[0].provenance.notes.push(
+      'Swing: hinge at the far edge, opens to the right side of the wall.',
+    );
     expect(doorSwing(scene.openings[0])).toEqual({ side: -1, hinge: 'end' });
     const root = buildSceneGeometry(scene);
     expect(root.getObjectByName('door-1:leaf')).toBeTruthy();
@@ -66,8 +75,14 @@ describe('output geometry quality', () => {
     const jsonLength = view.getUint32(12, true);
     const gltf = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, jsonLength)));
     const wall = gltf.nodes.find((n: { name?: string }) => n.name === 'wall-n');
-    expect(wall.extras).toMatchObject({ entityId: 'wall-n', entityType: 'wall', origin: 'generated' });
-    const root = gltf.nodes.find((n: { name?: string }) => n.name === 'ROOMSHIFT_semantic_geometry');
+    expect(wall.extras).toMatchObject({
+      entityId: 'wall-n',
+      entityType: 'wall',
+      origin: 'generated',
+    });
+    const root = gltf.nodes.find(
+      (n: { name?: string }) => n.name === 'ROOMSHIFT_semantic_geometry',
+    );
     expect(root.extras).toMatchObject({ units: 'meters', sceneId: 'demo-room' });
   });
 });

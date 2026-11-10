@@ -41,26 +41,29 @@ export function roomLabelPlacement(polygon: V2[], objects: SceneObject[] = []) {
   }
   // A label is four times wider than it is deep. Fit that footprint directly;
   // a circular clearance would make labels tiny beside furniture.
-  const centerX = (minX + maxX) / 2, centerZ = (minZ + maxZ) / 2;
+  const centerX = (minX + maxX) / 2,
+    centerZ = (minZ + maxZ) / 2;
   for (const width of [2.4, 2, 1.6, 1.3, 1, 0.8, 0.6, 0.4]) {
     let best: { x: number; z: number; score: number } | null = null;
-    for (let i = 0; i <= 40; i++) for (let j = 0; j <= 40; j++) {
-      const x = minX + ((maxX - minX) * i) / 40;
-      const z = minZ + ((maxZ - minZ) * j) / 40;
-      if (clearance(x, z) <= 0.06) continue;
-      let fits = true;
-      for (const dx of [-0.5, -0.25, 0, 0.25, 0.5]) {
-        for (const dz of [-0.5, 0, 0.5]) {
-          if (clearance(x + dx * width, z + dz * width / 4) <= 0.06) {
-            fits = false; break;
+    for (let i = 0; i <= 40; i++)
+      for (let j = 0; j <= 40; j++) {
+        const x = minX + ((maxX - minX) * i) / 40;
+        const z = minZ + ((maxZ - minZ) * j) / 40;
+        if (clearance(x, z) <= 0.06) continue;
+        let fits = true;
+        for (const dx of [-0.5, -0.25, 0, 0.25, 0.5]) {
+          for (const dz of [-0.5, 0, 0.5]) {
+            if (clearance(x + dx * width, z + (dz * width) / 4) <= 0.06) {
+              fits = false;
+              break;
+            }
           }
+          if (!fits) break;
         }
-        if (!fits) break;
+        if (!fits) continue;
+        const score = clearance(x, z) - 0.05 * Math.hypot(x - centerX, z - centerZ);
+        if (!best || score > best.score) best = { x, z, score };
       }
-      if (!fits) continue;
-      const score = clearance(x, z) - 0.05 * Math.hypot(x - centerX, z - centerZ);
-      if (!best || score > best.score) best = { x, z, score };
-    }
     if (best) return { position: [best.x, 0.025, best.z] as [number, number, number], width };
   }
   let x = (minX + maxX) / 2,

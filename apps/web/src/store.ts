@@ -243,7 +243,10 @@ export const useEditor = create<EditorState>((set, get) => ({
       const errors = layoutErrors(next, editorScenes(s));
       if (errors.length) throw new Error(errors[0]);
       // Re-frame only when floors appear/disappear; typing names or offsets keeps the camera.
-      const floorIds = (a: Assembly) => floorsOf(a).map((f) => f.id).join();
+      const floorIds = (a: Assembly) =>
+        floorsOf(a)
+          .map((f) => f.id)
+          .join();
       const reframe = floorIds(next) !== floorIds(s.assembly);
       set({ assembly: next, assemblyDirty: true, error: null, frame: s.frame + (reframe ? 1 : 0) });
     } catch (e) {
@@ -255,7 +258,9 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (s.busy) return;
     const view = { ...s.view, ...patch };
     const reframe =
-      view.mode !== s.view.mode || view.floorId !== s.view.floorId || view.buildingId !== s.view.buildingId;
+      view.mode !== s.view.mode ||
+      view.floorId !== s.view.floorId ||
+      view.buildingId !== s.view.buildingId;
     set({ view, selectedId: null, measures: [], frame: s.frame + (reframe ? 1 : 0) });
   },
   scene: null,
@@ -289,7 +294,10 @@ export const useEditor = create<EditorState>((set, get) => ({
     set({ lengthUnit: unit });
   },
   seeThrough: false,
-  serviceLayers: Object.fromEntries(serviceKinds.map((k) => [k, true])) as Record<ServiceKind, boolean>,
+  serviceLayers: Object.fromEntries(serviceKinds.map((k) => [k, true])) as Record<
+    ServiceKind,
+    boolean
+  >,
   serviceProposal: null,
   serviceFocus: null,
   roomUses: storedRoomUses(),
@@ -430,7 +438,11 @@ export const useEditor = create<EditorState>((set, get) => ({
       });
     else if (scene.walls.some((w) => w.id === id)) {
       const hosted = scene.openings.filter((o) => o.wallId === id).length;
-      if (hosted && typeof window !== 'undefined' && !window.confirm(`Delete this wall and its ${hosted} door/window opening(s)?`))
+      if (
+        hosted &&
+        typeof window !== 'undefined' &&
+        !window.confirm(`Delete this wall and its ${hosted} door/window opening(s)?`)
+      )
         return;
       ok = get().wallEdit((s) => deleteWall(s, id));
     }

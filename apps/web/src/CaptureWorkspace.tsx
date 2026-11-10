@@ -521,7 +521,9 @@ export function CaptureWorkspace({
                 <p key={i}>{w}</p>
               ))}
               <a
-                href={api.imageUrl(`/api/projects/${encodeURIComponent(input.projectId)}/capture-input`)}
+                href={api.imageUrl(
+                  `/api/projects/${encodeURIComponent(input.projectId)}/capture-input`,
+                )}
                 target="_blank"
                 rel="noreferrer"
               >

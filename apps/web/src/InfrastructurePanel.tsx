@@ -20,7 +20,9 @@ export function useInfrastructure() {
   if (!scene) return { plan: null, proposal: null };
   const plan = cachedPlan(scene, uses);
   const proposal =
-    plan.proposals.find((p) => p.strategy.id === chosen) ?? plan.proposals.find((p) => p.recommended) ?? null;
+    plan.proposals.find((p) => p.strategy.id === chosen) ??
+    plan.proposals.find((p) => p.recommended) ??
+    null;
   return { plan, proposal };
 }
 
@@ -29,7 +31,11 @@ export function WallsToggle({ compact = false }: { compact?: boolean }) {
   const seeThrough = useEditor((s) => s.seeThrough);
   const disabled = useEditor((s) => !s.scene);
   return (
-    <div className={`walls-toggle ${compact ? 'compact' : ''}`} role="group" aria-label="Wall display">
+    <div
+      className={`walls-toggle ${compact ? 'compact' : ''}`}
+      role="group"
+      aria-label="Wall display"
+    >
       {!compact && <span>Walls</span>}
       <button
         className={!seeThrough ? 'active' : ''}
@@ -56,9 +62,14 @@ export function WallsToggle({ compact = false }: { compact?: boolean }) {
 const clashCounts = (p: Proposal) => {
   const warnings = p.clashes.filter((c) => c.severity === 'warning').length;
   const notes = p.clashes.length - warnings;
-  return [warnings && `${warnings} ${warnings === 1 ? 'clash' : 'clashes'}`, notes && `${notes} ${notes === 1 ? 'note' : 'notes'}`]
-    .filter(Boolean)
-    .join(' · ') || 'No clashes';
+  return (
+    [
+      warnings && `${warnings} ${warnings === 1 ? 'clash' : 'clashes'}`,
+      notes && `${notes} ${notes === 1 ? 'note' : 'notes'}`,
+    ]
+      .filter(Boolean)
+      .join(' · ') || 'No clashes'
+  );
 };
 
 export function InfrastructurePanel() {
@@ -73,7 +84,8 @@ export function InfrastructurePanel() {
   return (
     <section className="services" aria-label="Invisible infrastructure">
       <h4>
-        INVISIBLE INFRASTRUCTURE <span>{proposal ? clashCounts(proposal).toUpperCase() : 'NO ROOMS'}</span>
+        INVISIBLE INFRASTRUCTURE{' '}
+        <span>{proposal ? clashCounts(proposal).toUpperCase() : 'NO ROOMS'}</span>
       </h4>
       <WallsToggle />
       {plan.notes.map((note, i) => (
@@ -129,9 +141,12 @@ export function InfrastructurePanel() {
                         {p.recommended && <em>Recommended</em>}
                       </b>
                       <span>
-                        Wiring {length(wiring)} · Water {length(water)} · Waste {length(p.totals.waste)}
+                        Wiring {length(wiring)} · Water {length(water)} · Waste{' '}
+                        {length(p.totals.waste)}
                       </span>
-                      <span className={p.clashes.some((c) => c.severity === 'warning') ? 'warn' : 'ok'}>
+                      <span
+                        className={p.clashes.some((c) => c.severity === 'warning') ? 'warn' : 'ok'}
+                      >
                         {clashCounts(p)}
                       </span>
                     </button>
@@ -147,7 +162,10 @@ export function InfrastructurePanel() {
             {proposal.clashes.length ? (
               <ul className="clash-list">
                 {proposal.clashes.map((c) => (
-                  <li key={c.id} className={`issue ${c.severity} ${c.id === focus ? 'focused' : ''}`}>
+                  <li
+                    key={c.id}
+                    className={`issue ${c.severity} ${c.id === focus ? 'focused' : ''}`}
+                  >
                     <span>{c.severity === 'warning' ? '◆' : '◇'}</span>
                     <div>
                       {c.message}
@@ -185,16 +203,16 @@ export function InfrastructurePanel() {
             <label className="field room-use" key={room.id}>
               <span>
                 {room.name || room.id}
-                {assignment?.source === 'assumed' && <em title="Guessed from size and layout">assumed</em>}
+                {assignment?.source === 'assumed' && (
+                  <em title="Guessed from size and layout">assumed</em>
+                )}
               </span>
               <select
                 aria-label={`Use of ${room.name || room.id}`}
                 value={assignment?.source === 'user' ? assignment.use : ''}
                 onChange={(e) => setRoomUse(room.id, (e.target.value || null) as RoomUse | null)}
               >
-                <option value="">
-                  Auto ({assignment ? roomUseLabels[assignment.use] : '—'})
-                </option>
+                <option value="">Auto ({assignment ? roomUseLabels[assignment.use] : '—'})</option>
                 {(Object.keys(roomUseLabels) as RoomUse[]).map((use) => (
                   <option key={use} value={use}>
                     {roomUseLabels[use]}
@@ -205,13 +223,14 @@ export function InfrastructurePanel() {
           );
         })}
         <p className="hint">
-          Wet rooms decide where pipes go. Uses are kept in this browser and are not saved with the scene.
+          Wet rooms decide where pipes go. Uses are kept in this browser and are not saved with the
+          scene.
         </p>
       </details>
       <p className="hint">
-        Concept layout from rules of thumb: sockets at {RULES.outletHeight} m, switches at {RULES.switchHeight} m,
-        cables and pipes kept {Math.round(RULES.separation * 1000)} mm apart, waste falling 1:50. Not a substitute for a
-        qualified electrician or plumber.
+        Concept layout from rules of thumb: sockets at {RULES.outletHeight} m, switches at{' '}
+        {RULES.switchHeight} m, cables and pipes kept {Math.round(RULES.separation * 1000)} mm
+        apart, waste falling 1:50. Not a substitute for a qualified electrician or plumber.
       </p>
     </section>
   );

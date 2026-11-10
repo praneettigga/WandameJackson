@@ -12,8 +12,7 @@ function dispose(object: THREE.Object3D) {
       (Array.isArray(child.material) ? child.material : [child.material]).forEach(
         (m: THREE.Material) => {
           // Textured scans hold large images on the GPU; free them with the material.
-          for (const value of Object.values(m))
-            if (value instanceof THREE.Texture) value.dispose();
+          for (const value of Object.values(m)) if (value instanceof THREE.Texture) value.dispose();
           m.dispose();
         },
       );
@@ -90,9 +89,7 @@ export function MeshViewport({
   return (
     <div className="mesh-viewport" data-rendered={rendered} data-picking={!!onPick}>
       <div className="mesh-view-controls">
-        <button onClick={() => setFrame((v) => v + 1)}>
-          Fit mesh
-        </button>
+        <button onClick={() => setFrame((v) => v + 1)}>Fit mesh</button>
         <button aria-pressed={wireframe} onClick={() => setWireframe(!wireframe)}>
           Wireframe
         </button>

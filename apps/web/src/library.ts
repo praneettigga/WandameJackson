@@ -69,7 +69,7 @@ function touchServerTemplate(key: string, keep: Set<string>) {
   const at = serverTemplates.indexOf(key);
   if (at >= 0) serverTemplates.splice(at, 1);
   serverTemplates.push(key);
-  for (let i = 0; serverTemplates.length > MAX_SERVER_TEMPLATES && i < serverTemplates.length; ) {
+  for (let i = 0; serverTemplates.length > MAX_SERVER_TEMPLATES && i < serverTemplates.length;) {
     const old = serverTemplates[i];
     if (keep.has(old)) {
       i++;

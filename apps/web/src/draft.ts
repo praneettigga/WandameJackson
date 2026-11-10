@@ -53,7 +53,10 @@ export function clearDraft(projectId: string) {
 export function restorableDraft(loaded: Scene): { draft: Draft; stale: boolean } | null {
   const draft = readDraft(loaded.id);
   if (!draft) return null;
-  if (draft.baseRevision === loaded.revision && JSON.stringify(draft.scene) === JSON.stringify(loaded)) {
+  if (
+    draft.baseRevision === loaded.revision &&
+    JSON.stringify(draft.scene) === JSON.stringify(loaded)
+  ) {
     clearDraft(loaded.id);
     return null;
   }

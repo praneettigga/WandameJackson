@@ -57,9 +57,8 @@ export function ReviewDock({
                       `${scored.filter((e) => confidenceLevel(e.provenance.confidence) === level).length} ${level}`,
                   )
                   .join(' · ')}{' '}
-                confidence · {inferredCount} inferred{' '}
-                {inferredCount === 1 ? 'element' : 'elements'}. Scores are heuristic evidence
-                strengths, not probabilities.
+                confidence · {inferredCount} inferred {inferredCount === 1 ? 'element' : 'elements'}
+                . Scores are heuristic evidence strengths, not probabilities.
               </p>
               {review.length > 0 && (
                 <div className="review-list">
@@ -134,34 +133,30 @@ export function ReviewDock({
             ↓ Scene JSON
           </button>
           {import.meta.env.DEV && (
-    <button
-            disabled={!state.scene || !!state.scene.source.capture || disabled}
-            title="Download this scene with its blueprint image as an evaluation ground-truth pair (name.png + name.scene.json)"
-            onClick={() =>
-              void guarded(async () => {
-                if (!state.scene) return;
-                const scene = state.scene;
-                const image = await fetch(api.imageUrl(scene.source.imageUrl)).then((r) => {
-                  if (!r.ok)
-                    throw new Error(`Could not download the blueprint (HTTP ${r.status}).`);
-                  return r.blob();
-                });
-                const ext = scene.source.mimeType === 'image/jpeg' ? 'jpg' : 'png';
-                download(image, scene.source.mimeType, `${scene.id}.${ext}`);
-                download(
-                  exportSceneJson(scene),
-                  'application/json',
-                  `${scene.id}.scene.json`,
-                );
-                setNotice(
-                  'Ground-truth pair downloaded. Put both files in services/api/data/gt and run python -m eval.run --set real.',
-                );
-              })
-            }
-          >
-            ↓ GT pair
-          </button>
-    )}
+            <button
+              disabled={!state.scene || !!state.scene.source.capture || disabled}
+              title="Download this scene with its blueprint image as an evaluation ground-truth pair (name.png + name.scene.json)"
+              onClick={() =>
+                void guarded(async () => {
+                  if (!state.scene) return;
+                  const scene = state.scene;
+                  const image = await fetch(api.imageUrl(scene.source.imageUrl)).then((r) => {
+                    if (!r.ok)
+                      throw new Error(`Could not download the blueprint (HTTP ${r.status}).`);
+                    return r.blob();
+                  });
+                  const ext = scene.source.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+                  download(image, scene.source.mimeType, `${scene.id}.${ext}`);
+                  download(exportSceneJson(scene), 'application/json', `${scene.id}.scene.json`);
+                  setNotice(
+                    'Ground-truth pair downloaded. Put both files in services/api/data/gt and run python -m eval.run --set real.',
+                  );
+                })
+              }
+            >
+              ↓ GT pair
+            </button>
+          )}
           <button
             disabled={
               (!state.scene && !state.assembly) ||
@@ -181,9 +176,7 @@ export function ReviewDock({
                     floorId: floor?.id ?? null,
                   };
                   const scenes = editorScenes(state);
-                  const missing = floorsOf(state.assembly).filter(
-                    (f) => !scenes[f.projectId],
-                  );
+                  const missing = floorsOf(state.assembly).filter((f) => !scenes[f.projectId]);
                   download(
                     await exportAssemblyGlb(state.assembly, scenes, view, state.ceilings),
                     'model/gltf-binary',
@@ -194,10 +187,7 @@ export function ReviewDock({
                   );
                 } else if (state.scene) {
                   download(
-                    await exportGlb(
-                      state.scene,
-                      state.ceilings || state.workspace === 'Explore',
-                    ),
+                    await exportGlb(state.scene, state.ceilings || state.workspace === 'Explore'),
                     'model/gltf-binary',
                     `${state.scene.id}.glb`,
                   );

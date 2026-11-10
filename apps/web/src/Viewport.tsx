@@ -116,7 +116,12 @@ function E2EHook() {
     size = useThree((s) => s.size);
   useEffect(() => {
     if (import.meta.env.VITE_E2E === 'true')
-      (window as unknown as { __three: unknown }).__three = { camera, scene, size, Vector3: THREE.Vector3 };
+      (window as unknown as { __three: unknown }).__three = {
+        camera,
+        scene,
+        size,
+        Vector3: THREE.Vector3,
+      };
   }, [camera, scene, size]);
   return null;
 }
@@ -160,7 +165,9 @@ function FrameCamera({ root }: { root: THREE.Group }) {
       camera.updateProjectionMatrix();
     }
     // A higher default angle exposes the room floors and their labels.
-    camera.position.copy(center).add(new THREE.Vector3(distance * 0.7, distance * 1.35, distance * 0.85));
+    camera.position
+      .copy(center)
+      .add(new THREE.Vector3(distance * 0.7, distance * 1.35, distance * 0.85));
     camera.lookAt(center);
     if (controls && 'target' in controls) {
       (controls.target as THREE.Vector3).copy(center);
@@ -193,7 +200,8 @@ function FirstPerson({ scene, placement }: { scene: Scene; placement?: Placement
       if (spawn) break;
     }
     const scan = scene.objects.find((o) => o.assetUrl);
-    const start = spawn ?? scene.rooms[0]?.polygon[0] ?? (scan ? [scan.position[0], scan.position[2]] : [0, 0]);
+    const start =
+      spawn ?? scene.rooms[0]?.polygon[0] ?? (scan ? [scan.position[0], scan.position[2]] : [0, 0]);
     const position = new THREE.Vector3(start[0], 1.65, start[1]);
     if (placement)
       position
@@ -326,16 +334,16 @@ function World() {
         )
       : state.scene
         ? buildSceneGeometry(
-          state.scene,
-          {
-            ceilings: state.ceilings || state.workspace === 'Explore',
-            xray: state.xray,
-            confidence: state.confidenceMap,
-            selectedId: state.selectedId,
-            seeThrough: state.seeThrough,
-          },
-          cache,
-        )
+            state.scene,
+            {
+              ceilings: state.ceilings || state.workspace === 'Explore',
+              xray: state.xray,
+              confidence: state.confidenceMap,
+              selectedId: state.selectedId,
+              seeThrough: state.seeThrough,
+            },
+            cache,
+          )
         : new THREE.Group();
     cache.sweep();
     return next;
@@ -343,20 +351,20 @@ function World() {
     // `libraryRevision` forces a rebuild when a custom mesh finishes loading.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-      state.scene,
-      state.scenes,
-      state.floorStates,
-      state.assembly,
-      state.view,
-      state.activeProjectId,
-      state.ceilings,
-      state.workspace,
-      state.xray,
-      state.confidenceMap,
-      state.selectedId,
-      state.seeThrough,
-      cache,
-      libraryRevision,
+    state.scene,
+    state.scenes,
+    state.floorStates,
+    state.assembly,
+    state.view,
+    state.activeProjectId,
+    state.ceilings,
+    state.workspace,
+    state.xray,
+    state.confidenceMap,
+    state.selectedId,
+    state.seeThrough,
+    cache,
+    libraryRevision,
   ]);
   const ghost = useMemo(
     () =>
@@ -393,7 +401,8 @@ function World() {
     }
   useEffect(() => () => disposeGeometry(root), [root]);
   const maxDistance = useMemo(
-    () => Math.max(100, new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3()).length() * 3),
+    () =>
+      Math.max(100, new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3()).length() * 3),
     [root],
   );
   useEffect(
@@ -453,15 +462,18 @@ function World() {
           ? visiblePlacements(
               placements(state.assembly, scenes, view.mode === 'exploded' ? view.gap : 0),
               view,
-            ).map((p) => p.scene && (
-              <group key={p.floor.id} position={p.position} rotation={[0, p.rotationY, 0]}>
-                <RoomLabels
-                  scene={p.scene}
-                  interactive={state.tool === 'select' && state.workspace !== 'Explore'}
-                  onClick={click}
-                />
-              </group>
-            ))
+            ).map(
+              (p) =>
+                p.scene && (
+                  <group key={p.floor.id} position={p.position} rotation={[0, p.rotationY, 0]}>
+                    <RoomLabels
+                      scene={p.scene}
+                      interactive={state.tool === 'select' && state.workspace !== 'Explore'}
+                      onClick={click}
+                    />
+                  </group>
+                ),
+            )
           : state.scene && (
               <RoomLabels
                 scene={state.scene}
@@ -492,11 +504,7 @@ function World() {
             fadeDistance={Math.max(35, state.gridStep * 400)}
             infiniteGrid
           />
-          <OrbitControls
-            makeDefault
-            minDistance={0.4}
-            maxDistance={maxDistance}
-          />
+          <OrbitControls makeDefault minDistance={0.4} maxDistance={maxDistance} />
           {target && selected && !state.measure && !state.busy && (
             <TransformControls
               object={target}
@@ -513,9 +521,14 @@ function World() {
               }}
               onObjectChange={() => {
                 // Live flush-to-wall snapping while moving furniture.
-                if (state.mode !== 'translate' || !state.snap || !state.scene || !dragging.current) return;
+                if (state.mode !== 'translate' || !state.snap || !state.scene || !dragging.current)
+                  return;
                 if (!(camera instanceof THREE.PerspectiveCamera)) return;
-                const wpp = worldPerPixel(camera.position.distanceTo(target.position), camera.fov, height);
+                const wpp = worldPerPixel(
+                  camera.position.distanceTo(target.position),
+                  camera.fov,
+                  height,
+                );
                 const hit = snapToWalls(
                   [target.position.x, target.position.z],
                   target.rotation.y,
@@ -537,12 +550,15 @@ function World() {
                   const rotationY = target.rotation.y;
                   applied = state.patch(
                     selected.id,
-                    Math.abs(rotationY - selected.rotationY) > 1e-6 ? { position, rotationY } : { position },
+                    Math.abs(rotationY - selected.rotationY) > 1e-6
+                      ? { position, rotationY }
+                      : { position },
                   );
-                }
-                else if (state.mode === 'rotate') {
+                } else if (state.mode === 'rotate') {
                   const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(target.quaternion);
-                  applied = state.patch(selected.id, { rotationY: Math.atan2(forward.x, forward.z) });
+                  applied = state.patch(selected.id, {
+                    rotationY: Math.atan2(forward.x, forward.z),
+                  });
                 } else {
                   const resized = resizedObject(selected, target.scale.toArray() as V3);
                   target.scale.set(1, 1, 1);

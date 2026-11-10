@@ -15,7 +15,8 @@ export function WhatIfToast() {
     // Only edits within one scene; loading or switching scenes is not a change to explain.
     if (!before || !scene || before.id !== scene.id || before === scene) return;
     const next = whatIf(before, scene, uses);
-    if (next.length) setLines((current) => (current.join('\n') === next.join('\n') ? current : next));
+    if (next.length)
+      setLines((current) => (current.join('\n') === next.join('\n') ? current : next));
   }, [scene, uses]);
   useEffect(() => {
     if (!lines.length) return;

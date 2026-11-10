@@ -21,11 +21,15 @@ export function useApiHealth() {
     } catch (cause) {
       setHealth((h) => (h === 'API version mismatch' ? h : 'API offline'));
       const detail = cause instanceof Error ? ` ${cause.message}` : '';
-      throw new Error(`The API is unavailable. Make sure the local API is running, then retry.${detail}`);
+      throw new Error(
+        `The API is unavailable. Make sure the local API is running, then retry.${detail}`,
+      );
     }
   }, [refresh]);
   useEffect(() => {
-    void refresh().catch(() => setHealth((h) => (h === 'API version mismatch' ? h : 'API offline')));
+    void refresh().catch(() =>
+      setHealth((h) => (h === 'API version mismatch' ? h : 'API offline')),
+    );
   }, [refresh]);
   return { health, ensureReady };
 }

@@ -128,7 +128,8 @@ function highlighted(source: THREE.Material) {
   if ('emissive' in m && m.emissive instanceof THREE.Color) {
     m.emissive.set('#b97e24');
     (m as THREE.MeshStandardMaterial).emissiveIntensity = 0.24;
-  } else if ('color' in m && m.color instanceof THREE.Color) m.color.lerp(new THREE.Color('#e8a64a'), 0.35);
+  } else if ('color' in m && m.color instanceof THREE.Color)
+    m.color.lerp(new THREE.Color('#e8a64a'), 0.35);
   return m;
 }
 /** A placed custom scan: shares the library template's geometry, stretched to the object's dimensions. */
@@ -137,7 +138,8 @@ function scanInstance(object: SceneObject, template: THREE.Object3D, options: Re
   instance.scale.set(...object.dimensions);
   const flat =
     options.ghost || options.xray || options.confidence || (options.seeThrough && object.assetUrl)
-      ? material(object, '#bba184', options) : null;
+      ? material(object, '#bba184', options)
+      : null;
   const selected = object.id === options.selectedId;
   instance.traverse((node) => {
     if (!(node instanceof THREE.Mesh)) return;
@@ -161,7 +163,8 @@ function furniture(object: SceneObject, options: RenderOptions) {
   group.position.set(...object.position);
   group.rotation.y = object.rotationY;
   const scan = customTemplate(object.assetUrl ?? object.componentId);
-  if (object.assetUrl && !scan) throw new Error('Captured mesh is not loaded. Reload the project before editing or exporting.');
+  if (object.assetUrl && !scan)
+    throw new Error('Captured mesh is not loaded. Reload the project before editing or exporting.');
   if (scan) {
     group.add(scanInstance(object, scan, options));
     return group;
@@ -341,7 +344,12 @@ function roomObject(room: Room, options: RenderOptions) {
   return group;
 }
 
-function wallObject(wall: Wall, openings: Opening[], ext: [number, number], options: RenderOptions) {
+function wallObject(
+  wall: Wall,
+  openings: Opening[],
+  ext: [number, number],
+  options: RenderOptions,
+) {
   const group = new THREE.Group();
   group.name = wall.id;
   group.userData = meta(wall, 'wall');
@@ -359,9 +367,21 @@ function wallObject(wall: Wall, openings: Opening[], ext: [number, number], opti
     );
   // Corner closures beyond the centreline endpoints.
   if (ext[0] > 1e-6)
-    box(group, [ext[0], wall.height, wall.thickness], [-ext[0] / 2, wall.height / 2, 0], mat, wall.id);
+    box(
+      group,
+      [ext[0], wall.height, wall.thickness],
+      [-ext[0] / 2, wall.height / 2, 0],
+      mat,
+      wall.id,
+    );
   if (ext[1] > 1e-6)
-    box(group, [ext[1], wall.height, wall.thickness], [length + ext[1] / 2, wall.height / 2, 0], mat, wall.id);
+    box(
+      group,
+      [ext[1], wall.height, wall.thickness],
+      [length + ext[1] / 2, wall.height / 2, 0],
+      mat,
+      wall.id,
+    );
   for (const opening of validOpenings(wall, openings).valid) {
     const frame = new THREE.Group();
     frame.name = opening.id;
@@ -454,7 +474,8 @@ export function buildSceneGeometry(
   const flags = `${options.xray ? 1 : 0}${options.confidence ? 1 : 0}${options.ghost ? 1 : 0}${options.seeThrough ? 1 : 0}`;
   const get = (key: string, build: () => THREE.Object3D) =>
     cache ? cache.get(`${cacheScope}|${key}`, build) : build();
-  const sel = (...ids: string[]) => (options.selectedId && ids.includes(options.selectedId) ? 1 : 0);
+  const sel = (...ids: string[]) =>
+    options.selectedId && ids.includes(options.selectedId) ? 1 : 0;
   for (const room of scene.rooms)
     root.add(
       get(`room|${flags}|${options.ceilings ? 1 : 0}|${sel(room.id)}|${JSON.stringify(room)}`, () =>
@@ -479,7 +500,11 @@ export function buildSceneGeometry(
         `object|${flags}|${sel(object.id)}|${customTemplate(object.assetUrl ?? object.componentId)?.uuid ?? ''}|${JSON.stringify(object)}`,
         () => {
           const group = furniture(object, options);
-          group.userData = { ...meta(object, 'furniture'), category: object.category, componentId: object.componentId };
+          group.userData = {
+            ...meta(object, 'furniture'),
+            category: object.category,
+            componentId: object.componentId,
+          };
           return group;
         },
       ),
@@ -593,7 +618,8 @@ export function buildAssemblyGeometry(
       placement.scene,
       {
         ...options,
-        selectedId: placement.floor.projectId === options.activeProjectId ? options.selectedId : null,
+        selectedId:
+          placement.floor.projectId === options.activeProjectId ? options.selectedId : null,
       },
       cache,
       `floor:${placement.floor.id}`,

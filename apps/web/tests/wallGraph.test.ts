@@ -15,7 +15,13 @@ import {
 import { snapOpeningOffset, snapToWalls } from '../src/snapping';
 
 const area = (poly: [number, number][]) =>
-  Math.abs(poly.reduce((s, p, i) => s + p[0] * poly[(i + 1) % poly.length][1] - poly[(i + 1) % poly.length][0] * p[1], 0)) / 2;
+  Math.abs(
+    poly.reduce(
+      (s, p, i) =>
+        s + p[0] * poly[(i + 1) % poly.length][1] - poly[(i + 1) % poly.length][0] * p[1],
+      0,
+    ),
+  ) / 2;
 
 describe('wall graph', () => {
   it('finds the fixture room as the single enclosed face', () => {
@@ -39,7 +45,9 @@ describe('wall graph', () => {
     expect(w.end).toEqual([0.5, 1]);
     expect(n.provenance.fieldOrigins.start).toBe('user');
     // The window keeps its world position, so its offset from the moved start grows by 0.5.
-    expect(scene.openings.find((o) => o.id === 'window-1')!.offset).toBeCloseTo(window.offset + 0.5);
+    expect(scene.openings.find((o) => o.id === 'window-1')!.offset).toBeCloseTo(
+      window.offset + 0.5,
+    );
     recomputeRooms(scene);
     expect(scene.rooms[0].id).toBe('room-1');
     expect(area(scene.rooms[0].polygon)).toBeCloseTo(12.75);
@@ -92,7 +100,12 @@ describe('wall graph', () => {
   });
   it('handles T-junctions from the parser (wall ending on another wall interior)', () => {
     const scene = demoScene();
-    scene.walls.push({ ...structuredClone(scene.walls[0]), id: 'wall-mid', start: [3.5, 1], end: [3.5, 4] });
+    scene.walls.push({
+      ...structuredClone(scene.walls[0]),
+      id: 'wall-mid',
+      start: [3.5, 1],
+      end: [3.5, 4],
+    });
     expect(enclosedFaces(scene.walls)).toHaveLength(2);
   });
 });
@@ -101,7 +114,9 @@ describe('opening and furniture snapping', () => {
   it('snaps an opening to the wall centre, ends, neighbours or grid', () => {
     expect(snapOpeningOffset(1.43, 1.2, 4, [], 0.1, 0.1)).toEqual({ offset: 1.4, kind: 'centre' });
     expect(snapOpeningOffset(0.05, 1.2, 4, [], 0.1, 0.1)).toEqual({ offset: 0, kind: 'end' });
-    expect(snapOpeningOffset(2.25, 0.9, 4, [{ offset: 1, width: 1.2 }], 0.1, 0.25).kind).toBe('neighbour');
+    expect(snapOpeningOffset(2.25, 0.9, 4, [{ offset: 1, width: 1.2 }], 0.1, 0.25).kind).toBe(
+      'neighbour',
+    );
     expect(snapOpeningOffset(0.77, 0.9, 4, [], 0.05, 0.25)).toEqual({ offset: 0.75, kind: 'grid' });
     expect(snapOpeningOffset(9, 0.9, 4, [], 0.05, 0.25, 0, false).offset).toBeCloseTo(3.1);
   });

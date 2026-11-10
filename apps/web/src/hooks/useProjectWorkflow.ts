@@ -32,7 +32,9 @@ export function useProjectWorkflow() {
   const [inputMode, setInputMode] = useState<InputMode>('blueprint');
   const [project, setProject] = useState<ProjectEnvelope | null>(null);
   const [points, setPoints] = useState<V2[]>([]),
-    [distance, setDistance] = useState(() => String(fromMeters(2, useEditor.getState().lengthUnit)));
+    [distance, setDistance] = useState(() =>
+      String(fromMeters(2, useEditor.getState().lengthUnit)),
+    );
   const [scaleMode, setScaleMode] = useState<'auto' | 'manual'>('auto');
   const [automaticScale, setAutomaticScale] = useState<ScaleCalibration | null>(null);
   const [findingScale, setFindingScale] = useState(false);
@@ -223,10 +225,15 @@ export function useProjectWorkflow() {
     setJob(state.jobs[id] ?? null);
     // Remember what was loaded so the settings sync below ignores it (it is not a user edit).
     floorControls.current = JSON.stringify({
-      scaleMode: floor.settings.scaleMode ??
-        (floor.settings.calibration || (scene && !scene.source.calibration.method) ? 'manual' : 'auto'),
+      scaleMode:
+        floor.settings.scaleMode ??
+        (floor.settings.calibration || (scene && !scene.source.calibration.method)
+          ? 'manual'
+          : 'auto'),
       points: calibration ? [calibration.pointA, calibration.pointB] : [],
-      distance: String(fromMeters(calibration?.distanceMeters ?? 2, useEditor.getState().lengthUnit)),
+      distance: String(
+        fromMeters(calibration?.distanceMeters ?? 2, useEditor.getState().lengthUnit),
+      ),
       height: floor.settings.wallHeight == null ? '' : String(floor.settings.wallHeight),
       thickness: floor.settings.wallThickness == null ? '' : String(floor.settings.wallThickness),
     });
@@ -307,7 +314,9 @@ export function useProjectWorkflow() {
     if (!s.assembly || s.busy) return;
     const floor = floorsOf(s.assembly).find((f) => f.projectId === s.activeProjectId);
     if (!floor) return;
-    if (floorControls.current === JSON.stringify({ scaleMode, points, distance, height, thickness }))
+    if (
+      floorControls.current === JSON.stringify({ scaleMode, points, distance, height, thickness })
+    )
       return;
     floorControls.current = null;
     if (
@@ -475,30 +484,54 @@ export function useProjectWorkflow() {
       setSaving(false);
     }
     const after = useEditor.getState();
-    if (!after.error) setNotice(`Saved revision ${after.assembly?.revision ?? after.scene?.revision}`);
+    if (!after.error)
+      setNotice(`Saved revision ${after.assembly?.revision ?? after.scene?.revision}`);
   }
 
   return {
-    inputMode, setInputMode,
-    project, setProject,
-    projectId, setProjectId,
-    points, setPoints,
-    distance, setDistance,
-    scaleMode, setScaleMode,
-    automaticScale, setAutomaticScale,
-    findingScale, scaleError, findScale,
-    height, setHeight,
-    thickness, setThickness,
+    inputMode,
+    setInputMode,
+    project,
+    setProject,
+    projectId,
+    setProjectId,
+    points,
+    setPoints,
+    distance,
+    setDistance,
+    scaleMode,
+    setScaleMode,
+    automaticScale,
+    setAutomaticScale,
+    findingScale,
+    scaleError,
+    findScale,
+    height,
+    setHeight,
+    thickness,
+    setThickness,
     scale,
-    job, setJob,
-    working, saving, cancelling,
-    notice, setNotice,
-    showBlueprint, setShowBlueprint,
-    draftOffer, setDraftOffer,
-    error, guarded, discard,
-    loadProject, loadCaptureScene,
-    reconstruct, reconstructGroup, cancelJobs,
-    uploadBlueprint, save,
+    job,
+    setJob,
+    working,
+    saving,
+    cancelling,
+    notice,
+    setNotice,
+    showBlueprint,
+    setShowBlueprint,
+    draftOffer,
+    setDraftOffer,
+    error,
+    guarded,
+    discard,
+    loadProject,
+    loadCaptureScene,
+    reconstruct,
+    reconstructGroup,
+    cancelJobs,
+    uploadBlueprint,
+    save,
   };
 }
 export type ProjectWorkflow = ReturnType<typeof useProjectWorkflow>;

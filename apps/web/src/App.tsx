@@ -24,7 +24,6 @@ import { useEditorShortcuts } from './hooks/useEditorShortcuts';
 import { useProjects } from './hooks/useProjects';
 import { useProjectWorkflow } from './hooks/useProjectWorkflow';
 
-
 // Photo/video capture (and its mesh viewer) loads only when Mode 2 is opened.
 const CaptureWorkspace = lazy(() =>
   import('./CaptureWorkspace').then((m) => ({ default: m.CaptureWorkspace })),

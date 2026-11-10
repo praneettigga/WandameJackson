@@ -116,7 +116,10 @@ for (const mode of ['mock', 'http'] as const)
       await expect(pollJob(api, cancelled, () => {}, { intervalMs: 0 })).rejects.toMatchObject({
         code: 'JOB_CANCELLED',
       });
-      await expect(api.cancelJob(job.id)).rejects.toMatchObject({ status: 409, code: 'JOB_NOT_ACTIVE' });
+      await expect(api.cancelJob(job.id)).rejects.toMatchObject({
+        status: 409,
+        code: 'JOB_NOT_ACTIVE',
+      });
       expect(await api.getScene('demo-room')).toEqual(before);
     });
     it('returns structured unknown-project errors', async () => {
@@ -148,11 +151,9 @@ describe('HTTP edge cases and polling', () => {
     );
     const api = new HttpApi(undefined, hang as unknown as typeof fetch);
     await expect(
-      (api as unknown as { request(p: string, i?: RequestInit, t?: number): Promise<unknown> }).request(
-        '/api/health',
-        undefined,
-        10,
-      ),
+      (
+        api as unknown as { request(p: string, i?: RequestInit, t?: number): Promise<unknown> }
+      ).request('/api/health', undefined, 10),
     ).rejects.toMatchObject({ code: 'TIMEOUT' });
   });
   it('honours a caller abort signal and reports it as a cancellation', async () => {
@@ -195,7 +196,10 @@ describe('HTTP edge cases and polling', () => {
   });
   it('persists mock cancellation so the next poll does not resurrect the job', async () => {
     const store = new Map<string, string>();
-    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+    const storage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
     const api = new MockApi(storage);
     const { job } = await api.reconstruct('demo-room', input);
     await api.cancelJob(job.id);

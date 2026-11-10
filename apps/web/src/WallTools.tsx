@@ -53,17 +53,32 @@ function useStateRef<T>(initial: T) {
   return [value, set, ref] as const;
 }
 
-function Handle({ position, color, onDown }: { position: V2; color: string; onDown: (e: ThreeEvent<PointerEvent>) => void }) {
+function Handle({
+  position,
+  color,
+  onDown,
+}: {
+  position: V2;
+  color: string;
+  onDown: (e: ThreeEvent<PointerEvent>) => void;
+}) {
   const ref = useRef<THREE.Mesh>(null);
   const height = useThree((s) => s.size.height);
   useFrame(({ camera }) => {
     if (!ref.current || !(camera instanceof THREE.PerspectiveCamera)) return;
     // Constant ~7 px radius regardless of zoom.
-    const s = worldPerPixel(camera.position.distanceTo(ref.current.position), camera.fov, height) * 7;
+    const s =
+      worldPerPixel(camera.position.distanceTo(ref.current.position), camera.fov, height) * 7;
     ref.current.scale.setScalar(s);
   });
   return (
-    <mesh ref={ref} position={v3(position, 0.05)} renderOrder={12} onPointerDown={onDown} userData={{ helper: true }}>
+    <mesh
+      ref={ref}
+      position={v3(position, 0.05)}
+      renderOrder={12}
+      onPointerDown={onDown}
+      userData={{ helper: true }}
+    >
       <sphereGeometry args={[1, 16, 12]} />
       <meshBasicMaterial color={color} depthTest={false} />
     </mesh>
@@ -73,11 +88,21 @@ function Handle({ position, color, onDown }: { position: V2; color: string; onDo
 function openingCentre(wall: Wall, o: { offset: number; width: number }): V2 {
   const l = wallLength(wall) || 1;
   const t = (o.offset + o.width / 2) / l;
-  return [wall.start[0] + (wall.end[0] - wall.start[0]) * t, wall.start[1] + (wall.end[1] - wall.start[1]) * t];
+  return [
+    wall.start[0] + (wall.end[0] - wall.start[0]) * t,
+    wall.start[1] + (wall.end[1] - wall.start[1]) * t,
+  ];
 }
 function openingEnds(wall: Wall, offset: number, width: number): [THREE.Vector3, THREE.Vector3] {
   const l = wallLength(wall) || 1;
-  const p = (t: number) => v3([wall.start[0] + ((wall.end[0] - wall.start[0]) * t) / l, wall.start[1] + ((wall.end[1] - wall.start[1]) * t) / l], 0.06);
+  const p = (t: number) =>
+    v3(
+      [
+        wall.start[0] + ((wall.end[0] - wall.start[0]) * t) / l,
+        wall.start[1] + ((wall.end[1] - wall.start[1]) * t) / l,
+      ],
+      0.06,
+    );
   return [p(offset), p(offset + width)];
 }
 
@@ -93,7 +118,10 @@ export function WallTools({ scene }: { scene: Scene }) {
   const [chain, setChain, chainRef] = useStateRef<V2[]>([]);
   const [typed, setTyped, typedRef] = useStateRef('');
   const [drag, setDrag, dragRef] = useStateRef<Drag | null>(null);
-  const [placement, setPlacement, placementRef] = useStateRef<{ wall: Wall; offset: number } | null>(null);
+  const [placement, setPlacement, placementRef] = useStateRef<{
+    wall: Wall;
+    offset: number;
+  } | null>(null);
   const keys = useRef({ alt: false, shift: false });
   const down = useRef<[number, number] | null>(null);
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
@@ -104,7 +132,10 @@ export function WallTools({ scene }: { scene: Scene }) {
   function floor(e: { clientX: number; clientY: number }) {
     const rect = gl.domElement.getBoundingClientRect();
     raycaster.setFromCamera(
-      new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1),
+      new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      ),
       camera,
     );
     const hit = raycaster.ray.intersectPlane(FLOOR, new THREE.Vector3());
@@ -129,14 +160,24 @@ export function WallTools({ scene }: { scene: Scene }) {
     for (const wall of useEditor.getState().scene!.walls) {
       const c = closestOnSegment(p, wall.start, wall.end);
       const d = Math.hypot(c.point[0] - p[0], c.point[1] - p[1]);
-      if (d <= Math.max(tolerance, wall.thickness / 2) && (!best || d < best.d)) best = { wall, d, t: c.t };
+      if (d <= Math.max(tolerance, wall.thickness / 2) && (!best || d < best.d))
+        best = { wall, d, t: c.t };
     }
     return best;
   }
   function openingOffset(wall: Wall, t: number, width: number, tolerance: number, ignore?: string) {
     const s = useEditor.getState();
     const neighbours = s.scene!.openings.filter((o) => o.wallId === wall.id && o.id !== ignore);
-    return snapOpeningOffset(t * wallLength(wall) - width / 2, width, wallLength(wall), neighbours, tolerance, s.gridStep, 0, s.snap && !keys.current.alt).offset;
+    return snapOpeningOffset(
+      t * wallLength(wall) - width / 2,
+      width,
+      wallLength(wall),
+      neighbours,
+      tolerance,
+      s.gridStep,
+      0,
+      s.snap && !keys.current.alt,
+    ).offset;
   }
 
   function place(point: V2) {
@@ -151,7 +192,8 @@ export function WallTools({ scene }: { scene: Scene }) {
       addWall(sc, anchor, point);
     });
     if (!ok) return;
-    const closed = chain.length > 1 && Math.hypot(point[0] - chain[0][0], point[1] - chain[0][1]) < 1e-3;
+    const closed =
+      chain.length > 1 && Math.hypot(point[0] - chain[0][0], point[1] - chain[0][1]) < 1e-3;
     setChain(closed ? [] : [...chain, point]);
     setTyped('');
   }
@@ -174,19 +216,29 @@ export function WallTools({ scene }: { scene: Scene }) {
           const host = drag.wall;
           const line = (w: Wall) => {
             const cross = (q: V2) =>
-              (host.end[0] - host.start[0]) * (q[1] - host.start[1]) - (host.end[1] - host.start[1]) * (q[0] - host.start[0]);
+              (host.end[0] - host.start[0]) * (q[1] - host.start[1]) -
+              (host.end[1] - host.start[1]) * (q[0] - host.start[0]);
             const l = wallLength(host) || 1;
             return Math.abs(cross(w.start)) / l < 1e-3 && Math.abs(cross(w.end)) / l < 1e-3;
           };
-          const candidates = useEditor.getState().scene!.walls.filter((w) => w.id === host.id || line(w));
+          const candidates = useEditor
+            .getState()
+            .scene!.walls.filter((w) => w.id === host.id || line(w));
           let best: { wall: Wall; t: number; d: number } | null = null;
           for (const w of candidates) {
             const c = closestOnSegment(hit.p, w.start, w.end);
             const d = Math.hypot(c.point[0] - hit.p[0], c.point[1] - hit.p[1]);
-            if (wallLength(w) >= drag.opening.width && (!best || d < best.d - 1e-9)) best = { wall: w, t: c.t, d };
+            if (wallLength(w) >= drag.opening.width && (!best || d < best.d - 1e-9))
+              best = { wall: w, t: c.t, d };
           }
           const target = best ?? { wall: host, t: closestOnSegment(hit.p, host.start, host.end).t };
-          const offset = openingOffset(target.wall, target.t, drag.opening.width, hit.tolerance, drag.opening.id);
+          const offset = openingOffset(
+            target.wall,
+            target.t,
+            drag.opening.width,
+            hit.tolerance,
+            drag.opening.id,
+          );
           setPlacement({ wall: target.wall, offset });
         }
         return;
@@ -194,7 +246,19 @@ export function WallTools({ scene }: { scene: Scene }) {
       if (tool === 'wall') setHover(snap(hit.p, hit.tolerance, chain.at(-1) ?? null));
       else if (tool === 'door' || tool === 'window') {
         const near = nearestWall(hit.p, hit.tolerance * 2);
-        setPlacement(near ? { wall: near.wall, offset: openingOffset(near.wall, near.t, OPENING_DEFAULTS[tool].width, hit.tolerance) } : null);
+        setPlacement(
+          near
+            ? {
+                wall: near.wall,
+                offset: openingOffset(
+                  near.wall,
+                  near.t,
+                  OPENING_DEFAULTS[tool].width,
+                  hit.tolerance,
+                ),
+              }
+            : null,
+        );
       }
     };
     const pointerDown = (e: PointerEvent) => {
@@ -213,7 +277,10 @@ export function WallTools({ scene }: { scene: Scene }) {
         if (drag.kind === 'node' && hover) s.wallEdit((sc) => moveNode(sc, drag.from, hover.point));
         if (drag.kind === 'wall' && hit) {
           const l = wallLength(drag.wall) || 1;
-          const n: V2 = [-(drag.wall.end[1] - drag.wall.start[1]) / l, (drag.wall.end[0] - drag.wall.start[0]) / l];
+          const n: V2 = [
+            -(drag.wall.end[1] - drag.wall.start[1]) / l,
+            (drag.wall.end[0] - drag.wall.start[0]) / l,
+          ];
           let offset = (hit.p[0] - drag.grab[0]) * n[0] + (hit.p[1] - drag.grab[1]) * n[1];
           if (s.snap && !e.altKey) offset = Math.round(offset / s.gridStep) * s.gridStep;
           if (Math.abs(offset) > 1e-6) s.wallEdit((sc) => moveWall(sc, drag.wall.id, offset));
@@ -222,7 +289,8 @@ export function WallTools({ scene }: { scene: Scene }) {
           const offset = Math.round(placement.offset * 1e4) / 1e4;
           if (placement.wall.id !== drag.opening.wallId)
             s.patch(drag.opening.id, { wallId: placement.wall.id, offset });
-          else if (Math.abs(offset - drag.opening.offset) > 1e-6) s.patch(drag.opening.id, { offset });
+          else if (Math.abs(offset - drag.opening.offset) > 1e-6)
+            s.patch(drag.opening.id, { offset });
         }
         setDrag(null);
         setHover(null);
@@ -232,7 +300,8 @@ export function WallTools({ scene }: { scene: Scene }) {
       }
       const start = down.current;
       down.current = null;
-      if (e.button !== 0 || !start || Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 5) return;
+      if (e.button !== 0 || !start || Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 5)
+        return;
       if (tool === 'wall') {
         const hit = floor(e);
         if (hit) place(snap(hit.p, hit.tolerance, chain.at(-1) ?? null).point);
@@ -287,7 +356,11 @@ export function WallTools({ scene }: { scene: Scene }) {
   // Keyboard: typed length, Enter, Esc. Captured before the app-level shortcuts.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (
+        e.target instanceof HTMLElement &&
+        e.target.closest('input, textarea, select, [contenteditable="true"]')
+      )
+        return;
       keys.current = { alt: e.altKey, shift: e.shiftKey };
       const tool = useEditor.getState().tool;
       const chain = chainRef.current,
@@ -325,7 +398,10 @@ export function WallTools({ scene }: { scene: Scene }) {
         if (typed && Number.isFinite(length) && length > 0) {
           const target = hover?.point ?? [anchor[0] + 1, anchor[1]];
           const d = Math.hypot(target[0] - anchor[0], target[1] - anchor[1]) || 1;
-          place([anchor[0] + ((target[0] - anchor[0]) / d) * length, anchor[1] + ((target[1] - anchor[1]) / d) * length]);
+          place([
+            anchor[0] + ((target[0] - anchor[0]) / d) * length,
+            anchor[1] + ((target[1] - anchor[1]) / d) * length,
+          ]);
         } else {
           setChain([]);
         }
@@ -369,12 +445,19 @@ export function WallTools({ scene }: { scene: Scene }) {
         [w.start, w.end],
         [w.end, w.start],
       ] as const)
-        if (Math.hypot(end[0] - drag.from[0], end[1] - drag.from[1]) < 1e-3) preview.push([v3(other), v3(hover.point)]);
+        if (Math.hypot(end[0] - drag.from[0], end[1] - drag.from[1]) < 1e-3)
+          preview.push([v3(other), v3(hover.point)]);
   if (drag?.kind === 'wall' && hover) {
     const l = wallLength(drag.wall) || 1;
-    const n: V2 = [-(drag.wall.end[1] - drag.wall.start[1]) / l, (drag.wall.end[0] - drag.wall.start[0]) / l];
+    const n: V2 = [
+      -(drag.wall.end[1] - drag.wall.start[1]) / l,
+      (drag.wall.end[0] - drag.wall.start[0]) / l,
+    ];
     const off = (hover.point[0] - drag.grab[0]) * n[0] + (hover.point[1] - drag.grab[1]) * n[1];
-    preview.push([v3([drag.wall.start[0] + n[0] * off, drag.wall.start[1] + n[1] * off]), v3([drag.wall.end[0] + n[0] * off, drag.wall.end[1] + n[1] * off])]);
+    preview.push([
+      v3([drag.wall.start[0] + n[0] * off, drag.wall.start[1] + n[1] * off]),
+      v3([drag.wall.end[0] + n[0] * off, drag.wall.end[1] + n[1] * off]),
+    ]);
   }
   if (tool === 'wall' && anchor && hover) preview.push([v3(anchor), v3(hover.point)]);
   for (let i = 0; i < chain.length - 1; i++) preview.push([v3(chain[i]), v3(chain[i + 1])]);
@@ -391,10 +474,30 @@ export function WallTools({ scene }: { scene: Scene }) {
   return (
     <group>
       {preview.map(([a, b], i) => (
-        <Line key={i} points={[a, b]} color="#f3bd63" lineWidth={2.5} dashed={i === 0 && !drag} dashSize={0.1} gapSize={0.06} depthTest={false} renderOrder={11} />
+        <Line
+          key={i}
+          points={[a, b]}
+          color="#f3bd63"
+          lineWidth={2.5}
+          dashed={i === 0 && !drag}
+          dashSize={0.1}
+          gapSize={0.06}
+          depthTest={false}
+          renderOrder={11}
+        />
       ))}
       {hover?.guides.map(([a, b], i) => (
-        <Line key={`g${i}`} points={[v3(a), v3(b)]} color="#66d9e8" lineWidth={1} dashed dashSize={0.05} gapSize={0.05} depthTest={false} renderOrder={11} />
+        <Line
+          key={`g${i}`}
+          points={[v3(a), v3(b)]}
+          color="#66d9e8"
+          lineWidth={1}
+          dashed
+          dashSize={0.05}
+          gapSize={0.05}
+          depthTest={false}
+          renderOrder={11}
+        />
       ))}
       {chain.map((p, i) => (
         <mesh key={`c${i}`} position={v3(p)} renderOrder={12}>
@@ -406,7 +509,10 @@ export function WallTools({ scene }: { scene: Scene }) {
         <group position={v3(hover.point)}>
           <mesh renderOrder={12}>
             <sphereGeometry args={[0.03]} />
-            <meshBasicMaterial color={hover.kind && hover.kind !== 'grid' ? '#66d9e8' : '#f3bd63'} depthTest={false} />
+            <meshBasicMaterial
+              color={hover.kind && hover.kind !== 'grid' ? '#66d9e8' : '#f3bd63'}
+              depthTest={false}
+            />
           </mesh>
           {label && (
             <Html center zIndexRange={[20, 0]} style={{ pointerEvents: 'none' }}>
@@ -417,8 +523,18 @@ export function WallTools({ scene }: { scene: Scene }) {
       )}
       {placement && (
         <Line
-          points={openingEnds(placement.wall, placement.offset, drag?.kind === 'opening' ? drag.opening.width : OPENING_DEFAULTS[tool === 'window' ? 'window' : 'door'].width)}
-          color={tool === 'window' || (drag?.kind === 'opening' && drag.opening.type === 'window') ? '#9dcfd1' : '#c4a477'}
+          points={openingEnds(
+            placement.wall,
+            placement.offset,
+            drag?.kind === 'opening'
+              ? drag.opening.width
+              : OPENING_DEFAULTS[tool === 'window' ? 'window' : 'door'].width,
+          )}
+          color={
+            tool === 'window' || (drag?.kind === 'opening' && drag.opening.type === 'window')
+              ? '#9dcfd1'
+              : '#c4a477'
+          }
           lineWidth={6}
           depthTest={false}
           renderOrder={12}
@@ -431,11 +547,18 @@ export function WallTools({ scene }: { scene: Scene }) {
               key={end}
               position={selectedWall[end]}
               color="#f3bd63"
-              onDown={startDrag({ kind: 'node', from: selectedWall[end], exclude: new Set(wallsAt(scene.walls, selectedWall[end])) })}
+              onDown={startDrag({
+                kind: 'node',
+                from: selectedWall[end],
+                exclude: new Set(wallsAt(scene.walls, selectedWall[end])),
+              })}
             />
           ))}
           <Handle
-            position={[(selectedWall.start[0] + selectedWall.end[0]) / 2, (selectedWall.start[1] + selectedWall.end[1]) / 2]}
+            position={[
+              (selectedWall.start[0] + selectedWall.end[0]) / 2,
+              (selectedWall.start[1] + selectedWall.end[1]) / 2,
+            ]}
             color="#66d9e8"
             onDown={(e) => {
               const grab = floor(e.nativeEvent)?.p ?? ([e.point.x, e.point.z] as V2);
@@ -444,12 +567,19 @@ export function WallTools({ scene }: { scene: Scene }) {
           />
         </>
       )}
-      {tool === 'select' && !drag && selectedOpening && (() => {
-        const wall = scene.walls.find((w) => w.id === selectedOpening.wallId);
-        return wall ? (
-          <Handle position={openingCentre(wall, selectedOpening)} color="#c4a477" onDown={startDrag({ kind: 'opening', opening: selectedOpening, wall })} />
-        ) : null;
-      })()}
+      {tool === 'select' &&
+        !drag &&
+        selectedOpening &&
+        (() => {
+          const wall = scene.walls.find((w) => w.id === selectedOpening.wallId);
+          return wall ? (
+            <Handle
+              position={openingCentre(wall, selectedOpening)}
+              color="#c4a477"
+              onDown={startDrag({ kind: 'opening', opening: selectedOpening, wall })}
+            />
+          ) : null;
+        })()}
     </group>
   );
 }

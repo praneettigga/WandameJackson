@@ -99,7 +99,8 @@ export function DockResizeHandle({ onChange }: { onChange: (height: number) => v
       onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
       onPointerMove={(e) => {
         const rect = dock(e.currentTarget);
-        if (e.currentTarget.hasPointerCapture(e.pointerId) && rect) onChange(rect.bottom - e.clientY);
+        if (e.currentTarget.hasPointerCapture(e.pointerId) && rect)
+          onChange(rect.bottom - e.clientY);
       }}
       onPointerUp={(e) => e.currentTarget.releasePointerCapture(e.pointerId)}
     />

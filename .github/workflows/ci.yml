@@ -28,6 +28,9 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: ruff check .
       - run: python -m pytest -q
+      - name: Reconstruction worker tests (dependency-free subset; the rest skip)
+        working-directory: services/reconstruction
+        run: python -m pytest -q
 
   web:
     name: Web (typecheck, lint, unit tests, build)

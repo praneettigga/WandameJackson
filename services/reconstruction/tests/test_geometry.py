@@ -23,6 +23,7 @@ def plane():
 
 
 def test_fusion_exports_colored_supported_triangles_with_hole(tmp_path):
+    pytest.importorskip('open3d')  # optional worker dependency (requirements-geometry.txt)
     depth, confidence, k, e, valid, rgb = plane()
     filtered, evidence = consistent_depths(depth, confidence, k, e, valid, lambda *_: None)
     assert all(n > 1000 for n in evidence['supportedPixels'])
@@ -62,6 +63,7 @@ def test_single_view_surfaces_kept_only_in_consistent_views():
 
 
 def test_small_floaters_removed_and_triangles_bounded():
+    pytest.importorskip('open3d')  # optional worker dependency (requirements-geometry.txt)
     depth, confidence, k, e, valid, rgb = plane()
     filtered, _ = consistent_depths(depth, confidence, k, e, valid, lambda *_: None)
     filtered[0, 2:5, 2:5] = .7  # isolated speck far in front of the wall

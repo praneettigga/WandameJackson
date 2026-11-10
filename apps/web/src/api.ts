@@ -3,7 +3,7 @@ import fixture from '../../../contracts/fixtures/room.scene.json';
 import fixtureImage from '../../../contracts/fixtures/room.png?url';
 import servicesFixture from '../../../contracts/fixtures/services-apartment.scene.json';
 import servicesImage from '../../../contracts/fixtures/services-apartment.png?url';
-import { sceneSchema, validateScene, type Scene, type V2 } from './scene';
+import { sceneSchema, type Scene, type V2 } from './scene';
 import { loadSceneAssets } from './library';
 
 export type ProjectEnvelope = {
@@ -113,6 +113,20 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
+/** True for a user-requested stop: an aborted request/poll or a cancelled job. */
+export function isCancellation(error: unknown) {
+  return (
+    (error instanceof DOMException && error.name === 'AbortError') ||
+    (error instanceof ApiError && error.code === 'JOB_CANCELLED')
+  );
+}
+/** Errors worth retrying while polling: the network blipped or the server hiccupped. */
+export function isTransient(error: unknown) {
+  return (
+    error instanceof ApiError &&
+    (error.code === 'NETWORK_ERROR' || error.code === 'TIMEOUT' || error.status >= 500)
+  );
+}
 export interface RoomshiftApi {
   readonly mock: boolean;
   health(): Promise<{ status: 'ok'; schemaVersion: '0.1.0' }>;
@@ -129,14 +143,14 @@ export interface RoomshiftApi {
   openCaptureScene(id: string): Promise<Scene>;
   getProject(id: string): Promise<ProjectEnvelope>;
   createAssembly(input: AssemblyInput): Promise<AssemblyEnvelope>;
-  getAssembly(id: string): Promise<AssemblyEnvelope>;
+  getAssembly(id: string, signal?: AbortSignal): Promise<AssemblyEnvelope>;
   saveAssembly(assembly: Assembly): Promise<AssemblyEnvelope>;
   reconstructAssembly(id: string, projectIds?: string[]): Promise<AssemblySubmission>;
   listProjects(): Promise<{ projects: ProjectEnvelope[] }>;
   cancelJob(id: string): Promise<{ job: Job }>;
   getScale(id: string): Promise<{ calibration: ScaleCalibration }>;
   reconstruct(id: string, input: ReconstructionRequest): Promise<{ job: Job }>;
-  getJob(id: string): Promise<{ job: Job }>;
+  getJob(id: string, signal?: AbortSignal): Promise<{ job: Job }>;
   getScene(id: string): Promise<Scene>;
   saveScene(id: string, scene: Scene): Promise<Scene>;
   getSourceScene(id: string): Promise<Scene>;
@@ -153,16 +167,25 @@ export class HttpApi implements RoomshiftApi {
   }
   private async request<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<T> {
     let response: Response;
+    const timeout = AbortSignal.timeout(timeoutMs);
     try {
       response = await this.transport(new URL(path, this.baseUrl), {
         ...init,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
       });
     } catch (error) {
+      // A caller's abort is a cancellation, not a failure.
+      if (init?.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError');
+      if (timeout.aborted)
+        throw new ApiError(
+          0,
+          'TIMEOUT',
+          `The API did not respond within ${Math.round(timeoutMs / 1000)} s. It may still be working; try again shortly.`,
+        );
       throw new ApiError(
         0,
         'NETWORK_ERROR',
-        `Cannot reach the API at ${this.baseUrl}. Start the backend from services/api using the README setup instructions. Check VITE_API_BASE_URL and CORS configuration. ${error instanceof Error ? error.message : ''}`,
+        `Cannot reach the RoomShift API at ${this.baseUrl}. Make sure the local API is running (see the README).`,
       );
     }
     const body = await response.json().catch(() => null);
@@ -208,9 +231,11 @@ export class HttpApi implements RoomshiftApi {
       }),
     );
   }
-  async getAssembly(id: string) {
+  async getAssembly(id: string, signal?: AbortSignal) {
     return this.parseAssembly(
-      await this.request<AssemblyEnvelope>(`/api/assemblies/${encodeURIComponent(id)}`),
+      await this.request<AssemblyEnvelope>(`/api/assemblies/${encodeURIComponent(id)}`, {
+        signal,
+      }),
     );
   }
   async saveAssembly(assembly: Assembly) {
@@ -314,7 +339,7 @@ export class HttpApi implements RoomshiftApi {
         throw new ApiError(
           404,
           'API_UPDATE_REQUIRED',
-          'The running backend does not support automatic scale. Restart the backend with the updated code.',
+          'The running API is out of date and does not support automatic scale. Update and restart it.',
         );
       throw error;
     }
@@ -326,8 +351,8 @@ export class HttpApi implements RoomshiftApi {
       body: JSON.stringify(input),
     });
   }
-  getJob(id: string) {
-    return this.request<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}`);
+  getJob(id: string, signal?: AbortSignal) {
+    return this.request<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}`, { signal });
   }
   async getScene(id: string) {
     return loadSceneAssets(
@@ -352,7 +377,7 @@ export class HttpApi implements RoomshiftApi {
       await this.request(`/api/projects/${encodeURIComponent(id)}/scene`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validateScene(scene)),
+        body: JSON.stringify(sceneSchema.parse(scene)),
       }),
     );
   }
@@ -385,9 +410,15 @@ export class MockApi implements RoomshiftApi {
   private refreshGrouped() {
     const raw = this.storage?.getItem('roomshift.mock.groups.v1');
     if (raw) {
-      const data = JSON.parse(raw);
-      this.grouped = data;
-      this.jobs = new Map(data.jobs ?? []);
+      try {
+        const data = JSON.parse(raw);
+        this.grouped = { projects: {}, scenes: {}, sources: {}, assemblies: {}, ...data };
+        this.jobs = new Map(data.jobs ?? []);
+      } catch {
+        // Corrupt mock storage: start over rather than breaking every call.
+        this.grouped = { projects: {}, scenes: {}, sources: {}, assemblies: {} };
+        this.jobs = new Map();
+      }
     }
     this.seedServices();
   }
@@ -514,6 +545,7 @@ export class MockApi implements RoomshiftApi {
     };
   }
   async cancelJob(id: string) {
+    this.refreshGrouped();
     const job = this.jobs.get(id);
     if (!job) throw new ApiError(404, 'JOB_NOT_FOUND', 'Unknown mock job.');
     if (job.status !== 'queued' && job.status !== 'running')
@@ -525,6 +557,7 @@ export class MockApi implements RoomshiftApi {
       details: null,
     };
     job.updatedAt = new Date().toISOString();
+    this.persistGrouped();
     return { job: structuredClone(job) };
   }
   async getScale(id: string) {
@@ -559,7 +592,7 @@ export class MockApi implements RoomshiftApi {
     this.persistGrouped();
     return { job: structuredClone(job) };
   }
-  async getJob(id: string) {
+  async getJob(id: string, _signal?: AbortSignal) {
     this.refreshGrouped();
     const job = this.jobs.get(id);
     if (!job) throw new ApiError(404, 'JOB_NOT_FOUND', 'Unknown mock job.');
@@ -626,7 +659,7 @@ export class MockApi implements RoomshiftApi {
         JSON.stringify(scene.reconstruction) !== JSON.stringify(current.reconstruction)
       )
         throw new ApiError(409, 'IMMUTABLE_FIELD', 'Source and reconstruction are immutable.');
-      const saved = { ...validateScene(scene), revision: current.revision + 1 };
+      const saved = { ...sceneSchema.parse(scene), revision: current.revision + 1 };
       this.grouped.scenes[id] = saved;
       this.persistGrouped();
       return structuredClone(saved);
@@ -645,7 +678,7 @@ export class MockApi implements RoomshiftApi {
       JSON.stringify(scene.reconstruction) !== JSON.stringify(this.scene.reconstruction)
     )
       throw new ApiError(409, 'IMMUTABLE_FIELD', 'Source and reconstruction are immutable.');
-    const saved = { ...validateScene(scene), revision: scene.revision + 1 };
+    const saved = { ...sceneSchema.parse(scene), revision: scene.revision + 1 };
     this.storage?.setItem('roomshift.mock.scene.v1', JSON.stringify(saved));
     this.scene = saved;
     return structuredClone(saved);
@@ -693,7 +726,7 @@ export class MockApi implements RoomshiftApi {
     this.persistGrouped();
     return this.envelope(assembly);
   }
-  async getAssembly(id: string) {
+  async getAssembly(id: string, _signal?: AbortSignal) {
     this.refreshGrouped();
     const assembly = this.grouped.assemblies[id];
     if (!assembly) throw new ApiError(404, 'ASSEMBLY_NOT_FOUND', 'Grouped project not found.');
@@ -740,12 +773,13 @@ export async function pollJob(
   api: RoomshiftApi,
   initial: Job,
   onProgress: (job: Job) => void,
-  options: { timeoutMs?: number; intervalMs?: number; signal?: AbortSignal } = {},
+  options: { timeoutMs?: number; intervalMs?: number; signal?: AbortSignal; retries?: number } = {},
 ) {
   // Meshroom's default server budget is one hour; allow time for publication too.
   const defaultTimeout = initial.kind === 'mesh-reconstruction' ? 3_900_000 : 180_000;
   const deadline = Date.now() + (options.timeoutMs ?? defaultTimeout);
   let job = initial;
+  let failures = 0;
   while (true) {
     options.signal?.throwIfAborted();
     onProgress(job);
@@ -771,19 +805,30 @@ export async function pollJob(
       throw new Error(
         'Reconstruction timed out. The server may still be working; reopen this project to retrieve its result.',
       );
-    await new Promise<void>((resolve, reject) => {
-      const abort = () => {
-        clearTimeout(timer);
-        reject(new DOMException('Polling cancelled', 'AbortError'));
-      };
-      const timer = setTimeout(() => {
-        options.signal?.removeEventListener('abort', abort);
-        resolve();
-      }, options.intervalMs ?? 800);
-      options.signal?.addEventListener('abort', abort, { once: true });
-    });
-    job = (await api.getJob(job.id)).job;
+    await wait((options.intervalMs ?? 800) * 2 ** failures, options.signal);
+    try {
+      job = (await api.getJob(job.id, options.signal)).job;
+      failures = 0;
+    } catch (error) {
+      // Tolerate brief outages; a long mesh job should not be abandoned over one dropped request.
+      if (!isTransient(error) || ++failures > (options.retries ?? 3)) throw error;
+    }
   }
+}
+/** Resolves after `ms`, or rejects with an AbortError as soon as `signal` aborts. */
+export function wait(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException('Polling cancelled', 'AbortError'));
+    const abort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Polling cancelled', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 export const api: RoomshiftApi =
   import.meta.env.VITE_USE_MOCK_API === 'true'

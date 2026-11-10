@@ -17,6 +17,7 @@ import {
   disposeGeometry,
   pointInRoom,
 } from './geometry';
+import { useShallow } from 'zustand/react/shallow';
 import { useEditor, editorScenes } from './store';
 import { floorsOf, placements, visiblePlacements, type Placement } from './assembly';
 import { RoomLabels } from './RoomLabels';
@@ -255,7 +256,39 @@ function FirstPerson({ scene, placement }: { scene: Scene; placement?: Placement
   );
 }
 function World() {
-  const state = useEditor();
+  // Only the fields the 3D world draws; unrelated store updates must not re-render it.
+  const state = useEditor(
+    useShallow((s) => ({
+      scene: s.scene,
+      scenes: s.scenes,
+      floorStates: s.floorStates,
+      assembly: s.assembly,
+      view: s.view,
+      activeProjectId: s.activeProjectId,
+      ceilings: s.ceilings,
+      workspace: s.workspace,
+      xray: s.xray,
+      confidenceMap: s.confidenceMap,
+      selectedId: s.selectedId,
+      seeThrough: s.seeThrough,
+      sourceScene: s.sourceScene,
+      compare: s.compare,
+      serviceLayers: s.serviceLayers,
+      serviceFocus: s.serviceFocus,
+      measure: s.measure,
+      measures: s.measures,
+      tool: s.tool,
+      roomLabels: s.roomLabels,
+      mode: s.mode,
+      snap: s.snap,
+      gridStep: s.gridStep,
+      busy: s.busy,
+      wallAlign: s.wallAlign,
+      activateFloor: s.activateFloor,
+      select: s.select,
+      patch: s.patch,
+    })),
+  );
   const scenes = editorScenes(state);
   const activeFloor = state.assembly
     ? floorsOf(state.assembly).find((f) => f.projectId === state.activeProjectId)
@@ -274,14 +307,20 @@ function World() {
   useEffect(() => () => cache.clear(), [cache]);
   const root = useMemo(() => {
     const next = state.assembly
-      ? buildAssemblyGeometry(state.assembly, scenes, view, {
-          ceilings: state.ceilings || state.workspace === 'Explore',
-          xray: state.xray,
-          confidence: state.confidenceMap,
-          selectedId: state.selectedId,
-          activeProjectId: state.activeProjectId,
-          seeThrough: state.seeThrough,
-        })
+      ? buildAssemblyGeometry(
+          state.assembly,
+          scenes,
+          view,
+          {
+            ceilings: state.ceilings || state.workspace === 'Explore',
+            xray: state.xray,
+            confidence: state.confidenceMap,
+            selectedId: state.selectedId,
+            activeProjectId: state.activeProjectId,
+            seeThrough: state.seeThrough,
+          },
+          cache,
+        )
       : state.scene
         ? buildSceneGeometry(
           state.scene,
@@ -346,6 +385,10 @@ function World() {
       overlay.rotation.y = display.rotationY;
     }
   useEffect(() => () => disposeGeometry(root), [root]);
+  const maxDistance = useMemo(
+    () => Math.max(100, new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3()).length() * 3),
+    [root],
+  );
   useEffect(
     () => () => {
       if (ghost) disposeGeometry(ghost);
@@ -445,10 +488,7 @@ function World() {
           <OrbitControls
             makeDefault
             minDistance={0.4}
-            maxDistance={Math.max(
-              100,
-              new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3()).length() * 3,
-            )}
+            maxDistance={maxDistance}
           />
           {target && selected && !state.measure && !state.busy && (
             <TransformControls
@@ -484,21 +524,28 @@ function World() {
                 }
               }}
               onMouseUp={() => {
+                let applied: boolean;
                 if (state.mode === 'translate') {
                   const position = target.position.toArray();
                   const rotationY = target.rotation.y;
-                  state.patch(
+                  applied = state.patch(
                     selected.id,
                     Math.abs(rotationY - selected.rotationY) > 1e-6 ? { position, rotationY } : { position },
                   );
                 }
                 else if (state.mode === 'rotate') {
                   const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(target.quaternion);
-                  state.patch(selected.id, { rotationY: Math.atan2(forward.x, forward.z) });
+                  applied = state.patch(selected.id, { rotationY: Math.atan2(forward.x, forward.z) });
                 } else {
                   const resized = resizedObject(selected, target.scale.toArray() as V3);
                   target.scale.set(1, 1, 1);
-                  state.patch(selected.id, { dimensions: resized.dimensions });
+                  applied = state.patch(selected.id, { dimensions: resized.dimensions });
+                }
+                // A rejected edit leaves the scene unchanged, so put the dragged mesh back too.
+                if (!applied) {
+                  target.position.set(...selected.position);
+                  target.rotation.set(0, selected.rotationY, 0);
+                  target.scale.set(1, 1, 1);
                 }
                 setTimeout(() => {
                   dragging.current = false;
@@ -520,7 +567,8 @@ function World() {
     </>
   );
 }
-export function Viewport() {
+/** `paused` stops rendering while the editor is hidden (e.g. in the capture workspace). */
+export function Viewport({ paused = false }: { paused?: boolean } = {}) {
   const [locked, setLocked] = useState(false);
   useEffect(() => {
     const update = () => setLocked(Boolean(document.pointerLockElement));
@@ -554,6 +602,7 @@ export function Viewport() {
       <Canvas
         camera={{ position: [8, 7, 9], fov: 48, near: 0.02, far: 500 }}
         dpr={[1, 2]}
+        frameloop={paused ? 'never' : 'always'}
         onPointerMissed={() => {
           const s = useEditor.getState();
           if (!s.measure && s.tool === 'select') s.select(null);

@@ -96,7 +96,7 @@ export function CalibratedMesh({
             </p>
           </div>
           <a
-            href={api.imageUrl(mesh.manifestUrl ?? `/api/projects/${mesh.projectId}/mesh`)}
+            href={api.imageUrl(mesh.manifestUrl ?? `/api/projects/${encodeURIComponent(mesh.projectId)}/mesh`)}
             download
           >
             Export manifest (JSON)

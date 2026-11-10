@@ -21,7 +21,7 @@ import {
   editEntity,
   entityById,
   sceneSchema,
-  validateScene,
+  validateEdit,
   type Entity,
   type Scene,
   type SceneObject,
@@ -66,7 +66,7 @@ export type EditorState = {
   view: FloorView;
   loadAssembly: (envelope: AssemblyEnvelope) => void;
   refreshAssembly: (envelope: AssemblyEnvelope) => void;
-  activateFloor: (projectId: string, entityId?: string) => void;
+  activateFloor: (projectId: string, entityId?: string, options?: { force?: boolean }) => void;
   updateAssembly: (mutate: (assembly: Assembly) => void) => void;
   setView: (patch: Partial<FloorView>) => void;
   hasUnsaved: () => boolean;
@@ -117,7 +117,8 @@ export type EditorState = {
   commit: (mutate: (scene: Scene) => void) => boolean;
   /** Topology edit: applies `mutate`, rebuilds rooms from walls, and commits as one undo step. */
   wallEdit: (mutate: (scene: Scene) => void) => boolean;
-  patch: (id: string, patch: Record<string, unknown>) => void;
+  /** Returns false when the edit was rejected (invalid) or changed nothing. */
+  patch: (id: string, patch: Record<string, unknown>) => boolean;
   add: (componentId: string) => void;
   duplicate: () => void;
   remove: () => void;
@@ -173,9 +174,10 @@ export const useEditor = create<EditorState>((set, get) => ({
       frame: s.frame + (changed ? 1 : 0),
     });
   },
-  activateFloor: (projectId, entityId) => {
+  activateFloor: (projectId, entityId, options) => {
     const s = get();
-    if (!s.assembly || !s.projects[projectId] || s.busy) return;
+    // `force` lets the job tracker, which owns the busy flag, switch floors.
+    if (!s.assembly || !s.projects[projectId] || (s.busy && !options?.force)) return;
     const floorStates = stashFloor(s);
     const saved = floorStates[projectId];
     const scene = saved?.scene ?? s.scenes[projectId] ?? null;
@@ -220,7 +222,10 @@ export const useEditor = create<EditorState>((set, get) => ({
       assemblySchema.parse(next);
       const errors = layoutErrors(next, editorScenes(s));
       if (errors.length) throw new Error(errors[0]);
-      set({ assembly: next, assemblyDirty: true, error: null, frame: s.frame + 1 });
+      // Re-frame only when floors appear/disappear; typing names or offsets keeps the camera.
+      const floorIds = (a: Assembly) => floorsOf(a).map((f) => f.id).join();
+      const reframe = floorIds(next) !== floorIds(s.assembly);
+      set({ assembly: next, assemblyDirty: true, error: null, frame: s.frame + (reframe ? 1 : 0) });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     }
@@ -228,7 +233,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   setView: (patch) => {
     const s = get();
     if (s.busy) return;
-    set({ view: { ...s.view, ...patch }, selectedId: null, measures: [], frame: s.frame + 1 });
+    const view = { ...s.view, ...patch };
+    const reframe =
+      view.mode !== s.view.mode || view.floorId !== s.view.floorId || view.buildingId !== s.view.buildingId;
+    set({ view, selectedId: null, measures: [], frame: s.frame + (reframe ? 1 : 0) });
   },
   scene: null,
   selectedId: null,
@@ -314,7 +322,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     try {
       const next = structuredClone(scene);
       mutate(next);
-      validateScene(next);
+      validateEdit(scene, next);
       if (JSON.stringify(scene) === JSON.stringify(next)) return false;
       set({ scene: next, past: [...past.slice(-49), scene], future: [], dirty: true, error: null });
       return true;
@@ -532,7 +540,9 @@ function stashFloor(s: EditorState): Record<string, FloorSnapshot> {
       : {}),
   };
 }
-export function editorScenes(s: EditorState): Record<string, Scene> {
+export function editorScenes(
+  s: Pick<EditorState, 'scenes' | 'floorStates' | 'scene'>,
+): Record<string, Scene> {
   return {
     ...s.scenes,
     ...Object.fromEntries(

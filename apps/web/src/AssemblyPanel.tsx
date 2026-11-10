@@ -315,6 +315,37 @@ export function BlueprintWizard({
     </div>
   );
 }
+/**
+ * Number input that keeps what the user is typing and applies it on blur or Enter, so
+ * intermediate values (e.g. "2" on the way to "2.95") are never validated and rejected.
+ */
+function CommitNumberInput({
+  value,
+  onCommit,
+  ...props
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'> & {
+  value: number | null;
+  onCommit: (value: string) => void;
+}) {
+  const shown = value == null ? '' : String(value);
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    if (draft !== null && draft !== shown) onCommit(draft);
+    setDraft(null);
+  };
+  return (
+    <input
+      {...props}
+      value={draft ?? shown}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commit();
+        if (e.key === 'Escape') setDraft(null);
+      }}
+    />
+  );
+}
 function completeLabel(project?: ProjectEnvelope) {
   return project ? 'Uploaded' : 'Ready to upload';
 }
@@ -464,16 +495,16 @@ export function AssemblyControls({ onReconstruct }: { onReconstruct: (ids?: stri
           </div>
           <label className="field">
             Floor-to-floor height (m)
-            <input
+            <CommitNumberInput
               disabled={s.busy}
               type="number"
               min="0.3"
               step="0.1"
               placeholder={`Auto: ${minimumStoryHeight(scenes[active.projectId]).toFixed(2)} m`}
-              value={active.storyHeight ?? ''}
-              onChange={(e) =>
+              value={active.storyHeight ?? null}
+              onCommit={(value) =>
                 changeFloor((f) => {
-                  f.storyHeight = e.target.value === '' ? null : Number(e.target.value);
+                  f.storyHeight = value === '' ? null : Number(value);
                 })
               }
             />

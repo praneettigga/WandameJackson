@@ -307,6 +307,12 @@ export function WallTools({ scene }: { scene: Scene }) {
         return;
       }
       if (tool !== 'wall' || !chain.length) return;
+      // While drawing, Backspace edits the typed length only; it must never delete the selection.
+      if ((e.key === 'Backspace' || e.key === 'Delete') && !typed) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        return;
+      }
       if (/^[0-9.]$/.test(e.key)) {
         e.stopImmediatePropagation();
         setTyped((t) => t + e.key);

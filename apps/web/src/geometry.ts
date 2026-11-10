@@ -287,6 +287,8 @@ export class GeometryCache {
     let object = this.entries.get(key);
     if (!object) {
       object = build();
+      // The cache owns this object's GPU resources; disposing a parent root must skip it.
+      object.userData.cached = true;
       this.entries.set(key, object);
     }
     this.used.add(key);
@@ -297,7 +299,7 @@ export class GeometryCache {
     for (const [key, object] of this.entries)
       if (!this.used.has(key)) {
         object.parent?.remove(object);
-        disposeGeometry(object);
+        disposeGeometry(object, { includeCached: true });
         this.entries.delete(key);
       }
     this.used.clear();
@@ -432,7 +434,13 @@ function wallObject(wall: Wall, openings: Opening[], ext: [number, number], opti
   return group;
 }
 
-export function buildSceneGeometry(scene: Scene, options: RenderOptions = {}, cache?: GeometryCache) {
+export function buildSceneGeometry(
+  scene: Scene,
+  options: RenderOptions = {},
+  cache?: GeometryCache,
+  /** Namespaces cache keys so identical entities on different floors never share an object. */
+  cacheScope = '',
+) {
   const root = new THREE.Group();
   root.name = 'ROOMSHIFT_semantic_geometry';
   root.userData = {
@@ -444,7 +452,8 @@ export function buildSceneGeometry(scene: Scene, options: RenderOptions = {}, ca
     generator: 'ROOMSHIFT',
   };
   const flags = `${options.xray ? 1 : 0}${options.confidence ? 1 : 0}${options.ghost ? 1 : 0}${options.seeThrough ? 1 : 0}`;
-  const get = (key: string, build: () => THREE.Object3D) => (cache ? cache.get(key, build) : build());
+  const get = (key: string, build: () => THREE.Object3D) =>
+    cache ? cache.get(`${cacheScope}|${key}`, build) : build();
   const sel = (...ids: string[]) => (options.selectedId && ids.includes(options.selectedId) ? 1 : 0);
   for (const room of scene.rooms)
     root.add(
@@ -481,9 +490,11 @@ export function buildSceneGeometry(scene: Scene, options: RenderOptions = {}, ca
     });
   return root;
 }
-export function disposeGeometry(root: THREE.Object3D) {
+export function disposeGeometry(root: THREE.Object3D, { includeCached = false } = {}) {
   const materials = new Set<THREE.Material>();
-  root.traverse((node) => {
+  const visit = (node: THREE.Object3D, top: boolean) => {
+    // Cached subtrees are reused by the next build; only GeometryCache.sweep frees them.
+    if (node.userData.cached && !(top && includeCached)) return;
     if (node instanceof THREE.Mesh) {
       // Custom-scan geometry and materials belong to the library template and outlive any placement.
       if (!node.geometry.userData.shared) node.geometry.dispose();
@@ -491,7 +502,9 @@ export function disposeGeometry(root: THREE.Object3D) {
         if (!m.userData.shared) materials.add(m);
       });
     }
-  });
+    node.children.forEach((child) => visit(child, false));
+  };
+  visit(root, true);
   materials.forEach((m) => m.dispose());
 }
 // Exports are rebuilt from semantic data, so controls/grid/ghosts can never leak in.
@@ -568,6 +581,7 @@ export function buildAssemblyGeometry(
   scenes: Record<string, Scene>,
   view: FloorView,
   options: RenderOptions & { activeProjectId?: string | null } = {},
+  cache?: GeometryCache,
 ) {
   const root = new THREE.Group();
   root.name = assembly.name;
@@ -575,10 +589,15 @@ export function buildAssemblyGeometry(
   const all = placements(assembly, scenes, view.mode === 'exploded' ? view.gap : 0);
   for (const placement of visiblePlacements(all, view)) {
     if (!placement.scene) continue;
-    const child = buildSceneGeometry(placement.scene, {
-      ...options,
-      selectedId: placement.floor.projectId === options.activeProjectId ? options.selectedId : null,
-    });
+    const child = buildSceneGeometry(
+      placement.scene,
+      {
+        ...options,
+        selectedId: placement.floor.projectId === options.activeProjectId ? options.selectedId : null,
+      },
+      cache,
+      `floor:${placement.floor.id}`,
+    );
     child.name = `floor:${placement.floor.id}`;
     child.position.set(...placement.position);
     child.rotation.y = placement.rotationY;

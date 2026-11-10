@@ -7,13 +7,24 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
-import { api, pollJob, type Job, type ProjectEnvelope } from './api';
+import {
+  ApiError,
+  api,
+  isCancellation,
+  isTransient,
+  pollJob,
+  wait,
+  type AssemblyEnvelope,
+  type Job,
+  type ProjectEnvelope,
+} from './api';
 import type { ScaleCalibration } from './api';
 import {
   confidenceLevel,
   entities,
   exportSceneJson,
   geometryWarnings,
+  sceneSchema,
   imagePoint,
   metersPerPixel,
   type V2,
@@ -40,28 +51,11 @@ import { InfrastructurePanel, WallsToggle } from './InfrastructurePanel';
 import { loadLibrary } from './library';
 import { formatLength, fromMeters, lengthUnits, toMeters, type LengthUnit } from './units';
 import { CaptureWorkspace } from './CaptureWorkspace';
-
-class ViewportBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
-  state = { error: null as string | null };
-  static getDerivedStateFromError(error: Error) {
-    return { error: error.message };
-  }
-  render() {
-    return this.state.error ? (
-      <div className="empty-viewport">
-        <h2>Viewport unavailable</h2>
-        <p>{this.state.error}</p>
-        <p>Enable WebGL in your browser. Scene inspection and JSON export remain available.</p>
-      </div>
-    ) : (
-      this.props.children
-    );
-  }
-}
+import { ErrorBoundary, isWebglError } from './ErrorBoundary';
 
 export function ErrorBanner() {
   const error = useEditor((s) => s.error),
-    conflict = useEditor((s) => s.conflict);
+    conflict = useEditor((s) => s.conflict || (!!s.assembly && s.assemblyConflict));
   if (!error) return null;
   return (
     <div className={`error-banner ${conflict ? 'conflict' : ''}`} role="alert">
@@ -306,9 +300,10 @@ export default function App() {
   const [exportScope, setExportScope] = useState<'all' | 'floor'>('all');
   const [inputMode, setInputMode] = useState<'blueprint' | 'capture'>('blueprint');
   const [captureMeshId, setCaptureMeshId] = useState<string | null>(null);
+  const [captureBusy, setCaptureBusy] = useState(false);
   const [project, setProject] = useState<ProjectEnvelope | null>(null);
   const [points, setPoints] = useState<V2[]>([]),
-    [distance, setDistance] = useState('2');
+    [distance, setDistance] = useState(() => String(fromMeters(2, useEditor.getState().lengthUnit)));
   const [scaleMode, setScaleMode] = useState<'auto' | 'manual'>('auto');
   const [automaticScale, setAutomaticScale] = useState<ScaleCalibration | null>(null);
   const [findingScale, setFindingScale] = useState(false);
@@ -331,7 +326,7 @@ export default function App() {
   const [job, setJob] = useState<Job | null>(null),
     [working, setWorking] = useState(false);
   const [health, setHealth] = useState('Checking API'),
-    [projectId, setProjectId] = useState(localStorage.getItem('roomshift.lastProject') ?? '');
+    [projectId, setProjectId] = useState(() => localStorage.getItem('roomshift.lastProject') ?? '');
   const [dockHeight, setDockHeight] = useState<number | null>(null);
   const [leftWidth, setLeftWidth] = useState(260),
     [rightWidth, setRightWidth] = useState(286);
@@ -350,22 +345,47 @@ export default function App() {
   // Autosave: mirror unsaved edits to a local draft (debounced); clear it once saved or discarded.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let pending: Scene | null = null;
+    const flush = () => {
+      clearTimeout(timer);
+      if (pending) writeDraft(pending);
+      pending = null;
+    };
     const unsubscribe = useEditor.subscribe((s, prev) => {
+      const switched = !!prev.scene && prev.scene.id !== s.scene?.id;
+      if (switched) {
+        const outgoing = prev.scene!.id;
+        // A floor switch stashes the outgoing scene: keep its draft. Loading over it discards it.
+        if (s.floorStates[outgoing]?.dirty) flush();
+        else {
+          if (pending?.id === outgoing) {
+            clearTimeout(timer);
+            pending = null;
+          }
+          if (prev.dirty) clearDraft(outgoing);
+        }
+      }
+      // Background floors saved by a grouped save.
+      for (const [id, floor] of Object.entries(prev.floorStates))
+        if (floor.dirty && s.floorStates[id] && !s.floorStates[id].dirty) clearDraft(id);
       if (s.scene && s.dirty && s.scene !== prev.scene) {
         clearTimeout(timer);
-        const scene = s.scene;
-        timer = setTimeout(() => writeDraft(scene), 800);
-      } else if (prev.dirty && !s.dirty && prev.scene) {
+        pending = s.scene;
+        timer = setTimeout(flush, 800);
+      } else if (!switched && prev.dirty && !s.dirty && prev.scene) {
+        // Same scene went clean: it was saved or discarded.
         clearTimeout(timer);
+        pending = null;
         clearDraft(prev.scene.id);
       }
     });
     return () => {
-      clearTimeout(timer);
+      flush();
       unsubscribe();
     };
   }, []);
   const polling = useRef<AbortController | null>(null);
+  const floorControls = useRef<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const error = (e: unknown) =>
     useEditor.setState({ error: e instanceof Error ? e.message : String(e) });
@@ -395,12 +415,42 @@ export default function App() {
     try {
       await action();
     } catch (e) {
-      error(e);
+      if (e instanceof ApiError && e.code === 'JOB_CANCELLED')
+        setNotice('Reconstruction cancelled. The previous scene (if any) is unchanged.');
+      else if (!isCancellation(e)) error(e);
     } finally {
       useEditor.setState({ busy: false });
       setWorking(false);
     }
   };
+  const [cancelling, setCancelling] = useState(false);
+  const [saving, setSaving] = useState(false);
+  /** Cancels the active job, or every running floor job of a grouped project. */
+  async function cancelJobs(current: Job) {
+    if (cancelling) return;
+    setCancelling(true);
+    try {
+      const s = useEditor.getState();
+      const ids = s.assembly
+        ? Object.values(s.jobs)
+            .filter((j) => j.status === 'queued' || j.status === 'running')
+            .map((j) => j.id)
+        : [current.id];
+      if (!ids.includes(current.id)) ids.push(current.id);
+      const results = await Promise.allSettled(ids.map((id) => api.cancelJob(id)));
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled' && ids[i] === current.id) setJob(r.value.job);
+      });
+      const failure = results.find(
+        (r): r is PromiseRejectedResult =>
+          r.status === 'rejected' &&
+          !(r.reason instanceof ApiError && r.reason.code === 'JOB_NOT_ACTIVE'),
+      );
+      if (failure) error(failure.reason);
+    } finally {
+      setCancelling(false);
+    }
+  }
   const discard = () =>
     !useEditor.getState().hasUnsaved() ||
     window.confirm(
@@ -512,7 +562,9 @@ export default function App() {
     const scene = editorScenes(state)[id];
     const calibration = floor.settings.calibration ?? scene?.source.calibration;
     setPoints(calibration ? [calibration.pointA, calibration.pointB] : []);
-    setDistance(String(calibration?.distanceMeters ?? 2));
+    setDistance(
+      String(fromMeters(calibration?.distanceMeters ?? 2, useEditor.getState().lengthUnit)),
+    );
     setScaleMode(
       floor.settings.scaleMode ??
         (floor.settings.calibration || (scene && !scene.source.calibration.method)
@@ -525,35 +577,60 @@ export default function App() {
     setThickness(floor.settings.wallThickness == null ? '' : String(floor.settings.wallThickness));
     setShowBlueprint(!scene);
     setJob(state.jobs[id] ?? null);
+    // Remember what was loaded so the settings sync below ignores it (it is not a user edit).
+    floorControls.current = JSON.stringify({
+      scaleMode: floor.settings.scaleMode ??
+        (floor.settings.calibration || (scene && !scene.source.calibration.method) ? 'manual' : 'auto'),
+      points: calibration ? [calibration.pointA, calibration.pointB] : [],
+      distance: String(fromMeters(calibration?.distanceMeters ?? 2, useEditor.getState().lengthUnit)),
+      height: floor.settings.wallHeight == null ? '' : String(floor.settings.wallHeight),
+      thickness: floor.settings.wallThickness == null ? '' : String(floor.settings.wallThickness),
+    });
     // Floor controls must not reset measurements on unrelated edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.activeProjectId, state.assembly?.id]);
   async function trackAssembly(id: string, ids: string[]) {
+    polling.current?.abort();
+    const controller = new AbortController();
+    polling.current = controller;
+    const { signal } = controller;
     const deadline = Date.now() + Math.max(180_000, ids.length * 180_000);
+    let failures = 0;
     while (true) {
-      const envelope = await api.getAssembly(id);
+      let envelope: AssemblyEnvelope;
+      try {
+        envelope = await api.getAssembly(id, signal);
+        failures = 0;
+      } catch (e) {
+        if (!isTransient(e) || ++failures > 3) throw e;
+        await wait(800 * 2 ** failures, signal);
+        continue;
+      }
       state.refreshAssembly(envelope);
+      const active = useEditor.getState().activeProjectId;
+      setJob(active ? (envelope.jobs[active] ?? null) : null);
       const pending = ids.filter((pid) =>
         ['queued', 'running'].includes(envelope.jobs[pid]?.status),
       );
       if (!pending.length) {
-        const failed = ids.filter((pid) => envelope.jobs[pid]?.status === 'failed');
+        const ended = ids.map((pid) => envelope.jobs[pid]).filter((j) => j?.status === 'failed');
+        const cancelled = ended.filter((j) => j.error?.code === 'JOB_CANCELLED').length;
+        const failed = ended.length - cancelled;
         const scenes = editorScenes(useEditor.getState());
         const first = floorsOf(envelope.assembly).find((f) => scenes[f.projectId]);
-        if (first && !useEditor.getState().scene) {
-          // Polling owns the busy flag; activate the first successful floor once the batch finishes.
-          useEditor.setState({ busy: false });
-          useEditor.getState().activateFloor(first.projectId);
-          useEditor.setState({ busy: true });
-        }
+        // Polling owns the busy flag; activate the first successful floor once the batch finishes.
+        if (first && !useEditor.getState().scene)
+          useEditor.getState().activateFloor(first.projectId, undefined, { force: true });
         if (first) {
           useEditor.setState({ workspace: 'Edit' });
           setShowBlueprint(false);
         }
         setNotice(
-          failed.length
-            ? `${failed.length} floor(s) failed. Successful floors are available; select a failed floor to retry.`
-            : 'Buildings and floors reconstructed. Review the scale and placement assumptions.',
+          failed
+            ? `${failed} floor(s) failed. Successful floors are available; select a failed floor to retry.`
+            : cancelled
+              ? `${cancelled} floor reconstruction(s) cancelled. Previous scenes are unchanged.`
+              : 'Buildings and floors reconstructed. Review the scale and placement assumptions.',
         );
         return;
       }
@@ -561,10 +638,10 @@ export default function App() {
         throw new Error(
           'Reconstruction is still running. Reopen the grouped project to resume progress.',
         );
-      if (polling.current?.signal.aborted) return;
-      await new Promise((resolve) => setTimeout(resolve, api.mock ? 80 : 800));
-      // Mock jobs advance when polled; real jobs report the worker state.
-      await Promise.all(pending.map((pid) => api.getJob(envelope.jobs[pid].id)));
+      await wait(api.mock ? 80 : 800, signal);
+      // Mock jobs only advance when polled; the real API reports worker state in the assembly.
+      if (api.mock)
+        await Promise.all(pending.map((pid) => api.getJob(envelope.jobs[pid].id, signal)));
     }
   }
   function updateFloorSettings(floor: Floor) {
@@ -572,7 +649,11 @@ export default function App() {
       scaleMode,
       calibration:
         scaleMode === 'manual' && points.length === 2
-          ? { pointA: points[0], pointB: points[1], distanceMeters: Number(distance) }
+          ? {
+              pointA: points[0],
+              pointB: points[1],
+              distanceMeters: toMeters(Number(distance), useEditor.getState().lengthUnit),
+            }
           : null,
       wallHeight: height === '' ? null : Number(height),
       wallThickness: thickness === '' ? null : Number(thickness),
@@ -583,6 +664,9 @@ export default function App() {
     if (!s.assembly || s.busy) return;
     const floor = floorsOf(s.assembly).find((f) => f.projectId === s.activeProjectId);
     if (!floor) return;
+    if (floorControls.current === JSON.stringify({ scaleMode, points, distance, height, thickness }))
+      return;
+    floorControls.current = null;
     if (
       (height &&
         (!Number.isFinite(Number(height)) || Number(height) <= 0 || Number(height) > 20)) ||
@@ -650,8 +734,6 @@ export default function App() {
         useEditor.setState({
           error: result.errors.map((e) => `${e.projectId}: ${e.error.message}`).join(' '),
         });
-      polling.current?.abort();
-      polling.current = new AbortController();
       await trackAssembly(
         saved.assembly.id,
         result.submittedJobs.map((j) => j.projectId),
@@ -791,6 +873,8 @@ export default function App() {
       await pollJob(api, initial, setJob, { signal: polling.current.signal });
       const scene = await api.getScene(project.project.id);
       state.load(scene);
+      // Any draft predates this reconstruction; it can no longer be restored onto it.
+      setDraftOffer(null);
       if (scaleMode === 'auto') {
         setAutomaticScale(scene.source.calibration);
         setScaleError('');
@@ -831,15 +915,20 @@ export default function App() {
             }
             className="primary small"
             onClick={() => {
-              void state.save(api).then(() => {
-                if (!useEditor.getState().error)
-                  setNotice(
-                    `Saved revision ${useEditor.getState().assembly?.revision ?? useEditor.getState().scene?.revision}`,
-                  );
+              if (!useEditor.getState().hasUnsaved()) {
+                setNotice('No unsaved changes.');
+                return;
+              }
+              setSaving(true);
+              void state.save(api).finally(() => {
+                setSaving(false);
+                const after = useEditor.getState();
+                if (!after.error)
+                  setNotice(`Saved revision ${after.assembly?.revision ?? after.scene?.revision}`);
               });
             }}
           >
-            {state.busy && !working ? 'Saving…' : state.assembly ? 'Save project' : 'Save scene'}
+            {saving ? 'Saving…' : state.assembly ? 'Save project' : 'Save scene'}
           </button>
         </div>
       </header>
@@ -909,12 +998,14 @@ export default function App() {
             <button
               className="primary small"
               onClick={() => {
-                useEditor.setState({
-                  scene: draftOffer.draft.scene,
-                  dirty: true,
-                  past: [],
-                  future: [],
-                });
+                const current = useEditor.getState().scene;
+                const parsed = sceneSchema.safeParse(draftOffer.draft.scene);
+                if (!current || !parsed.success || current.revision !== draftOffer.draft.baseRevision) {
+                  error(new Error('This draft no longer matches the loaded scene; download it as JSON instead.'));
+                  setDraftOffer({ ...draftOffer, stale: true });
+                  return;
+                }
+                useEditor.setState({ scene: parsed.data, dirty: true, past: [current], future: [] });
                 setDraftOffer(null);
               }}
             >
@@ -936,7 +1027,7 @@ export default function App() {
           <button
             key={mode}
             aria-pressed={inputMode === mode}
-            disabled={disabled}
+            disabled={disabled || captureBusy}
             onClick={() => {
               if (document.pointerLockElement) document.exitPointerLock();
               setInputMode(mode);
@@ -949,6 +1040,7 @@ export default function App() {
       {inputMode === 'capture' && (
         <CaptureWorkspace
           onMeshReady={setCaptureMeshId}
+          onBusyChange={setCaptureBusy}
           onOpenEditor={async (id) => {
             if (!discard()) return;
             await guarded(async () => loadCaptureScene(await api.openCaptureScene(id)));
@@ -1249,14 +1341,10 @@ export default function App() {
                       !job.cancelRequested && (
                         <button
                           className="small"
-                          onClick={() =>
-                            void api
-                              .cancelJob(job.id)
-                              .then((r) => setJob(r.job))
-                              .catch(error)
-                          }
+                          disabled={cancelling}
+                          onClick={() => void cancelJobs(job)}
                         >
-                          Cancel
+                          {cancelling ? 'Cancelling…' : state.assembly ? 'Cancel all' : 'Cancel'}
                         </button>
                       )}
                   </div>
@@ -1501,9 +1589,23 @@ export default function App() {
                 disabled={disabled}
               />
             ) : (
-              <ViewportBoundary>
-                <Viewport />
-              </ViewportBoundary>
+              <ErrorBoundary
+                resetKey={state.scene?.id ?? state.assembly?.id ?? null}
+                fallback={(e, reset) => (
+                  <div className="empty-viewport" role="alert">
+                    <h2>Viewport unavailable</h2>
+                    <p>{e.message}</p>
+                    <p>
+                      {isWebglError(e)
+                        ? 'Enable WebGL in your browser. Scene inspection and JSON export remain available.'
+                        : 'Scene inspection and JSON export remain available.'}
+                    </p>
+                    <button onClick={reset}>Try again</button>
+                  </div>
+                )}
+              >
+                <Viewport paused={inputMode === 'capture'} />
+              </ErrorBoundary>
             )}
           </div>
           <div className="view-options">

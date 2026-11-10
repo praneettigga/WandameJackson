@@ -1,3 +1,4 @@
+import { useDeferredValue } from 'react';
 import {
   RULES,
   cachedPlan,
@@ -12,7 +13,8 @@ import { formatLength } from './units';
 
 /** The plan for the active scene and the proposal being shown (the user's pick, else the recommended one). */
 export function useInfrastructure() {
-  const scene = useEditor((s) => s.scene);
+  // The planner is heavy; let edits render first and plan at low priority.
+  const scene = useDeferredValue(useEditor((s) => s.scene));
   const uses = useEditor((s) => (scene ? s.roomUses[scene.id] : undefined));
   const chosen = useEditor((s) => s.serviceProposal);
   if (!scene) return { plan: null, proposal: null };

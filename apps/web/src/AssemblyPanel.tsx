@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import { useEffect, useRef, useState } from 'react';
 import { api, type AssemblyEnvelope, type ProjectEnvelope } from './api';
 import { useEditor, editorScenes } from './store';
@@ -369,7 +370,22 @@ function FilePreview({ file }: { file: File }) {
 }
 
 export function AssemblyControls({ onReconstruct }: { onReconstruct: (ids?: string[]) => void }) {
-  const s = useEditor();
+  const s = useEditor(
+    useShallow((s) => ({
+      activateFloor: s.activateFloor,
+      activeProjectId: s.activeProjectId,
+      assembly: s.assembly,
+      busy: s.busy,
+      dirty: s.dirty,
+      floorStates: s.floorStates,
+      jobs: s.jobs,
+      setView: s.setView,
+      updateAssembly: s.updateAssembly,
+      view: s.view,
+      scene: s.scene,
+      scenes: s.scenes,
+    })),
+  );
   if (!s.assembly) return null;
   const scenes = editorScenes(s),
     floors = floorsOf(s.assembly);
@@ -594,7 +610,20 @@ export function AssemblyControls({ onReconstruct }: { onReconstruct: (ids?: stri
   );
 }
 export function FloorViews() {
-  const s = useEditor();
+  const s = useEditor(
+    useShallow((s) => ({
+      activateFloor: s.activateFloor,
+      activeProjectId: s.activeProjectId,
+      assembly: s.assembly,
+      busy: s.busy,
+      setView: s.setView,
+      view: s.view,
+      workspace: s.workspace,
+      scene: s.scene,
+      scenes: s.scenes,
+      floorStates: s.floorStates,
+    })),
+  );
   if (!s.assembly) return null;
   const buildings = s.assembly.buildings;
   const building = buildings.find((b) => b.id === s.view.buildingId);

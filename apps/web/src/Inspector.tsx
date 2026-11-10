@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import { useEffect, useState } from 'react';
 import {
   confidenceLevel,
@@ -169,7 +170,19 @@ function NumberField({
   );
 }
 export function Inspector() {
-  const state = useEditor();
+  const state = useEditor(
+    useShallow((s) => ({
+      busy: s.busy,
+      duplicate: s.duplicate,
+      gridStep: s.gridStep,
+      patch: s.patch,
+      remove: s.remove,
+      scene: s.scene,
+      selectedId: s.selectedId,
+      snap: s.snap,
+      wallEdit: s.wallEdit,
+    })),
+  );
   const entity = state.scene ? entityById(state.scene, state.selectedId) : null;
   const patch = (field: string, value: unknown) =>
     entity && state.patch(entity.id, { [field]: value });

@@ -22,6 +22,12 @@ def provenance(generated=False):
                      ['Unsegmented reconstructed surface. Individual walls and furniture are not identified.']}
 
 
+# Precomputed architectural demo layouts in contracts/fixtures (layout specs, not Scenes).
+DEMO_LAYOUTS = {'whatsapp-classroom.layout.json', 'whatsapp-rectangular-room.layout.json'}
+# Demo meshes baked before the rename still reference the old file names.
+LEGACY_LAYOUT_NAMES = {name.replace('.layout.json', '.scene.json'): name for name in DEMO_LAYOUTS}
+
+
 def mesh_positions(path):
     data = path.read_bytes()
     size = struct.unpack_from('<I', data, 12)[0]
@@ -98,10 +104,9 @@ def open_editor_scene(storage, project_id, contracts_dir):
         low, high = positions.min(axis=0), positions.max(axis=0)
         matrix = np.asarray(manifest.get('reconstructionToWorld', np.eye(4)), dtype=float)
         processing = manifest.get('processing', {})
-        layout_name = processing.get('layout')
-        allowed = {'whatsapp-classroom.scene.json', 'whatsapp-rectangular-room.scene.json'}
+        layout_name = LEGACY_LAYOUT_NAMES.get(processing.get('layout'), processing.get('layout'))
         layout = (read_json(contracts_dir/'fixtures'/layout_name)
-                  if processing.get('pipeline') == 'precomputed-architectural-demo' and layout_name in allowed else None)
+                  if processing.get('pipeline') == 'precomputed-architectural-demo' and layout_name in DEMO_LAYOUTS else None)
         entities = layout_entities(layout, matrix) if layout else None
         representation = 'layout' if entities else 'mesh'
         unaligned = False

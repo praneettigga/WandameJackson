@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from roomshift_api import auto_scale
+from roomshift_api import ocr
 from roomshift_api.auto_scale import Label
 from roomshift_api.parser import parse_blueprint
 from roomshift_api.room_labels import assign_room_names, read_room_names, room_name
@@ -44,7 +44,7 @@ def test_ocr_scaling_and_parser_integration(monkeypatch):
     def read(image):
         sy, sx = image.shape[0] / 620, image.shape[1] / 640
         return [Label('Living Room', 140 * sx, 190 * sy, 100 * sx, 20 * sy, 99)]
-    monkeypatch.setattr(auto_scale, 'read_labels', read)
+    monkeypatch.setattr(ocr, 'read_labels', read)
     result = parse_blueprint(l_shaped_plan(), .025)
     assert any(r['name'] == 'Living Room' for r in result['rooms'])
     assert any(r['name'].startswith('Room ') for r in result['rooms'])
@@ -59,7 +59,7 @@ def test_deskew_uses_original_coordinates_for_room_names(monkeypatch):
     def read(work):
         sy, sx = work.shape[0] / h, work.shape[1] / w
         return [Label('Living Room', (cx - 40) * sx, (cy - 10) * sy, 80 * sx, 20 * sy, 99)]
-    monkeypatch.setattr(auto_scale, 'read_labels', read)
+    monkeypatch.setattr(ocr, 'read_labels', read)
     result = parse_blueprint(rotated, .025)
     assert any('rotated' in warning for warning in result['warnings'])
     assert any(r['name'] == 'Living Room' for r in result['rooms'])
@@ -77,7 +77,7 @@ def test_real_ocr_reads_a_room_name():
 def test_ocr_failure_preserves_geometry_and_manual_fallback(monkeypatch):
     def unavailable(_):
         raise RuntimeError('Unavailable')
-    monkeypatch.setattr(auto_scale, 'read_labels', unavailable)
+    monkeypatch.setattr(ocr, 'read_labels', unavailable)
     result = {'rooms': [room()], 'warnings': []}
     read_room_names(np.full((300, 300), 255, np.uint8), result, .01)
     assert result['rooms'][0]['name'] == 'Room 1'

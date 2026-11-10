@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from roomshift_api import auto_scale
+from roomshift_api import ocr
 from roomshift_api.auto_scale import Label, _dimension_span, estimate_scale, parse_measurement
 from conftest import l_shaped_plan, png_bytes, wait_job
 
@@ -44,7 +44,7 @@ def stub_labels(monkeypatch, label, original_shape=(600, 800)):
             return []
         sy, sx = gray.shape[0] / original_shape[0], gray.shape[1] / original_shape[1]
         return [Label(label.text, label.x * sx, label.y * sy, label.w * sx, label.h * sy, label.confidence)]
-    monkeypatch.setattr(auto_scale, 'read_labels', read)
+    monkeypatch.setattr(ocr, 'read_labels', read)
 
 
 def test_dimension_geometry_and_original_pixel_scale(monkeypatch):
@@ -80,7 +80,7 @@ def test_conflicting_measurements_fall_back(monkeypatch):
     def read(gray):
         calls.append(1)
         return [Label(p.text, p.x, p.y, p.w, p.h, 99) for p in labels] if len(calls) == 1 else []
-    monkeypatch.setattr(auto_scale, 'read_labels', read)
+    monkeypatch.setattr(ocr, 'read_labels', read)
     cal = estimate_scale(image)
     assert cal['method'] == 'wall-thickness'
     assert any('disagree' in note for note in cal['notes'])
@@ -89,7 +89,7 @@ def test_conflicting_measurements_fall_back(monkeypatch):
 def test_no_ocr_still_assigns_explicit_estimate(monkeypatch):
     def unavailable(_):
         raise RuntimeError('OCR unavailable')
-    monkeypatch.setattr(auto_scale, 'read_labels', unavailable)
+    monkeypatch.setattr(ocr, 'read_labels', unavailable)
     cal = estimate_scale(l_shaped_plan())
     assert cal['method'] == 'wall-thickness'
     assert cal['metersPerPixel'] == pytest.approx(.025)
@@ -119,7 +119,7 @@ def test_api_automatic_default_and_manual_override(client, monkeypatch):
 
 
 def test_api_estimates_without_preview(client, monkeypatch):
-    monkeypatch.setattr(auto_scale, 'read_labels', lambda _: [])
+    monkeypatch.setattr(ocr, 'read_labels', lambda _: [])
     pid = client.post('/api/projects', files={'blueprint': ('plan.png', png_bytes(l_shaped_plan()), 'image/png')}).json()['project']['id']
     response = client.post(f'/api/projects/{pid}/reconstruct', json={})
     assert wait_job(client, response.json()['job']['id'])['status'] == 'succeeded'
@@ -157,7 +157,7 @@ def test_explicit_unit_note_and_low_confidence_rejection(monkeypatch):
             return []
         return [Label(label.text, label.x, label.y, label.w, label.h, 99),
                 Label('ALL DIMENSIONS IN mm', 10, 550, 200, 10, 99)]
-    monkeypatch.setattr(auto_scale, 'read_labels', read)
+    monkeypatch.setattr(ocr, 'read_labels', read)
     assert estimate_scale(image)['metersPerPixel'] == pytest.approx(.01, rel=.01)
     stub_labels(monkeypatch, Label('5 m', label.x, label.y, label.w, label.h, 30))
     assert estimate_scale(image)['method'] == 'wall-thickness'

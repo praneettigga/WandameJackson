@@ -93,7 +93,9 @@ export default function App() {
       void (async () => {
         if (state.scene?.id === id && state.scene.source.capture) setInputMode('blueprint');
         else await openCaptureInEditor(id);
-        useEditor.setState({ workspace: name, measure: false });
+        // Opening can be declined (unsaved edits) or fail; only then is there nothing to show.
+        if (useEditor.getState().scene?.id === id)
+          useEditor.setState({ workspace: name, measure: false });
       })();
       return;
     }

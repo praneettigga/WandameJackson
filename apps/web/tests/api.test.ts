@@ -246,6 +246,31 @@ describe('HTTP edge cases and polling', () => {
     await expect(pollJob(api, done, () => {})).resolves.toEqual(done);
     expect(get).not.toHaveBeenCalled();
   });
+  it('does not count time spent queued behind another job against the timeout', async () => {
+    const api = new MockApi(),
+      { job } = await api.reconstruct('demo-room', input);
+    const done: Job = { ...job, status: 'succeeded', sceneUrl: '/api/projects/demo-room/scene' };
+    // Queued for longer than the whole budget, then quick work.
+    const states: Job[] = [job, job, job, job, { ...job, status: 'running' }, done];
+    vi.spyOn(api, 'getJob').mockImplementation(async () => ({ job: states.shift() ?? done }));
+    await expect(
+      pollJob(api, job, () => {}, { timeoutMs: 40, intervalMs: 20 }),
+    ).resolves.toMatchObject({ status: 'succeeded' });
+    // A job that is running, not waiting, still times out.
+    vi.spyOn(api, 'getJob').mockResolvedValue({ job: { ...job, status: 'running' } });
+    await expect(
+      pollJob(api, { ...job, status: 'running' }, () => {}, { timeoutMs: 40, intervalMs: 20 }),
+    ).rejects.toThrow('timed out');
+  });
+  it('keeps serving the mock scene when its stored copy is corrupt', async () => {
+    const map = new Map<string, string>();
+    const api = new MockApi({
+      getItem: (k) => map.get(k) ?? null,
+      setItem: (k, v) => void map.set(k, v),
+    });
+    map.set('roomshift.mock.scene.v1', '{not json');
+    await expect(api.getScene('demo-room')).resolves.toMatchObject({ id: 'demo-room' });
+  });
   it('persists mock saves and detects conflicts between local browser sessions', async () => {
     const map = new Map<string, string>();
     const storage = {

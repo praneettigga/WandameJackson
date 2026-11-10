@@ -550,7 +550,7 @@ export function CaptureWorkspace({
                 {input.rejected.map((r, i) => (
                   <li key={i}>
                     {input.originals.find((o) => o.id === r.sourceId)?.filename}
-                    {r.timestampSeconds !== null ? ` · ${r.timestampSeconds}s` : ''}:{' '}
+                    {r.timestampSeconds != null ? ` · ${r.timestampSeconds.toFixed(1)}s` : ''}:{' '}
                     {r.reason.replaceAll('_', ' ')}
                   </li>
                 ))}

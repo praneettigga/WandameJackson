@@ -159,11 +159,11 @@ function NumberField({
             return;
           }
           // Merely focusing a rounded value must not create an edit/undo entry.
+          const before = useEditor.getState().scene;
           if (n !== Number(displayNumber(value))) onCommit(n);
-          const entity =
-            useEditor.getState().scene &&
-            entityById(useEditor.getState().scene!, useEditor.getState().selectedId);
-          if (entity && useEditor.getState().error) setDraft(String(value));
+          // Rejected, or snapped back to the same value: the scene (and `value`) did not change,
+          // so nothing else would replace what was typed.
+          if (useEditor.getState().scene === before) setDraft(displayNumber(value));
         }}
       />
     </label>

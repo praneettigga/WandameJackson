@@ -115,6 +115,22 @@ describe('application integration without WebGL', () => {
     await waitFor(() => expect(useEditor.getState().scene!.revision).toBe(revision + 1));
     expect(useEditor.getState().dirty).toBe(false);
   });
+  it('shows the applied value when a typed number snaps back to the current one', async () => {
+    render(<App />);
+    await screen.findByRole('button', { name: 'Select Table' });
+    fireEvent.click(screen.getByRole('button', { name: 'Select Table' }));
+    useEditor.setState({ snap: true });
+    const field = screen.getByLabelText('Position X');
+    fireEvent.change(field, { target: { value: '2' } });
+    fireEvent.blur(field);
+    expect(useEditor.getState().scene!.objects[0].position[0]).toBe(2);
+    const edits = useEditor.getState().past.length;
+    // 2.04 rounds to the 0.1 m snap step, i.e. back to 2: no edit, and the field must say so.
+    fireEvent.change(field, { target: { value: '2.04' } });
+    fireEvent.blur(field);
+    expect(useEditor.getState().past).toHaveLength(edits);
+    expect(field).toHaveValue(2);
+  });
   it('does not intercept typing shortcuts, but supports selection transforms and history shortcuts outside inputs', async () => {
     render(<App />);
     await screen.findByRole('button', { name: 'Select Table' });

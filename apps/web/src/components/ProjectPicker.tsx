@@ -42,7 +42,7 @@ export function ProjectPicker({
         </datalist>
       </label>
       <div className="button-row">
-        <button disabled={!projectId || disabled} onClick={() => onOpen(projectId.trim())}>
+        <button disabled={!projectId.trim() || disabled} onClick={() => onOpen(projectId.trim())}>
           Open project
         </button>
         <button disabled={!canReload || disabled} onClick={onReload}>

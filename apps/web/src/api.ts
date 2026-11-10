@@ -451,7 +451,12 @@ export class MockApi implements RoomshiftApi {
   }
   private refresh() {
     const raw = this.storage?.getItem('roomshift.mock.scene.v1');
-    if (raw) this.scene = sceneSchema.parse(JSON.parse(raw));
+    if (!raw) return;
+    try {
+      this.scene = sceneSchema.parse(JSON.parse(raw));
+    } catch {
+      // Corrupt mock storage: keep the scene already in memory rather than breaking every call.
+    }
   }
   private project(id: string) {
     this.refreshGrouped();
@@ -777,7 +782,8 @@ export async function pollJob(
 ) {
   // Meshroom's default server budget is one hour; allow time for publication too.
   const defaultTimeout = initial.kind === 'mesh-reconstruction' ? 3_900_000 : 180_000;
-  const deadline = Date.now() + (options.timeoutMs ?? defaultTimeout);
+  const budget = options.timeoutMs ?? defaultTimeout;
+  let deadline = Date.now() + budget;
   let job = initial;
   let failures = 0;
   while (true) {
@@ -801,6 +807,8 @@ export async function pollJob(
         throw new Error('The completed job has no persisted result URL.');
       return job;
     }
+    // The API runs one job at a time, so the budget covers the work, not the wait in the queue.
+    if (job.status === 'queued' && budget > 0) deadline = Date.now() + budget;
     if (Date.now() >= deadline)
       throw new Error(
         'Reconstruction timed out. The server may still be working; reopen this project to retrieve its result.',

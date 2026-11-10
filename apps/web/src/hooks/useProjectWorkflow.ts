@@ -244,7 +244,8 @@ export function useProjectWorkflow() {
     const controller = new AbortController();
     polling.current = controller;
     const { signal } = controller;
-    const deadline = Date.now() + Math.max(180_000, ids.length * 180_000);
+    const budget = Math.max(180_000, ids.length * 180_000);
+    let deadline = Date.now() + budget;
     let failures = 0;
     while (true) {
       let envelope: AssemblyEnvelope;
@@ -284,6 +285,9 @@ export function useProjectWorkflow() {
         );
         return;
       }
+      // The API runs one job at a time: waiting in the queue is not a stalled reconstruction.
+      if (!pending.some((pid) => envelope.jobs[pid]?.status === 'running'))
+        deadline = Date.now() + budget;
       if (Date.now() > deadline)
         throw new Error(
           'Reconstruction is still running. Reopen the grouped project to resume progress.',
@@ -418,20 +422,35 @@ export function useProjectWorkflow() {
         );
       polling.current?.abort();
       polling.current = new AbortController();
-      const { job: initial } = await api.reconstruct(project.project.id, {
-        ...(scaleMode === 'manual'
-          ? {
-              calibration: {
-                pointA: points[0],
-                pointB: points[1],
-                distanceMeters: toMeters(Number(distance), useEditor.getState().lengthUnit),
-              },
-            }
-          : {}),
-        ...(height === '' ? {} : { wallHeight: Number(height) }),
-        wallThickness: thickness === '' ? null : Number(thickness),
-      });
-      await pollJob(api, initial, setJob, { signal: polling.current.signal });
+      const { signal } = polling.current;
+      let initial: Job;
+      try {
+        initial = (
+          await api.reconstruct(project.project.id, {
+            ...(scaleMode === 'manual'
+              ? {
+                  calibration: {
+                    pointA: points[0],
+                    pointB: points[1],
+                    distanceMeters: toMeters(Number(distance), useEditor.getState().lengthUnit),
+                  },
+                }
+              : {}),
+            ...(height === '' ? {} : { wallHeight: Number(height) }),
+            wallThickness: thickness === '' ? null : Number(thickness),
+          })
+        ).job;
+      } catch (e) {
+        // Already running (e.g. the page was reloaded mid-job): follow that job instead of failing.
+        const running =
+          e instanceof ApiError && e.code === 'JOB_IN_PROGRESS'
+            ? (e.details as { jobId?: unknown } | null)?.jobId
+            : null;
+        if (typeof running !== 'string') throw e;
+        initial = (await api.getJob(running, signal)).job;
+        setNotice('A reconstruction was already running for this project; following its progress.');
+      }
+      await pollJob(api, initial, setJob, { signal });
       const scene = await api.getScene(project.project.id);
       useEditor.getState().load(scene);
       // Any draft predates this reconstruction; it can no longer be restored onto it.
@@ -484,8 +503,15 @@ export function useProjectWorkflow() {
       setSaving(false);
     }
     const after = useEditor.getState();
-    if (!after.error)
-      setNotice(`Saved revision ${after.assembly?.revision ?? after.scene?.revision}`);
+    if (after.error) return;
+    // The store skips the save (without an error) while a revision conflict is unresolved.
+    if (after.hasUnsaved())
+      error(
+        after.conflict || after.assemblyConflict
+          ? 'Not saved: a newer revision exists on the server. Export Scene JSON to keep your edits, then Reload.'
+          : 'Not saved: another action is still running. Try again in a moment.',
+      );
+    else setNotice(`Saved revision ${after.assembly?.revision ?? after.scene?.revision}`);
   }
 
   return {

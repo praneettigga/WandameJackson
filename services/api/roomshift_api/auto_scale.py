@@ -13,6 +13,7 @@ import numpy as np
 
 from . import ocr
 from .calibration import compute_calibration
+from .errors import ApiError
 from .ocr import Label
 from .parser import estimate_thickness_px, normalize_drawing
 
@@ -192,7 +193,10 @@ def estimate_scale(gray: np.ndarray) -> dict:
                         x, y = y, work.shape[0] - 1 - x
                     return [float(np.clip(x / sx, 0, original_w)), float(np.clip(y / sy, 0, original_h))]
                 a, b = original(span[0]), original(span[1])
-                cal = compute_calibration(a, b, meters, original_w, original_h)
+                try:
+                    cal = compute_calibration(a, b, meters, original_w, original_h)
+                except ApiError:
+                    continue  # an implausible reading is a rejected candidate, not a failed estimate
                 if not .0001 <= cal["metersPerPixel"] <= .5:
                     continue
                 # Phrase windows and rotated OCR must not count the same segment twice.
@@ -240,6 +244,9 @@ def estimate_scale(gray: np.ndarray) -> dict:
         notes = ["Approximate scale: assumes the longest image side represents 10 m because no reliable measurement or solid wall thickness was found. Use a manual reference for accurate dimensions."]
     # A visible reference segment expresses the assumed scale without pretending it was measured.
     a = [float(xs.min()), float(np.median(ys))] if xs.size else [0., 0.]
-    b = [float(xs.max()), a[1]] if xs.size and xs.max() > xs.min() else [float(max(1, original_w)), a[1]]
+    # The reference must span at least one pixel; otherwise show the scale across the image width.
+    b = [float(xs.max()), a[1]] if xs.size and xs.max() - xs.min() >= 1 else [float(max(1, original_w)), a[1]]
+    if b[0] - a[0] < 1:
+        a[0] = 0.
     cal = compute_calibration(a, b, (b[0] - a[0]) * mpp, original_w, original_h)
     return {**cal, "method": method, "notes": notes + warnings}

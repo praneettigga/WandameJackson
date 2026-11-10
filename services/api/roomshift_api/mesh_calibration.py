@@ -186,4 +186,15 @@ def save_calibration(storage, project_id, body):
         except BaseException:
             shutil.rmtree(output, ignore_errors=True)
             raise
+        discard_calibrations(root, keep=revision)
         return mesh_response(result)
+
+
+def discard_calibrations(root, keep=None):
+    """Remove superseded calibrated copies (each a full GLB); only the published revision is served."""
+    folder = root/'calibrations'
+    if not folder.is_dir():
+        return
+    for child in folder.iterdir():
+        if child.is_dir() and child.name != keep:
+            shutil.rmtree(child, ignore_errors=True)

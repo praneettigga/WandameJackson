@@ -20,8 +20,8 @@ from .config import SCHEMA_VERSION
 from .errors import ApiError
 from .images import load_gray
 from .parser import PARSER_NAME, PARSER_VERSION, ParseError, parse_blueprint
-from .mesh_calibration import save_calibration
-from .storage import Storage, now_iso, read_json
+from .mesh_calibration import discard_calibrations, save_calibration
+from .storage import Storage, contained, now_iso, read_json
 from .validation import validate_scene
 
 log = logging.getLogger("roomshift.jobs")
@@ -168,10 +168,20 @@ class JobRunner:
                 raise Cancelled()
             with self.storage.project_lock(job["projectId"]):
                 project = self.storage.get_project(job["projectId"])
+                superseded = project.get("meshManifestPath")
                 project["meshManifestPath"] = f"reconstructions/{job['id']}/manifest.json"
                 project["meshManifestUrl"] = f"/api/projects/{job['projectId']}/mesh"
                 project["hasMesh"] = True
+                # Calibrations belong to the mesh they were baked from.
+                project.pop("meshCalibration", None)
                 self.storage.save_project(project)
+                # The previous mesh and its calibrated copies are no longer served; free their space.
+                # Editor snapshots are unaffected: they keep their own copy under editor-assets/.
+                discard_calibrations(root)
+                manifest_path = contained(root, superseded) if superseded else None
+                previous = manifest_path.parent if manifest_path else None
+                if previous and previous.parent == (root / "reconstructions").resolve() and previous.name != job["id"]:
+                    shutil.rmtree(previous, ignore_errors=True)
         # The mesh is published; baking the demo calibration (a large GLB) must not hold the job lock,
         # and a failure there must not report the published mesh as failed.
         warnings = []
@@ -307,7 +317,7 @@ class JobRunner:
         if cal is None:
             cal = estimate_scale(gray)
         def progress(p: float) -> None:
-            if job["id"] in self._cancel:
+            if job["id"] in self._cancel or self._stopping.is_set():
                 raise Cancelled()
             self._update(job, progress=round(0.05 + 0.85 * p, 3))
 

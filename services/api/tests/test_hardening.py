@@ -120,3 +120,23 @@ def test_cancelled_mesh_job_keeps_only_its_log(client, synthetic_worker):
     assert client.post(f'/api/jobs/{job["id"]}/cancel').status_code == 202
     assert wait_job(client, job["id"])["error"]["code"] == "JOB_CANCELLED"
     assert sorted(p.name for p in scratch.iterdir()) == ["worker.log"]
+
+
+def test_blueprint_job_is_interrupted_by_shutdown(tmp_path, monkeypatch):
+    import time
+
+    def never_finishes(gray, scale, height, thickness, progress):
+        while True:
+            progress(.1)
+            time.sleep(.01)
+    monkeypatch.setattr("roomshift_api.jobs.parse_blueprint", never_finishes)
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as c:
+        pid = c.post("/api/projects", files={"blueprint": ("plan.png", png_bytes(l_shaped_plan()), "image/png")}).json()["project"]["id"]
+        body = {"calibration": {"pointA": [10, 10], "pointB": [110, 10], "distanceMeters": 2}}
+        job_id = c.post(f"/api/projects/{pid}/reconstruct", json=body).json()["job"]["id"]
+        end = time.time() + 10
+        while c.get(f"/api/jobs/{job_id}").json()["job"]["status"] != "running" and time.time() < end:
+            time.sleep(.02)
+    job = app.state.storage.get_job(job_id)
+    assert job["status"] == "failed" and job["error"]["code"] == "INTERRUPTED"

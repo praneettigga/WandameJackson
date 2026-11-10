@@ -188,3 +188,19 @@ def test_overall_dimension_without_ticks_matches_outer_walls(monkeypatch):
     cv2.line(image, (350, 80), (650, 80), 0, 2)
     stub_labels(monkeypatch, label, image.shape)
     assert estimate_scale(image)['method'] == 'wall-thickness'
+
+
+def test_implausible_candidate_is_skipped_not_fatal(monkeypatch):
+    from roomshift_api import auto_scale
+    from roomshift_api.errors import ApiError
+    image, label = dimensioned_plan()
+    stub_labels(monkeypatch, label)
+    real, calls = auto_scale.compute_calibration, []
+    def reject_candidate(*args):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ApiError(400, 'INVALID_CALIBRATION', 'not a plausible drawing scale')
+        return real(*args)
+    monkeypatch.setattr(auto_scale, 'compute_calibration', reject_candidate)
+    cal = estimate_scale(image)
+    assert cal['method'] == 'wall-thickness' and len(calls) == 2

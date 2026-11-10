@@ -1,808 +1,107 @@
-import {
-  Component,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type MouseEvent as ReactMouseEvent,
-  type ReactNode,
-} from 'react';
-import { api, pollJob, type Job, type ProjectEnvelope } from './api';
-import type { ScaleCalibration } from './api';
-import {
-  confidenceLevel,
-  entities,
-  exportSceneJson,
-  geometryWarnings,
-  imagePoint,
-  metersPerPixel,
-  type V2,
-  type Scene,
-} from './scene';
-import { useEditor, editorScenes } from './store';
-import { BlueprintWizard, AssemblyControls, FloorViews } from './AssemblyPanel';
-import { floorsOf, exportAssemblyJson, layoutErrors, type Floor } from './assembly';
-import {
-  confidenceColors,
-  download,
-  exportGlb,
-  exportAssemblyGlb,
-  originColors,
-  originLabels,
-} from './geometry';
-import { ConfidenceChip, Inspector } from './Inspector';
-import { completeness } from './completeness';
-import { snapKindLabels, type SnapKind } from './snapping';
-import { clearDraft, restorableDraft, writeDraft } from './draft';
+import { lazy, Suspense, useState, type CSSProperties } from 'react';
+import { useShallow } from 'zustand/react/shallow';
+import { api } from './api';
+import { AssemblyControls, BlueprintWizard, FloorViews } from './AssemblyPanel';
+import { LAST_PROJECT_KEY } from './constants';
+import { ErrorBoundary, isWebglError } from './ErrorBoundary';
+import { Inspector } from './Inspector';
+import { useEditor } from './store';
 import { Viewport } from './Viewport';
-import { ComponentLibrary } from './ComponentLibrary';
-import { InfrastructurePanel, WallsToggle } from './InfrastructurePanel';
-import { loadLibrary } from './library';
-import { formatLength, fromMeters, lengthUnits, toMeters, type LengthUnit } from './units';
-import { CaptureWorkspace } from './CaptureWorkspace';
+import { AppHeader, type WorkspaceName } from './components/AppHeader';
+import { BlueprintCalibration } from './components/BlueprintCalibration';
+import { DockResizeHandle, ErrorBanner, ResizeHandle } from './components/controls';
+import { DraftBanner } from './components/DraftBanner';
+import { ProjectPicker } from './components/ProjectPicker';
+import { ReconstructionPanel } from './components/ReconstructionPanel';
+import { ReviewDock } from './components/ReviewDock';
+import { SceneExplorer } from './components/SceneExplorer';
+import { StatusBar } from './components/StatusBar';
+import { ViewOptions } from './components/ViewOptions';
+import { ViewportToolbar } from './components/ViewportToolbar';
+import { useApiHealth } from './hooks/useApiHealth';
+import { useDraftAutosave } from './hooks/useDraftAutosave';
+import { useEditorShortcuts } from './hooks/useEditorShortcuts';
+import { useProjects } from './hooks/useProjects';
+import { useProjectWorkflow } from './hooks/useProjectWorkflow';
 
-class ViewportBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
-  state = { error: null as string | null };
-  static getDerivedStateFromError(error: Error) {
-    return { error: error.message };
-  }
-  render() {
-    return this.state.error ? (
-      <div className="empty-viewport">
-        <h2>Viewport unavailable</h2>
-        <p>{this.state.error}</p>
-        <p>Enable WebGL in your browser. Scene inspection and JSON export remain available.</p>
-      </div>
-    ) : (
-      this.props.children
-    );
-  }
-}
-
-export function ErrorBanner() {
-  const error = useEditor((s) => s.error),
-    conflict = useEditor((s) => s.conflict);
-  if (!error) return null;
-  return (
-    <div className={`error-banner ${conflict ? 'conflict' : ''}`} role="alert">
-      <b>{conflict ? 'SAVE CONFLICT' : 'ACTION NEEDED'}</b>
-      <span>{error}</span>
-      <button aria-label="Dismiss error" onClick={() => useEditor.setState({ error: null })}>
-        ×
-      </button>
-    </div>
-  );
-}
-
-function UnitSelect({
-  label,
-  onChange,
-}: {
-  label: string;
-  onChange?: (from: LengthUnit, to: LengthUnit) => void;
-}) {
-  const unit = useEditor((s) => s.lengthUnit);
-  return (
-    <select
-      className="unit-select"
-      aria-label={label}
-      value={unit}
-      onChange={(e) => {
-        const next = e.target.value as LengthUnit;
-        onChange?.(unit, next);
-        useEditor.getState().setLengthUnit(next);
-      }}
-    >
-      {(Object.keys(lengthUnits) as LengthUnit[]).map((u) => (
-        <option key={u} value={u}>
-          {u}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-function ResizeHandle({
-  side,
-  onChange,
-}: {
-  side: 'left' | 'right';
-  onChange: (width: number) => void;
-}) {
-  return (
-    <div
-      className="resize-handle"
-      role="separator"
-      aria-label={`Resize ${side} panel`}
-      aria-orientation="vertical"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-          const panel =
-            side === 'left'
-              ? e.currentTarget.previousElementSibling
-              : e.currentTarget.nextElementSibling;
-          onChange(
-            (panel?.getBoundingClientRect().width ?? 260) +
-              (e.key === 'ArrowRight' ? 20 : -20) * (side === 'left' ? 1 : -1),
-          );
-        }
-      }}
-      onPointerDown={(e) => {
-        e.currentTarget.setPointerCapture(e.pointerId);
-      }}
-      onPointerMove={(e) => {
-        if (e.currentTarget.hasPointerCapture(e.pointerId))
-          onChange(side === 'left' ? e.clientX : window.innerWidth - e.clientX);
-      }}
-      onPointerUp={(e) => e.currentTarget.releasePointerCapture(e.pointerId)}
-    />
-  );
-}
-
-/** Horizontal splitter above the review dock: dragging it trades viewport height for dock height. */
-function DockResizeHandle({ onChange }: { onChange: (height: number) => void }) {
-  const dock = (el: Element) => el.nextElementSibling?.getBoundingClientRect();
-  return (
-    <div
-      className="resize-handle-row"
-      role="separator"
-      aria-label="Resize bottom panel"
-      aria-orientation="horizontal"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'ArrowUp' || e.key === 'ArrowDown')
-          onChange((dock(e.currentTarget)?.height ?? 140) + (e.key === 'ArrowUp' ? 20 : -20));
-      }}
-      onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
-      onPointerMove={(e) => {
-        const rect = dock(e.currentTarget);
-        if (e.currentTarget.hasPointerCapture(e.pointerId) && rect) onChange(rect.bottom - e.clientY);
-      }}
-      onPointerUp={(e) => e.currentTarget.releasePointerCapture(e.pointerId)}
-    />
-  );
-}
-
-function Calibration({
-  project,
-  points,
-  setPoints,
-  distance,
-  unit,
-  manual,
-  disabled,
-}: {
-  project: ProjectEnvelope;
-  points: V2[];
-  setPoints: (p: V2[]) => void;
-  distance: string;
-  unit: LengthUnit;
-  manual: boolean;
-  disabled: boolean;
-}) {
-  const [imageError, setImageError] = useState(false);
-  const [hover, setHover] = useState<V2 | null>(null);
-  useEffect(() => setImageError(false), [project]);
-  const toImage = (e: ReactMouseEvent<HTMLDivElement>) =>
-    imagePoint(
-      e.clientX,
-      e.clientY,
-      e.currentTarget.getBoundingClientRect(),
-      project.image.width,
-      project.image.height,
-    );
-  const w = project.image.width;
-  const ghost = points.length === 1 ? hover : null;
-  const ends = ghost ? [points[0], ghost] : points.length === 2 ? points : null;
-  const marks: [V2, string, boolean][] = points.map((p, i) => [p, i === 0 ? 'A' : 'B', false]);
-  if (ghost) marks.push([ghost, 'B', true]);
-  return (
-    <div className="calibration-view">
-      <div className="viewport-label">
-        <span className="live-dot" /> BLUEPRINT <span className="muted">/ ORIGINAL PIXELS</span>
-      </div>
-      <div
-        className="calibration-image"
-        onClick={(e) => {
-          const p = toImage(e);
-          if (p && manual && !disabled && !imageError) {
-            setPoints(points.length >= 2 ? [p] : [...points, p]);
-            setHover(null);
-          }
-        }}
-        onMouseMove={(e) => setHover(points.length === 1 && !imageError ? toImage(e) : null)}
-        onMouseLeave={() => setHover(null)}
-      >
-        <img
-          src={api.imageUrl(project.image.url)}
-          alt="Blueprint for two-point calibration"
-          onError={() => setImageError(true)}
-        />
-        <svg
-          viewBox={`0 0 ${project.image.width} ${project.image.height}`}
-          preserveAspectRatio="xMidYMid meet"
-          aria-hidden="true"
-        >
-          {ends && (
-            <>
-              <line
-                x1={ends[0][0]}
-                y1={ends[0][1]}
-                x2={ends[1][0]}
-                y2={ends[1][1]}
-                stroke="#e99f39"
-                strokeWidth={w / 400}
-                strokeDasharray={ghost ? `${w / 120} ${w / 200}` : undefined}
-              />
-              <text
-                x={(ends[0][0] + ends[1][0]) / 2}
-                y={(ends[0][1] + ends[1][1]) / 2 - w / 50}
-                textAnchor="middle"
-                fontSize={w / 50}
-                fontWeight="bold"
-                fill="#f0c487"
-                stroke="#171a1c"
-                strokeWidth={w / 250}
-                paintOrder="stroke"
-              >
-                {Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]).toFixed(1)} px
-                {!ghost && distance && Number(distance) > 0
-                  ? ` = ${formatLength(toMeters(Number(distance), unit), unit)}`
-                  : ''}
-              </text>
-            </>
-          )}
-          {marks.map(([[x, y], label, isGhost], i) => (
-            <g key={i} opacity={isGhost ? 0.65 : 1}>
-              <circle
-                cx={x}
-                cy={y}
-                r={w / 65}
-                fill="#f3bd63"
-                stroke="#24292b"
-                strokeWidth={w / 600}
-              />
-              <text
-                x={x}
-                y={y}
-                textAnchor="middle"
-                dominantBaseline="central"
-                fontSize={w / 55}
-                fontWeight="bold"
-                fill="#171a1c"
-              >
-                {label}
-              </text>
-            </g>
-          ))}
-        </svg>
-      </div>
-      {imageError && (
-        <div role="alert" className="image-error">
-          Blueprint could not be loaded. Check the API URL and image endpoint.
-        </div>
-      )}
-      <div className="calibration-caption">
-        {!manual
-          ? 'Automatic scale selected. Choose Manual reference to set your own measurement.'
-          : points.length === 0
-            ? 'Click the first end of a known distance.'
-            : points.length === 1
-              ? 'Now click the other end.'
-              : 'Reference set. Enter the real-world distance on the left.'}
-        <span>
-          {project.image.width} × {project.image.height} px · Image is unmodified
-        </span>
-      </div>
-    </div>
-  );
-}
+// Photo/video capture (and its mesh viewer) loads only when Mode 2 is opened.
+const CaptureWorkspace = lazy(() =>
+  import('./CaptureWorkspace').then((m) => ({ default: m.CaptureWorkspace })),
+);
 
 export default function App() {
-  const state = useEditor();
-  const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
-  const addFiles = useRef(false);
-  const [exportScope, setExportScope] = useState<'all' | 'floor'>('all');
-  const [inputMode, setInputMode] = useState<'blueprint' | 'capture'>('blueprint');
+  const workflow = useProjectWorkflow();
+  const {
+    inputMode,
+    setInputMode,
+    project,
+    projectId,
+    setProjectId,
+    points,
+    setPoints,
+    distance,
+    scaleMode,
+    automaticScale,
+    working,
+    saving,
+    notice,
+    setNotice,
+    showBlueprint,
+    setShowBlueprint,
+    draftOffer,
+    setDraftOffer,
+    error,
+    guarded,
+    discard,
+    loadProject,
+    loadCaptureScene,
+    reconstructGroup,
+    save,
+  } = workflow;
+  const { health, ensureReady } = useApiHealth();
+  const { projects, refresh: refreshProjects } = useProjects();
+  useDraftAutosave();
+  useEditorShortcuts(inputMode);
+  const state = useEditor(
+    useShallow((s) => ({
+      scene: s.scene,
+      assembly: s.assembly,
+      workspace: s.workspace,
+      busy: s.busy,
+      conflict: s.conflict,
+      lengthUnit: s.lengthUnit,
+    })),
+  );
+  const [wizard, setWizard] = useState<{ files: File[]; addToCurrent: boolean } | null>(null);
   const [captureMeshId, setCaptureMeshId] = useState<string | null>(null);
-  const [project, setProject] = useState<ProjectEnvelope | null>(null);
-  const [points, setPoints] = useState<V2[]>([]),
-    [distance, setDistance] = useState('2');
-  const [scaleMode, setScaleMode] = useState<'auto' | 'manual'>('auto');
-  const [automaticScale, setAutomaticScale] = useState<ScaleCalibration | null>(null);
-  const [findingScale, setFindingScale] = useState(false);
-  const [scaleError, setScaleError] = useState('');
-  async function findScale(id: string) {
-    setFindingScale(true);
-    setAutomaticScale(null);
-    setScaleError('');
-    try {
-      const result = await api.getScale(id);
-      setAutomaticScale(result.calibration);
-    } catch (e) {
-      setScaleError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setFindingScale(false);
-    }
-  }
-  const [height, setHeight] = useState(''),
-    [thickness, setThickness] = useState('');
-  const [job, setJob] = useState<Job | null>(null),
-    [working, setWorking] = useState(false);
-  const [health, setHealth] = useState('Checking API'),
-    [projectId, setProjectId] = useState(localStorage.getItem('roomshift.lastProject') ?? '');
-  const [dockHeight, setDockHeight] = useState<number | null>(null);
+  const [captureBusy, setCaptureBusy] = useState(false);
   const [leftWidth, setLeftWidth] = useState(260),
     [rightWidth, setRightWidth] = useState(286);
-  const [notice, setNotice] = useState(''),
-    [showBlueprint, setShowBlueprint] = useState(true);
-  const [draftOffer, setDraftOffer] = useState<ReturnType<typeof restorableDraft>>(null);
-  const [projects, setProjects] = useState<ProjectEnvelope[]>([]);
-  const refreshProjects = () =>
-    api
-      .listProjects()
-      .then((r) => setProjects(r.projects))
-      .catch(() => setProjects([])); // older backends have no list endpoint; the ID field still works
-  useEffect(() => {
-    void refreshProjects();
-  }, []);
-  // Autosave: mirror unsaved edits to a local draft (debounced); clear it once saved or discarded.
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const unsubscribe = useEditor.subscribe((s, prev) => {
-      if (s.scene && s.dirty && s.scene !== prev.scene) {
-        clearTimeout(timer);
-        const scene = s.scene;
-        timer = setTimeout(() => writeDraft(scene), 800);
-      } else if (prev.dirty && !s.dirty && prev.scene) {
-        clearTimeout(timer);
-        clearDraft(prev.scene.id);
-      }
-    });
-    return () => {
-      clearTimeout(timer);
-      unsubscribe();
-    };
-  }, []);
-  const polling = useRef<AbortController | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const error = (e: unknown) =>
-    useEditor.setState({ error: e instanceof Error ? e.message : String(e) });
-  async function refreshApiHealth() {
-    const result = await api.health();
-    if (result.status !== 'ok' || result.schemaVersion !== '0.1.0') {
-      setHealth('API version mismatch');
-      throw new Error('The API version does not match this web app.');
-    }
-    setHealth('API connected');
-  }
-  async function ensureApiReady() {
-    try {
-      await refreshApiHealth();
-    } catch (cause) {
-      setHealth('API offline');
-      const detail = cause instanceof Error ? ` ${cause.message}` : '';
-      throw new Error(
-        `The API is unavailable. Start the backend from services/api using the README setup instructions, wait for the API to connect, then retry.${detail}`,
-      );
-    }
-  }
-  const guarded = async (action: () => Promise<void>) => {
-    if (useEditor.getState().busy) return;
-    setWorking(true);
-    useEditor.setState({ error: null, busy: true });
-    try {
-      await action();
-    } catch (e) {
-      error(e);
-    } finally {
-      useEditor.setState({ busy: false });
-      setWorking(false);
-    }
-  };
-  const discard = () =>
-    !useEditor.getState().hasUnsaved() ||
-    window.confirm(
-      'Discard unsaved local edits? Export Scene JSON first if you want to keep them.',
-    );
-  async function loadProject(id: string) {
-    if (id.startsWith('a_')) {
-      const envelope = await api.getAssembly(id);
-      state.loadAssembly(envelope);
-      setProjectId(id);
-      localStorage.setItem('roomshift.lastProject', id);
-      setShowBlueprint(false);
-      setNotice('Grouped project loaded. Floors keep independent scales and edits.');
-      const pending = Object.values(envelope.jobs).filter(
-        (j) => j.status === 'queued' || j.status === 'running',
-      );
-      if (pending.length)
-        await trackAssembly(
-          id,
-          pending.map((j) => j.projectId),
-        );
-      return;
-    }
-    if (!api.mock) {
-      const candidate = await api.getCapture(id);
-      if (candidate.image === null) {
-        if (!candidate.project.hasScene)
-          throw new Error(
-            'Open this capture from Photos & video, then choose Edit in 3D workspace.',
-          );
-        loadCaptureScene(await api.getScene(id));
-        return;
-      }
-    }
-    const envelope = await api.getProject(id);
-    const scene = envelope.project.hasScene ? await api.getScene(id) : null;
-    state.load(scene);
-    setDraftOffer(scene ? restorableDraft(scene) : null);
-    setJob(null);
-    setShowBlueprint(true);
-    setHeight('');
-    setThickness('');
-    setProject(envelope);
-    setAutomaticScale(null);
-    setScaleMode(scene && !scene.source.calibration.method ? 'manual' : 'auto');
-    if (scene?.source.calibration.method) setAutomaticScale(scene.source.calibration);
-    else if (!scene) await findScale(id);
-    setProjectId(id);
-    localStorage.setItem('roomshift.lastProject', id);
-    setPoints(scene ? [scene.source.calibration.pointA, scene.source.calibration.pointB] : []);
-    if (scene) {
-      setDistance(
-        String(
-          fromMeters(scene.source.calibration.distanceMeters, useEditor.getState().lengthUnit),
-        ),
-      );
-      useEditor.setState({ workspace: 'Edit' });
-    }
-    setNotice(
-      scene
-        ? `Loaded revision ${scene.revision}`
-        : 'Project loaded. Reconstruction will use automatic scale.',
-    );
-  }
-  function loadCaptureScene(scene: Scene) {
-    state.load(scene);
-    setDraftOffer(restorableDraft(scene));
-    setProject(null);
-    setProjectId(scene.id);
-    localStorage.setItem('roomshift.lastProject', scene.id);
-    setJob(null);
-    setShowBlueprint(false);
-    setPoints([]);
-    setAutomaticScale(null);
-    setInputMode('blueprint');
-    useEditor.setState({
-      workspace: 'Edit',
-      selectedId: scene.objects.find((o) => o.assetUrl)?.id ?? null,
-    });
-    setNotice(
-      scene.source.capture?.representation === 'layout'
-        ? 'Editable demo layout loaded. Select walls, doors, windows or furniture to edit them.'
-        : 'Capture loaded in the editor. Transform the scan, measure surfaces, and add furniture or walls. The scan is not segmented into individual objects.',
-    );
-  }
-  useEffect(() => {
-    void refreshApiHealth().catch(() => setHealth('API offline'));
-    api
-      .health()
-      .then((result) =>
-        setHealth(
-          result.status === 'ok' && result.schemaVersion === '0.1.0'
-            ? 'API connected'
-            : 'API version mismatch',
-        ),
-      )
-      .catch(() => setHealth('API offline'));
-    void loadLibrary();
-    if (api.mock) void guarded(() => loadProject('demo-room'));
-    return () => polling.current?.abort();
-    // Startup only; subsequent loads are explicit to protect local edits.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  useEffect(() => {
-    if (!state.assembly || !state.activeProjectId) return;
-    const id = state.activeProjectId;
-    const floor = floorsOf(state.assembly).find((f) => f.projectId === id)!;
-    setProject(state.projects[id]);
-    const scene = editorScenes(state)[id];
-    const calibration = floor.settings.calibration ?? scene?.source.calibration;
-    setPoints(calibration ? [calibration.pointA, calibration.pointB] : []);
-    setDistance(String(calibration?.distanceMeters ?? 2));
-    setScaleMode(
-      floor.settings.scaleMode ??
-        (floor.settings.calibration || (scene && !scene.source.calibration.method)
-          ? 'manual'
-          : 'auto'),
-    );
-    setAutomaticScale(scene?.source.calibration ?? null);
-    setScaleError('');
-    setHeight(floor.settings.wallHeight == null ? '' : String(floor.settings.wallHeight));
-    setThickness(floor.settings.wallThickness == null ? '' : String(floor.settings.wallThickness));
-    setShowBlueprint(!scene);
-    setJob(state.jobs[id] ?? null);
-    // Floor controls must not reset measurements on unrelated edits.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.activeProjectId, state.assembly?.id]);
-  async function trackAssembly(id: string, ids: string[]) {
-    const deadline = Date.now() + Math.max(180_000, ids.length * 180_000);
-    while (true) {
-      const envelope = await api.getAssembly(id);
-      state.refreshAssembly(envelope);
-      const pending = ids.filter((pid) =>
-        ['queued', 'running'].includes(envelope.jobs[pid]?.status),
-      );
-      if (!pending.length) {
-        const failed = ids.filter((pid) => envelope.jobs[pid]?.status === 'failed');
-        const scenes = editorScenes(useEditor.getState());
-        const first = floorsOf(envelope.assembly).find((f) => scenes[f.projectId]);
-        if (first && !useEditor.getState().scene) {
-          // Polling owns the busy flag; activate the first successful floor once the batch finishes.
-          useEditor.setState({ busy: false });
-          useEditor.getState().activateFloor(first.projectId);
-          useEditor.setState({ busy: true });
-        }
-        if (first) {
-          useEditor.setState({ workspace: 'Edit' });
-          setShowBlueprint(false);
-        }
-        setNotice(
-          failed.length
-            ? `${failed.length} floor(s) failed. Successful floors are available; select a failed floor to retry.`
-            : 'Buildings and floors reconstructed. Review the scale and placement assumptions.',
-        );
-        return;
-      }
-      if (Date.now() > deadline)
-        throw new Error(
-          'Reconstruction is still running. Reopen the grouped project to resume progress.',
-        );
-      if (polling.current?.signal.aborted) return;
-      await new Promise((resolve) => setTimeout(resolve, api.mock ? 80 : 800));
-      // Mock jobs advance when polled; real jobs report the worker state.
-      await Promise.all(pending.map((pid) => api.getJob(envelope.jobs[pid].id)));
-    }
-  }
-  function updateFloorSettings(floor: Floor) {
-    floor.settings = {
-      scaleMode,
-      calibration:
-        scaleMode === 'manual' && points.length === 2
-          ? { pointA: points[0], pointB: points[1], distanceMeters: Number(distance) }
-          : null,
-      wallHeight: height === '' ? null : Number(height),
-      wallThickness: thickness === '' ? null : Number(thickness),
-    };
-  }
-  useEffect(() => {
-    const s = useEditor.getState();
-    if (!s.assembly || s.busy) return;
-    const floor = floorsOf(s.assembly).find((f) => f.projectId === s.activeProjectId);
-    if (!floor) return;
-    if (
-      (height &&
-        (!Number.isFinite(Number(height)) || Number(height) <= 0 || Number(height) > 20)) ||
-      (thickness &&
-        (!Number.isFinite(Number(thickness)) || Number(thickness) <= 0 || Number(thickness) > 2)) ||
-      (scaleMode === 'manual' && (!Number.isFinite(Number(distance)) || Number(distance) <= 0))
-    )
-      return;
-    const updated = structuredClone(floor);
-    updateFloorSettings(updated);
-    const current = {
-      scaleMode: floor.settings.scaleMode ?? 'auto',
-      calibration: floor.settings.calibration ?? null,
-      wallHeight: floor.settings.wallHeight ?? null,
-      wallThickness: floor.settings.wallThickness ?? null,
-    };
-    if (JSON.stringify(current) !== JSON.stringify(updated.settings))
-      s.updateAssembly((a) => {
-        floorsOf(a).find((f) => f.projectId === floor.projectId)!.settings = updated.settings;
-      });
-    // Only user changes to calibration fields should update the active floor request.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scaleMode, points, distance, height, thickness]);
-  async function reconstructGroup(ids?: string[]) {
-    const current = useEditor.getState();
-    if (!current.assembly || current.busy) return;
-    const targets =
-      ids ??
-      floorsOf(current.assembly)
-        .filter(
-          (f) =>
-            !editorScenes(current)[f.projectId] || current.jobs[f.projectId]?.status === 'failed',
-        )
-        .map((f) => f.projectId);
-    if (
-      targets.some(
-        (id) => (id === current.scene?.id && current.dirty) || current.floorStates[id]?.dirty,
-      ) &&
-      !discard()
-    )
-      return;
-    // Copy the active calibration controls into the saved floor request.
-    const next = structuredClone(current.assembly);
-    const active = floorsOf(next).find((f) => f.projectId === current.activeProjectId);
-    if (active && (!ids || ids.includes(active.projectId))) updateFloorSettings(active);
-    await guarded(async () => {
-      const saved = await api.saveAssembly(next);
-      useEditor.setState({ assembly: saved.assembly, assemblyDirty: false });
-      const result = await api.reconstructAssembly(saved.assembly.id, ids);
-      const submittedIds = result.submittedJobs.map((j) => j.projectId);
-      if (submittedIds.length) {
-        const floorStates = { ...useEditor.getState().floorStates };
-        submittedIds.forEach((id) => {
-          delete floorStates[id];
-        });
-        useEditor.setState({
-          floorStates,
-          ...(submittedIds.includes(current.activeProjectId ?? '')
-            ? { dirty: false, past: [], future: [] }
-            : {}),
-        });
-      }
-      state.refreshAssembly(result);
-      if (result.errors.length)
-        useEditor.setState({
-          error: result.errors.map((e) => `${e.projectId}: ${e.error.message}`).join(' '),
-        });
-      polling.current?.abort();
-      polling.current = new AbortController();
-      await trackAssembly(
-        saved.assembly.id,
-        result.submittedJobs.map((j) => j.projectId),
-      );
-    });
-  }
-  useEffect(() => {
-    const beforeUnload = (e: BeforeUnloadEvent) => {
-      if (useEditor.getState().hasUnsaved()) {
-        e.preventDefault();
-        e.returnValue = '';
-      }
-    };
-    const key = (e: KeyboardEvent) => {
-      if (inputMode !== 'blueprint') return;
-      const target = e.target;
-      if (
-        (target instanceof HTMLElement &&
-          target.closest('input, textarea, select, [contenteditable="true"]')) ||
-        e.altKey
-      )
-        return;
-      const s = useEditor.getState();
-      if (e.key === 'Escape') {
-        if (document.pointerLockElement) document.exitPointerLock();
-        useEditor.setState({
-          workspace: s.workspace === 'Explore' ? 'Edit' : s.workspace,
-          selectedId: null,
-          measure: false,
-          tool: 'select',
-        });
-        return;
-      }
-      // Works while walking too: look through the walls at the services.
-      if (e.key.toLowerCase() === 'i' && !e.ctrlKey && !e.metaKey && s.scene) {
-        useEditor.setState({ seeThrough: !s.seeThrough, serviceFocus: null });
-        return;
-      }
-      if (s.workspace === 'Explore' || s.busy) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        if (e.shiftKey) s.redo();
-        else s.undo();
-        return;
-      }
-      if (e.ctrlKey || e.metaKey) return;
-      if (e.key.toLowerCase() === 'g') useEditor.setState({ mode: 'translate', measure: false });
-      if (e.key.toLowerCase() === 'r') useEditor.setState({ mode: 'rotate', measure: false });
-      if (e.key.toLowerCase() === 's') useEditor.setState({ mode: 'scale', measure: false });
-      const tools = { w: 'wall', d: 'door', n: 'window' } as const;
-      const tool = tools[e.key.toLowerCase() as keyof typeof tools];
-      if (tool && s.scene) {
-        useEditor.setState({ tool: s.tool === tool ? 'select' : tool, measure: false });
-        return;
-      }
-      if (e.key.toLowerCase() === 'f') {
-        e.preventDefault();
-        useEditor.setState({ frame: s.frame + 1 });
-      }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        e.preventDefault();
-        s.remove();
-      }
-    };
-    window.addEventListener('beforeunload', beforeUnload);
-    window.addEventListener('keydown', key);
-    return () => {
-      window.removeEventListener('beforeunload', beforeUnload);
-      window.removeEventListener('keydown', key);
-    };
-  }, [inputMode]);
-  let scale: number | null = null;
-  try {
-    if (scaleMode === 'auto') scale = automaticScale?.metersPerPixel ?? null;
-    else if (points.length === 2)
-      scale = metersPerPixel(points[0], points[1], toMeters(Number(distance), state.lengthUnit));
-  } catch {
-    /* Inline readiness below. */
-  }
-  const warnings = [
-    ...(state.scene
-      ? [...state.scene.reconstruction.warnings, ...geometryWarnings(state.scene)]
-      : []),
-    ...(state.assembly
-      ? [
-          'Floors are centered automatically; verify alignment. Slabs assume 0.20 m and buildings start 3 m apart.',
-          ...layoutErrors(state.assembly, editorScenes(state)),
-          ...floorsOf(state.assembly)
-            .filter((f) => !editorScenes(state)[f.projectId])
-            .map((f) => `${f.name}: not reconstructed; excluded from 3D geometry and GLB export.`),
-        ]
-      : []),
-  ];
-  const scored = state.scene
-    ? entities(state.scene).filter((e) => e.provenance.confidence !== null)
-    : [];
-  const issues = state.scene ? completeness(state.scene) : [];
-  const review = scored
-    .filter((e) => confidenceLevel(e.provenance.confidence) === 'low')
-    .sort((a, b) => a.provenance.confidence! - b.provenance.confidence!);
-  const inferredCount = state.scene
-    ? entities(state.scene).filter((e) => e.provenance.origin === 'inferred').length
-    : 0;
+  const [dockHeight, setDockHeight] = useState<number | null>(null);
+
   const disabled = working || state.busy;
   const renderBlueprint = state.workspace === 'Reconstruct' && project && showBlueprint;
-  async function reconstruct() {
-    if (state.assembly) {
-      await reconstructGroup();
+  const openCaptureInEditor = async (id: string) => {
+    if (!discard()) return;
+    await guarded(async () => loadCaptureScene(await api.openCaptureScene(id)));
+  };
+  const selectWorkspace = (name: WorkspaceName) => {
+    if (document.pointerLockElement) document.exitPointerLock();
+    if (inputMode === 'capture' && name !== 'Reconstruct') {
+      const id = captureMeshId ?? state.scene?.id;
+      if (!id) return;
+      void (async () => {
+        if (state.scene?.id === id && state.scene.source.capture) setInputMode('blueprint');
+        else await openCaptureInEditor(id);
+        // Opening can be declined (unsaved edits) or fail; only then is there nothing to show.
+        if (useEditor.getState().scene?.id === id)
+          useEditor.setState({ workspace: name, measure: false });
+      })();
       return;
     }
-    if (!project || (scaleMode === 'manual' && !scale) || !discard()) return;
-    await guarded(async () => {
-      if (
-        (height !== '' &&
-          (!Number.isFinite(Number(height)) || Number(height) <= 0 || Number(height) > 20)) ||
-        (thickness !== '' &&
-          (!Number.isFinite(Number(thickness)) || Number(thickness) <= 0 || Number(thickness) > 2))
-      )
-        throw new Error(
-          'Wall height must be between 0 and 20 m, and thickness between 0 and 2 m (exclusive of 0).',
-        );
-      polling.current?.abort();
-      polling.current = new AbortController();
-      const { job: initial } = await api.reconstruct(project.project.id, {
-        ...(scaleMode === 'manual'
-          ? {
-              calibration: {
-                pointA: points[0],
-                pointB: points[1],
-                distanceMeters: toMeters(Number(distance), state.lengthUnit),
-              },
-            }
-          : {}),
-        ...(height === '' ? {} : { wallHeight: Number(height) }),
-        wallThickness: thickness === '' ? null : Number(thickness),
-      });
-      await pollJob(api, initial, setJob, { signal: polling.current.signal });
-      const scene = await api.getScene(project.project.id);
-      state.load(scene);
-      if (scaleMode === 'auto') {
-        setAutomaticScale(scene.source.calibration);
-        setScaleError('');
-      }
-      useEditor.setState({ workspace: 'Edit' });
-      setNotice(
-        api.mock
-          ? 'Synthetic fixture loaded. No image analysis was performed.'
-          : 'Reconstruction loaded. Review warnings and assumptions.',
-      );
-    });
-  }
+    useEditor.setState({ workspace: name, measure: false });
+  };
+
   return (
     <div
       className={`app-shell ${inputMode === 'capture' ? 'capture-mode' : ''}`}
@@ -810,133 +109,28 @@ export default function App() {
         { '--left-panel': `${leftWidth}px`, '--right-panel': `${rightWidth}px` } as CSSProperties
       }
     >
-      <header className="app-header">
-        <a className="brand" href="#" aria-label="RoomShift">
-          <span className="brand-mark">▱</span>ROOMSHIFT<span className="version">/ 0.1</span>
-        </a>
-        <div className="project-title">
-          {inputMode === 'capture'
-            ? 'Room capture'
-            : (state.assembly?.name ??
-              state.scene?.name ??
-              project?.project.name ??
-              'Untitled space')}
-          {state.dirty && <span title="Unsaved changes" className="dirty-dot" />}
-        </div>
-        <div className="header-actions">
-          {api.mock && <span className="mock-badge">MOCK DATA</span>}
-          <button
-            disabled={
-              (!state.scene && !state.assembly) || disabled || (!state.assembly && state.conflict)
-            }
-            className="primary small"
-            onClick={() => {
-              void state.save(api).then(() => {
-                if (!useEditor.getState().error)
-                  setNotice(
-                    `Saved revision ${useEditor.getState().assembly?.revision ?? useEditor.getState().scene?.revision}`,
-                  );
-              });
-            }}
-          >
-            {state.busy && !working ? 'Saving…' : state.assembly ? 'Save project' : 'Save scene'}
-          </button>
-        </div>
-      </header>
-      <nav className="workspace-bar" aria-label="Workspaces">
-        <div className="workspace-tabs">
-          {(['Reconstruct', 'Edit', 'Inspect', 'Explore'] as const).map((name, i) => (
-            <button
-              key={name}
-              aria-label={name}
-              className={state.workspace === name ? 'active' : ''}
-              disabled={
-                name !== 'Reconstruct' &&
-                !(inputMode === 'capture' && captureMeshId) &&
-                !state.scene
-              }
-              onClick={() => {
-                if (document.pointerLockElement) document.exitPointerLock();
-                if (inputMode === 'capture' && name !== 'Reconstruct') {
-                  const id = captureMeshId ?? state.scene?.id;
-                  if (!id) return;
-                  void (async () => {
-                    if (state.scene?.id === id && state.scene.source.capture)
-                      setInputMode('blueprint');
-                    else {
-                      if (!discard()) return;
-                      await guarded(async () => loadCaptureScene(await api.openCaptureScene(id)));
-                    }
-                    useEditor.setState({ workspace: name, measure: false });
-                  })();
-                  return;
-                }
-                useEditor.setState({ workspace: name, measure: false });
-              }}
-            >
-              <span>0{i + 1}</span>
-              {name}
-            </button>
-          ))}
-        </div>
-        <div className="workspace-info">
-          <span className={health === 'API connected' ? 'online-dot' : 'offline-dot'} />
-          {api.mock ? 'Local fixture service' : health}
-        </div>
-      </nav>
+      <AppHeader
+        inputMode={inputMode}
+        projectName={project?.project.name}
+        health={health}
+        saving={saving}
+        saveDisabled={
+          (!state.scene && !state.assembly) || disabled || (!state.assembly && state.conflict)
+        }
+        onSave={() => void save()}
+        canOpenWorkspace={(name) =>
+          name === 'Reconstruct' || (inputMode === 'capture' && !!captureMeshId) || !!state.scene
+        }
+        onWorkspace={selectWorkspace}
+      />
       <ErrorBanner />
-      {draftOffer && state.scene?.id === draftOffer.draft.scene.id && (
-        <div className="draft-banner" role="status">
-          <b>Unsaved draft</b>
-          <span>
-            {draftOffer.stale
-              ? `Local edits from ${new Date(draftOffer.draft.savedAt).toLocaleString()} are based on revision ${draftOffer.draft.baseRevision}, but the server now has revision ${state.scene.revision}. Restoring them would conflict; download them as JSON instead.`
-              : `Local edits from ${new Date(draftOffer.draft.savedAt).toLocaleString()} were not saved.`}
-          </span>
-          {draftOffer.stale ? (
-            <button
-              onClick={() =>
-                download(
-                  JSON.stringify(draftOffer.draft.scene, null, 2),
-                  'application/json',
-                  `${draftOffer.draft.scene.id}-draft.scene.json`,
-                )
-              }
-            >
-              Download draft
-            </button>
-          ) : (
-            <button
-              className="primary small"
-              onClick={() => {
-                useEditor.setState({
-                  scene: draftOffer.draft.scene,
-                  dirty: true,
-                  past: [],
-                  future: [],
-                });
-                setDraftOffer(null);
-              }}
-            >
-              Restore
-            </button>
-          )}
-          <button
-            onClick={() => {
-              clearDraft(draftOffer.draft.scene.id);
-              setDraftOffer(null);
-            }}
-          >
-            Discard
-          </button>
-        </div>
-      )}
+      <DraftBanner draftOffer={draftOffer} setDraftOffer={setDraftOffer} onError={error} />
       <div className="input-mode" role="group" aria-label="Input mode">
         {(['blueprint', 'capture'] as const).map((mode) => (
           <button
             key={mode}
             aria-pressed={inputMode === mode}
-            disabled={disabled}
+            disabled={disabled || captureBusy}
             onClick={() => {
               if (document.pointerLockElement) document.exitPointerLock();
               setInputMode(mode);
@@ -947,13 +141,13 @@ export default function App() {
         ))}
       </div>
       {inputMode === 'capture' && (
-        <CaptureWorkspace
-          onMeshReady={setCaptureMeshId}
-          onOpenEditor={async (id) => {
-            if (!discard()) return;
-            await guarded(async () => loadCaptureScene(await api.openCaptureScene(id)));
-          }}
-        />
+        <Suspense fallback={<p className="hint">Loading capture workspace…</p>}>
+          <CaptureWorkspace
+            onMeshReady={setCaptureMeshId}
+            onBusyChange={setCaptureBusy}
+            onOpenEditor={openCaptureInEditor}
+          />
+        </Suspense>
       )}
       <main
         className="editor-layout"
@@ -977,381 +171,32 @@ export default function App() {
               </p>
             </section>
           ) : state.workspace === 'Reconstruct' ? (
-            <>
-              <div className="panel-heading">
-                RECONSTRUCTION <span>01—03</span>
-              </div>
-              <section>
-                <h4>
-                  <span className="step">01</span> SOURCE BLUEPRINT
-                </h4>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  multiple
-                  accept="image/png,image/jpeg"
-                  className="sr-only"
-                  aria-label="Upload blueprint"
-                  onChange={(e) => {
-                    const files = Array.from(e.target.files ?? []);
-                    e.target.value = '';
-                    if (!files.length) return;
-                    if (files.length > 20) {
-                      error(new Error('Select at most 20 blueprints per upload batch.'));
-                      return;
-                    }
-                    if (
-                      files.some(
-                        (f) =>
-                          !['image/png', 'image/jpeg'].includes(f.type) ||
-                          f.size > 20 * 1024 * 1024,
-                      )
-                    ) {
-                      error(new Error('Choose PNG/JPEG images, each 20 MB or smaller.'));
-                      return;
-                    }
-                    if (files.length > 1 || state.assembly || addFiles.current) {
-                      if (!addFiles.current && !state.assembly && !discard()) return;
-                      setPendingFiles(files);
-                      useEditor.setState({ busy: true });
-                      return;
-                    }
-                    const file = files[0];
-                    if (!discard()) return;
-                    void guarded(async () => {
-                      if (!['image/png', 'image/jpeg'].includes(file.type))
-                        throw new Error('Choose a PNG or JPEG blueprint.');
-                      if (file.size > 20 * 1024 * 1024)
-                        throw new Error('Blueprints must be 20 MB or smaller.');
-                      const next = await api.createProject(file);
-                      setProject(next);
-                      setProjectId(next.project.id);
-                      localStorage.setItem('roomshift.lastProject', next.project.id);
-                      setPoints([]);
-                      setDistance(String(fromMeters(2, state.lengthUnit)));
-                      setScaleMode('auto');
-                      setAutomaticScale(null);
-                      setJob(null);
-                      setShowBlueprint(true);
-                      state.load(null);
-                      setHeight('');
-                      setThickness('');
-                      await findScale(next.project.id);
-                      setNotice(
-                        api.mock
-                          ? 'Mock mode always displays the committed fixture; your image is not reconstructed.'
-                          : 'Blueprint uploaded. Reconstruct space will use automatic scale; you can override it with a manual reference.',
-                      );
-                    });
-                  }}
-                />
-                <button
-                  className="upload-zone"
-                  disabled={disabled}
-                  onClick={() => {
-                    addFiles.current = Boolean(state.assembly);
-                    fileRef.current?.click();
-                  }}
-                >
-                  <span>↥</span>
-                  <b>
-                    {state.assembly
-                      ? 'Add blueprints'
-                      : project
-                        ? 'Replace blueprint'
-                        : 'Choose blueprints'}
-                  </b>
-                  <small>PNG / JPG · up to 20 files · 20 MB each</small>
-                </button>
-                {project && (
-                  <>
-                    {!state.assembly && (
-                      <button
-                        className="wide"
-                        disabled={disabled}
-                        onClick={() => {
-                          addFiles.current = true;
-                          fileRef.current?.click();
-                        }}
-                      >
-                        Add blueprints / floors
-                      </button>
-                    )}
-                    <p className="hint">
-                      {project.project.name}
-                      <br />
-                      {project.image.width} × {project.image.height} px
-                    </p>
-                    <button className="wide" onClick={() => setShowBlueprint(!showBlueprint)}>
-                      {showBlueprint ? 'Show 3D viewport' : 'Show blueprint'}
-                    </button>
-                  </>
-                )}
-                {api.mock && (
-                  <p className="mock-note">
-                    Synthetic contract fixture. Upload and reconstruct simulate the workflow; no AI
-                    or image parsing runs.
-                  </p>
-                )}
-              </section>
-              <section>
-                <h4>
-                  <span className="step">02</span> SET THE SCALE
-                </h4>
-                <label className="field">
-                  Scale method
-                  <select
-                    value={scaleMode}
-                    disabled={disabled}
-                    onChange={(e) => {
-                      const mode = e.target.value as 'auto' | 'manual';
-                      setScaleMode(mode);
-                      if (mode === 'auto' && project && !automaticScale)
-                        void guarded(() => findScale(project.project.id));
-                    }}
-                  >
-                    <option value="auto">Automatic (default)</option>
-                    <option value="manual">Manual reference</option>
-                  </select>
-                </label>
-                {scaleMode === 'auto' ? (
-                  <>
-                    <p className="hint" role="status">
-                      {findingScale
-                        ? 'Reading blueprint measurements…'
-                        : !project
-                          ? 'Upload a blueprint to assign its scale automatically.'
-                          : automaticScale?.method === 'printed-dimension'
-                            ? 'Using a printed measurement'
-                            : automaticScale
-                              ? api.mock
-                                ? 'Synthetic fixture scale'
-                                : 'Estimated scale · no verified measurement'
-                              : 'Scale preview unavailable. Reconstruct space will calculate the scale automatically.'}
-                    </p>
-                    {scaleError && <p className="hint">{scaleError}</p>}
-                    {automaticScale?.notes?.map((note, i) => (
-                      <p className="hint" key={i}>
-                        {note}
-                      </p>
-                    ))}
-                    {project && !automaticScale && !findingScale && (
-                      <button
-                        disabled={disabled}
-                        onClick={() => void guarded(() => findScale(project.project.id))}
-                      >
-                        Retry automatic scale
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <p className="hint">
-                      Click two endpoints of a known measurement in the blueprint.
-                    </p>
-                    <div className="point-list">
-                      {[0, 1].map((i) => (
-                        <div key={i}>
-                          <span>{i === 0 ? 'A' : 'B'}</span>
-                          <code>
-                            {points[i]
-                              ? `${points[i][0].toFixed(1)}, ${points[i][1].toFixed(1)} px`
-                              : 'Select a point'}
-                          </code>
-                        </div>
-                      ))}
-                    </div>
-                    <label className="field">
-                      Known distance
-                      <span className="unit-input">
-                        <input
-                          aria-label="Known distance"
-                          type="number"
-                          min="0.001"
-                          step={{ m: 0.1, cm: 1, mm: 10, ft: 0.5, in: 1 }[state.lengthUnit]}
-                          value={distance}
-                          onChange={(e) => setDistance(e.target.value)}
-                        />
-                        <UnitSelect
-                          label="Known distance unit"
-                          onChange={(from, to) => {
-                            if (distance !== '' && Number.isFinite(Number(distance)))
-                              setDistance(String(fromMeters(toMeters(Number(distance), from), to)));
-                          }}
-                        />
-                      </span>
-                    </label>
-                    <button
-                      className="text-button"
-                      disabled={!points.length || disabled}
-                      onClick={() => setPoints([])}
-                    >
-                      Reset reference points
-                    </button>
-                  </>
-                )}
-                <div className="scale-result">
-                  <span>METRES / PIXEL</span>
-                  <b>{scale ? scale.toFixed(6) : '—'}</b>
-                </div>
-              </section>
-              <section>
-                <h4>
-                  <span className="step">03</span> RECONSTRUCT
-                </h4>
-                <label className="field">
-                  Wall height (m)
-                  <input
-                    type="number"
-                    min="0.1"
-                    max="20"
-                    step="0.1"
-                    placeholder="Assumed: 2.7 m"
-                    value={height}
-                    onChange={(e) => setHeight(e.target.value)}
-                  />
-                </label>
-                <p className="hint">
-                  Leave height blank to assume 2.7 m. Ceilings are inferred from room heights.
-                </p>
-                <label className="field">
-                  Wall thickness (m)
-                  <input
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    placeholder="Auto / measured"
-                    value={thickness}
-                    onChange={(e) => setThickness(e.target.value)}
-                  />
-                </label>
-                <button
-                  className="primary wide"
-                  disabled={!project || (scaleMode === 'manual' && !scale) || disabled}
-                  onClick={() => void reconstruct()}
-                >
-                  {working
-                    ? 'Working…'
-                    : api.mock
-                      ? 'Load synthetic reconstruction →'
-                      : state.assembly
-                        ? 'Reconstruct buildings & floors →'
-                        : 'Reconstruct space →'}
-                </button>
-                {job && (
-                  <div className="job-progress" role="status">
-                    <progress value={job.progress} max={1} />
-                    <span>
-                      {job.cancelRequested ? 'cancelling' : job.status} ·{' '}
-                      {Math.round(job.progress * 100)}%
-                    </span>
-                    {(job.status === 'queued' || job.status === 'running') &&
-                      !job.cancelRequested && (
-                        <button
-                          className="small"
-                          onClick={() =>
-                            void api
-                              .cancelJob(job.id)
-                              .then((r) => setJob(r.job))
-                              .catch(error)
-                          }
-                        >
-                          Cancel
-                        </button>
-                      )}
-                  </div>
-                )}
-              </section>
-            </>
+            <ReconstructionPanel
+              workflow={workflow}
+              disabled={disabled}
+              onOpenWizard={(files, addToCurrent) => {
+                setWizard({ files, addToCurrent });
+                // The wizard is modal: block editor actions until it closes.
+                useEditor.setState({ busy: true });
+              }}
+            />
           ) : (
-            <>
-              <div className="panel-heading">
-                SCENE EXPLORER <span>{state.scene ? entities(state.scene).length : 0}</span>
-              </div>
-              <div className="scene-tree">
-                {state.scene &&
-                  (
-                    [
-                      ['Rooms', state.scene.rooms, '▱'],
-                      ['Walls', state.scene.walls, '▥'],
-                      ['Openings', state.scene.openings, '◫'],
-                      ['Objects', state.scene.objects, '▧'],
-                    ] as const
-                  ).map(([title, list, icon]) => (
-                    <div className="tree-group" key={title}>
-                      <h4>
-                        ⌄ {title}
-                        <span>{list.length}</span>
-                      </h4>
-                      {list.map((entity) => (
-                        <button
-                          key={entity.id}
-                          aria-label={`Select ${'name' in entity ? entity.name : entity.id}`}
-                          className={`tree-item ${state.selectedId === entity.id ? 'selected' : ''}`}
-                          onClick={() => state.select(entity.id)}
-                        >
-                          <span>{icon}</span>
-                          <span>
-                            {'name' in entity
-                              ? entity.name
-                              : 'type' in entity
-                                ? `${entity.type} / ${entity.id}`
-                                : entity.id}
-                          </span>
-                          <ConfidenceChip confidence={entity.provenance.confidence} />
-                          <i
-                            title={originLabels[entity.provenance.origin]}
-                            style={{ background: originColors[entity.provenance.origin] }}
-                          />
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-              </div>
-              <InfrastructurePanel />
-              <ComponentLibrary disabled={disabled} />
-            </>
+            <SceneExplorer disabled={disabled} />
           )}
-          <section className="project-section">
-            <h4>PROJECT</h4>
-            <label className="field">
-              Project ID
-              <input
-                value={projectId}
-                list="project-list"
-                placeholder="Project ID from the API"
-                onFocus={() => void refreshProjects()}
-                onChange={(e) => setProjectId(e.target.value)}
-              />
-              <datalist id="project-list">
-                {projects.map((p) => (
-                  <option key={p.project.id} value={p.project.id}>
-                    {p.project.name} · {new Date(p.project.createdAt).toLocaleDateString()}
-                    {p.project.hasScene ? '' : ' · not reconstructed'}
-                  </option>
-                ))}
-              </datalist>
-            </label>
-            <div className="button-row">
-              <button
-                disabled={!projectId || disabled}
-                onClick={() => {
-                  if (discard()) void guarded(() => loadProject(projectId.trim()));
-                }}
-              >
-                Open project
-              </button>
-              <button
-                disabled={!state.scene || disabled}
-                onClick={() => {
-                  if (discard())
-                    void guarded(() => loadProject(state.assembly?.id ?? state.scene!.id));
-                }}
-              >
-                Reload
-              </button>
-            </div>
-          </section>
+          <ProjectPicker
+            projectId={projectId}
+            setProjectId={setProjectId}
+            projects={projects}
+            onRefresh={() => void refreshProjects()}
+            onOpen={(id) => {
+              if (discard()) void guarded(() => loadProject(id));
+            }}
+            canReload={!!state.scene}
+            onReload={() => {
+              if (discard()) void guarded(() => loadProject(state.assembly?.id ?? state.scene!.id));
+            }}
+            disabled={disabled}
+          />
         </aside>
         <ResizeHandle
           side="left"
@@ -1359,133 +204,10 @@ export default function App() {
         />
         <div className="center-panel">
           <FloorViews />
-          <div className="viewport-toolbar">
-            <div className="tool-group">
-              {(
-                [
-                  ['translate', '↔', 'Move', 'G'],
-                  ['rotate', '↻', 'Rotate', 'R'],
-                  ['scale', '⤢', 'Resize', 'S'],
-                ] as const
-              ).map(([mode, icon, label, key]) => (
-                <button
-                  key={mode}
-                  title={`${label} (${key})`}
-                  aria-label={label}
-                  disabled={!state.scene || state.workspace === 'Explore'}
-                  className={state.mode === mode && !state.measure ? 'active' : ''}
-                  onClick={() => useEditor.setState({ mode, measure: false })}
-                >
-                  {icon}
-                  <span>{label}</span>
-                </button>
-              ))}
-              <button
-                title="Frame selected (F)"
-                aria-label="Frame selected"
-                disabled={!state.scene}
-                onClick={() => useEditor.setState({ frame: state.frame + 1 })}
-              >
-                ⊡
-              </button>
-              <button
-                title="Measure two surface points"
-                className={state.measure ? 'active' : ''}
-                disabled={!state.scene || state.workspace === 'Explore'}
-                onClick={() =>
-                  useEditor.setState({ measure: !state.measure, measures: [], tool: 'select' })
-                }
-              >
-                ⌁<span>Measure</span>
-              </button>
-              <UnitSelect label="Measurement unit" />
-            </div>
-            <div className="tool-group" aria-label="Architecture tools">
-              {(
-                [
-                  ['wall', '▭', 'Wall', 'W'],
-                  ['door', '◫', 'Door', 'D'],
-                  ['window', '▤', 'Window', 'N'],
-                ] as const
-              ).map(([tool, icon, label, key]) => (
-                <button
-                  key={tool}
-                  title={`${label} tool (${key}) · snaps to walls; snap distance adapts to zoom`}
-                  aria-label={`${label} tool`}
-                  disabled={!state.scene || state.workspace === 'Explore'}
-                  className={state.tool === tool ? 'active' : ''}
-                  onClick={() =>
-                    useEditor.setState({
-                      tool: state.tool === tool ? 'select' : tool,
-                      measure: false,
-                      workspace: 'Edit',
-                    })
-                  }
-                >
-                  {icon}
-                  <span>{label}</span>
-                </button>
-              ))}
-              <button
-                title="Furniture turns its back to a wall when it snaps flush"
-                className={state.wallAlign ? 'active' : ''}
-                disabled={!state.scene}
-                onClick={() => useEditor.setState({ wallAlign: !state.wallAlign })}
-              >
-                ⊥<span>Align</span>
-              </button>
-            </div>
-            <div className="tool-group">
-              <button
-                aria-label="Undo"
-                title="Undo (Ctrl+Z)"
-                disabled={!state.past.length || disabled}
-                onClick={state.undo}
-              >
-                ↶
-              </button>
-              <button
-                aria-label="Redo"
-                title="Redo (Ctrl+Shift+Z)"
-                disabled={!state.future.length || disabled}
-                onClick={state.redo}
-              >
-                ↷
-              </button>
-              <button
-                className={state.snap ? 'active' : ''}
-                onClick={() => useEditor.setState({ snap: !state.snap })}
-                title="Zoom-adaptive translation grid (see SNAP readout); 15° rotation; 0.1 scale steps"
-              >
-                ⌗<span>Snap</span>
-              </button>
-              <details className="snap-menu">
-                <summary title="Choose snap targets" aria-label="Snap targets">
-                  ▾
-                </summary>
-                <div className="snap-menu-panel">
-                  <small>Snap distance is 10 px on screen, so it adapts to zoom.</small>
-                  {(Object.keys(snapKindLabels) as SnapKind[]).map((kind) => (
-                    <label key={kind}>
-                      <input
-                        type="checkbox"
-                        checked={state.snapSettings[kind]}
-                        onChange={(e) =>
-                          useEditor.setState({
-                            snapSettings: { ...state.snapSettings, [kind]: e.target.checked },
-                          })
-                        }
-                      />
-                      {snapKindLabels[kind]}
-                    </label>
-                  ))}
-                </div>
-              </details>
-            </div>
-          </div>
+          <ViewportToolbar disabled={disabled} />
           <div className="viewport-host">
             {renderBlueprint ? (
-              <Calibration
+              <BlueprintCalibration
                 project={project}
                 points={
                   scaleMode === 'auto' && automaticScale?.method === 'printed-dimension'
@@ -1501,284 +223,43 @@ export default function App() {
                 disabled={disabled}
               />
             ) : (
-              <ViewportBoundary>
-                <Viewport />
-              </ViewportBoundary>
+              <ErrorBoundary
+                resetKey={state.scene?.id ?? state.assembly?.id ?? null}
+                fallback={(e, reset) => (
+                  <div className="empty-viewport" role="alert">
+                    <h2>Viewport unavailable</h2>
+                    <p>{e.message}</p>
+                    <p>
+                      {isWebglError(e)
+                        ? 'Enable WebGL in your browser. Scene inspection and JSON export remain available.'
+                        : 'Scene inspection and JSON export remain available.'}
+                    </p>
+                    <button onClick={reset}>Try again</button>
+                  </div>
+                )}
+              >
+                <Viewport paused={inputMode === 'capture'} />
+              </ErrorBoundary>
             )}
           </div>
-          <div className="view-options">
-            <label title="Select a room floor or label to edit its name in Properties.">
-              <input
-                type="checkbox"
-                checked={state.roomLabels}
-                onChange={(e) => useEditor.setState({ roomLabels: e.target.checked })}
-              />
-              Room labels
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={state.xray}
-                onChange={(e) =>
-                  useEditor.setState({
-                    xray: e.target.checked,
-                    confidenceMap: e.target.checked ? false : state.confidenceMap,
-                  })
-                }
-              />
-              Provenance X-Ray
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={state.confidenceMap}
-                onChange={(e) =>
-                  useEditor.setState({
-                    confidenceMap: e.target.checked,
-                    xray: e.target.checked ? false : state.xray,
-                  })
-                }
-              />
-              Confidence map
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={state.ceilings}
-                onChange={(e) => useEditor.setState({ ceilings: e.target.checked })}
-              />
-              Ceilings
-            </label>
-            <WallsToggle compact />
-            <button
-              disabled={!state.scene || disabled}
-              className={state.compare ? 'active' : ''}
-              onClick={() =>
-                void guarded(async () => {
-                  if (state.compare) useEditor.setState({ compare: false });
-                  else
-                    useEditor.setState({
-                      sourceScene: await api.getSourceScene(state.scene!.id),
-                      compare: true,
-                    });
-                })
-              }
-            >
-              ◫ Compare Original
-            </button>
-            {state.xray && (
-              <div className="origin-legend">
-                {Object.entries(originColors).map(([label, color]) => (
-                  <span key={label}>
-                    <i style={{ background: color }} />
-                    {originLabels[label as keyof typeof originLabels]}
-                  </span>
-                ))}
-              </div>
-            )}
-            {state.confidenceMap && (
-              <div className="origin-legend">
-                {(
-                  [
-                    ['high', '≥ 80%'],
-                    ['medium', '50–79%'],
-                    ['low', '< 50%'],
-                    ['none', 'not scored'],
-                  ] as const
-                ).map(([level, range]) => (
-                  <span key={level}>
-                    <i style={{ background: confidenceColors[level] }} />
-                    {level === 'none' ? range : `${level} ${range}`}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+          <ViewOptions disabled={disabled} guarded={guarded} />
           <DockResizeHandle
             onChange={(h) => setDockHeight(Math.max(40, Math.min(window.innerHeight * 0.7, h)))}
           />
           <div
             className="bottom-dock"
-            style={dockHeight === null ? undefined : { height: dockHeight, minHeight: 0, maxHeight: 'none' }}
+            style={
+              dockHeight === null
+                ? undefined
+                : { height: dockHeight, minHeight: 0, maxHeight: 'none' }
+            }
           >
-            <div className="dock-title">
-              <span>REVIEW & OUTPUT</span>
-              <span>
-                {warnings.length} {warnings.length === 1 ? 'notice' : 'notices'}
-                {issues.length > 0 &&
-                  ` · ${issues.length} completeness ${issues.length === 1 ? 'check' : 'checks'}`}
-              </span>
-            </div>
-            <div className="dock-body">
-              <div className="warnings">
-                {scored.length > 0 && (
-                  <div className="confidence-summary">
-                    <p>
-                      <span>◔</span>
-                      {(['high', 'medium', 'low'] as const)
-                        .map(
-                          (level) =>
-                            `${scored.filter((e) => confidenceLevel(e.provenance.confidence) === level).length} ${level}`,
-                        )
-                        .join(' · ')}{' '}
-                      confidence · {inferredCount} inferred{' '}
-                      {inferredCount === 1 ? 'element' : 'elements'}. Scores are heuristic evidence
-                      strengths, not probabilities.
-                    </p>
-                    {review.length > 0 && (
-                      <div className="review-list">
-                        <span>Needs review:</span>
-                        {review.map((e) => (
-                          <button key={e.id} onClick={() => state.select(e.id)}>
-                            {e.id} <ConfidenceChip confidence={e.provenance.confidence} />
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {issues.length > 0 && (
-                  <div className="completeness" aria-label="Completeness checks">
-                    {issues.map((issue, i) => (
-                      <p key={i} className={`issue ${issue.severity}`}>
-                        <span>{issue.severity === 'warning' ? '◆' : '◇'}</span>
-                        {issue.message}
-                        {issue.entityId && (
-                          <button onClick={() => state.select(issue.entityId)}>Show</button>
-                        )}
-                      </p>
-                    ))}
-                  </div>
-                )}
-                {warnings.length ? (
-                  warnings.map((warning, i) => (
-                    <p key={i}>
-                      <span>△</span>
-                      {warning}
-                    </p>
-                  ))
-                ) : (
-                  <p>
-                    <span>○</span>
-                    {notice || 'Your reconstructed space will appear here.'}
-                  </p>
-                )}
-                {notice && warnings.length > 0 && <p className="hint">{notice}</p>}
-              </div>
-              <div className="export-actions">
-                {state.assembly && (
-                  <label className="field">
-                    GLB export scope
-                    <select
-                      value={exportScope}
-                      onChange={(e) => setExportScope(e.target.value as 'all' | 'floor')}
-                    >
-                      <option value="all">All buildings & floors</option>
-                      <option value="floor">Active floor</option>
-                    </select>
-                  </label>
-                )}
-                <button
-                  disabled={!state.scene && !state.assembly}
-                  onClick={() => {
-                    if (state.assembly) {
-                      download(
-                        exportAssemblyJson(state.assembly, editorScenes(state)),
-                        'application/json',
-                        `${state.assembly.id}.assembly.json`,
-                      );
-                    } else if (state.scene)
-                      download(
-                        exportSceneJson(state.scene),
-                        'application/json',
-                        `${state.scene.id}.scene.json`,
-                      );
-                  }}
-                >
-                  ↓ Scene JSON
-                </button>
-                <button
-                  disabled={!state.scene || !!state.scene.source.capture || disabled}
-                  title="Download this scene with its blueprint image as an evaluation ground-truth pair (name.png + name.scene.json)"
-                  onClick={() =>
-                    void guarded(async () => {
-                      if (!state.scene) return;
-                      const scene = state.scene;
-                      const image = await fetch(api.imageUrl(scene.source.imageUrl)).then((r) => {
-                        if (!r.ok)
-                          throw new Error(`Could not download the blueprint (HTTP ${r.status}).`);
-                        return r.blob();
-                      });
-                      const ext = scene.source.mimeType === 'image/jpeg' ? 'jpg' : 'png';
-                      download(image, scene.source.mimeType, `${scene.id}.${ext}`);
-                      download(
-                        exportSceneJson(scene),
-                        'application/json',
-                        `${scene.id}.scene.json`,
-                      );
-                      setNotice(
-                        'Ground-truth pair downloaded. Put both files in services/api/data/gt and run python -m eval.run --set real.',
-                      );
-                    })
-                  }
-                >
-                  ↓ GT pair
-                </button>
-                <button
-                  disabled={
-                    (!state.scene && !state.assembly) ||
-                    disabled ||
-                    (Boolean(state.assembly) && exportScope === 'floor' && !state.scene)
-                  }
-                  onClick={() =>
-                    void guarded(async () => {
-                      if (state.assembly) {
-                        const floor = floorsOf(state.assembly).find(
-                          (f) => f.projectId === state.activeProjectId,
-                        );
-                        const view = {
-                          ...state.view,
-                          buildingId: null,
-                          mode: exportScope === 'floor' ? ('floor' as const) : ('all' as const),
-                          floorId: floor?.id ?? null,
-                        };
-                        const scenes = editorScenes(state);
-                        const missing = floorsOf(state.assembly).filter(
-                          (f) => !scenes[f.projectId],
-                        );
-                        download(
-                          await exportAssemblyGlb(state.assembly, scenes, view, state.ceilings),
-                          'model/gltf-binary',
-                          `${state.assembly.id}${exportScope === 'floor' ? '-floor' : ''}.glb`,
-                        );
-                        setNotice(
-                          `GLB uses actual elevations. ${missing.length ? `${missing.length} unreconstructed floor(s) omitted.` : 'All requested floors exported.'}`,
-                        );
-                      } else if (state.scene) {
-                        download(
-                          await exportGlb(
-                            state.scene,
-                            state.ceilings || state.workspace === 'Explore',
-                          ),
-                          'model/gltf-binary',
-                          `${state.scene.id}.glb`,
-                        );
-                        setNotice(
-                          'GLB exported at metre scale. Scene JSON preserves editable RoomShift semantics.',
-                        );
-                      }
-                    })
-                  }
-                >
-                  ↓ GLB
-                </button>
-                <small>
-                  JSON preserves editing semantics.
-                  <br />
-                  GLB exchanges visible geometry.
-                </small>
-              </div>
-            </div>
+            <ReviewDock
+              disabled={disabled}
+              guarded={guarded}
+              notice={notice}
+              setNotice={setNotice}
+            />
           </div>
         </div>
         <ResizeHandle
@@ -1787,87 +268,27 @@ export default function App() {
         />
         <Inspector />
       </main>
-      {pendingFiles && (
+      {wizard && (
         <BlueprintWizard
-          files={pendingFiles}
+          files={wizard.files}
           existing={state.assembly}
-          previous={addFiles.current && !state.assembly ? project : null}
-          ensureApiReady={ensureApiReady}
+          previous={wizard.addToCurrent && !state.assembly ? project : null}
+          ensureApiReady={ensureReady}
           onCancel={() => {
-            setPendingFiles(null);
+            setWizard(null);
             useEditor.setState({ busy: false });
           }}
           onComplete={(envelope) => {
-            const previous = useEditor.getState();
-            const contexts = {
-              ...previous.floorStates,
-              ...(previous.activeProjectId
-                ? {
-                    [previous.activeProjectId]: {
-                      scene: previous.scene,
-                      past: previous.past,
-                      future: previous.future,
-                      dirty: previous.dirty,
-                      conflict: previous.conflict,
-                      selectedId: previous.selectedId,
-                    },
-                  }
-                : {}),
-            };
-            state.loadAssembly(envelope);
-            const allowed = new Set(floorsOf(envelope.assembly).map((f) => f.projectId));
-            const retained = Object.fromEntries(
-              Object.entries(contexts).filter(([id]) => allowed.has(id)),
-            );
-            useEditor.setState({ floorStates: retained, busy: false });
-            const active = useEditor.getState().activeProjectId;
-            if (active && retained[active]) {
-              const context = retained[active];
-              useEditor.setState({
-                scene: context.scene,
-                past: context.past,
-                future: context.future,
-                dirty: context.dirty,
-                conflict: context.conflict,
-                selectedId: context.selectedId,
-              });
-            }
+            useEditor.getState().adoptAssembly(envelope);
             setProjectId(envelope.assembly.id);
-            localStorage.setItem('roomshift.lastProject', envelope.assembly.id);
-            setPendingFiles(null);
+            localStorage.setItem(LAST_PROJECT_KEY, envelope.assembly.id);
+            setWizard(null);
             setShowBlueprint(true);
             setNotice('Grouped project created. Choose Reconstruct buildings & floors to begin.');
           }}
         />
       )}
-      <footer className="status-bar">
-        <span>
-          <i className="online-dot" />
-          {inputMode === 'capture'
-            ? 'Capture workspace'
-            : working
-              ? 'Working…'
-              : state.hasUnsaved()
-                ? 'Unsaved changes'
-                : 'Ready'}
-          <b>·</b>
-          {inputMode === 'capture'
-            ? 'Local project storage'
-            : state.scene
-              ? `Revision ${state.scene.revision}`
-              : 'No scene loaded'}
-        </span>
-        <span>
-          {inputMode === 'capture'
-            ? 'Photo/video mesh · Scale & alignment in viewer'
-            : state.scene
-              ? `${state.scene.rooms.length} rooms / ${state.scene.walls.length} walls / ${state.scene.objects.length} objects`
-              : state.assembly
-                ? `${state.assembly.buildings.length} buildings / ${floorsOf(state.assembly).length} floors`
-                : 'Single floor / Metric / Y up'}
-          <b>·</b>ROOMSHIFT PROTOTYPE
-        </span>
-      </footer>
+      <StatusBar inputMode={inputMode} working={working} health={health} />
     </div>
   );
 }

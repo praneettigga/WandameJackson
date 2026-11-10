@@ -36,7 +36,8 @@ describe('zoom-adaptive scale', () => {
     expect(gridStepFor(0.005)).toBe(0.1); // 0.1 m = 20 px
     expect(gridStepFor(0.05)).toBe(1);
     expect(gridStepFor(10)).toBe(5); // clamps at the coarsest step
-    for (const wpp of [0.0003, 0.002, 0.03, 0.2]) expect(gridStepFor(wpp) / wpp).toBeGreaterThanOrEqual(MIN_GRID_PX);
+    for (const wpp of [0.0003, 0.002, 0.03, 0.2])
+      expect(gridStepFor(wpp) / wpp).toBeGreaterThanOrEqual(MIN_GRID_PX);
   });
   it('holds the previous step near a boundary (hysteresis)', () => {
     // 0.05 m is exactly 16 px here, so 0.05 is ideal; coming from 0.1 we keep 0.1.
@@ -63,9 +64,20 @@ describe('snapPoint', () => {
   });
   it('finds intersections of crossing walls', () => {
     const cross = [...room, { id: 'x', start: [1, -1], end: [1, 4] } as Segment];
-    const r = snapPoint([1.04, 1.5], ctx({ segments: cross, settings: { ...defaultSnapSettings, perpendicular: false, midpoint: false } }));
+    const r = snapPoint(
+      [1.04, 1.5],
+      ctx({
+        segments: cross,
+        settings: { ...defaultSnapSettings, perpendicular: false, midpoint: false },
+      }),
+    );
     expect(r.kind).not.toBe('intersection');
-    expect(snapPoint([1.04, 0.03], ctx({ segments: cross, settings: { ...defaultSnapSettings, endpoint: false } }))).toMatchObject({
+    expect(
+      snapPoint(
+        [1.04, 0.03],
+        ctx({ segments: cross, settings: { ...defaultSnapSettings, endpoint: false } }),
+      ),
+    ).toMatchObject({
       kind: 'intersection',
       point: [1, 0],
     });
@@ -86,7 +98,14 @@ describe('snapPoint', () => {
     expect(r.point[1]).toBeCloseTo(1.5);
   });
   it('aligns to extension lines of existing endpoints', () => {
-    const r = snapPoint([5.97, 2.95], ctx({ segments: room, settings: { ...defaultSnapSettings, perpendicular: false }, tolerance: 0.08 }));
+    const r = snapPoint(
+      [5.97, 2.95],
+      ctx({
+        segments: room,
+        settings: { ...defaultSnapSettings, perpendicular: false },
+        tolerance: 0.08,
+      }),
+    );
     expect(r.kind).toBe('guide');
     expect(r.point[1]).toBe(3);
     expect(r.point[0]).toBeCloseTo(6);
@@ -96,7 +115,13 @@ describe('snapPoint', () => {
     expect(r.kind).not.toBe('endpoint');
   });
   it('returns the raw point when all snapping kinds are off', () => {
-    const off = Object.fromEntries(Object.keys(defaultSnapSettings).map((k) => [k, false])) as typeof defaultSnapSettings;
-    expect(snapPoint([1.234, 5.678], ctx({ settings: off }))).toEqual({ point: [1.234, 5.678], kind: null, guides: [] });
+    const off = Object.fromEntries(
+      Object.keys(defaultSnapSettings).map((k) => [k, false]),
+    ) as typeof defaultSnapSettings;
+    expect(snapPoint([1.234, 5.678], ctx({ settings: off }))).toEqual({
+      point: [1.234, 5.678],
+      kind: null,
+      guides: [],
+    });
   });
 });

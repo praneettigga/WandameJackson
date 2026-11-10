@@ -10,16 +10,44 @@ Layout under the data directory:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg"}
+log = logging.getLogger("roomshift.storage")
+
+
+def valid_id(value: str) -> bool:
+    """IDs become path components: letters, digits, `_`, `-`, `.`; never all dots."""
+    return bool(_ID_RE.fullmatch(value)) and value.strip(".") != ""
+
+
+def read_json_or_skip(path: Path) -> Any | None:
+    """Like read_json, but a corrupt file is logged and skipped so one bad file cannot break listings."""
+    try:
+        return read_json(path)
+    except (ValueError, OSError):
+        log.warning("skipping unreadable JSON file %s", path)
+        return None
+
+
+def now_iso() -> str:
+    """UTC timestamp in the contract's `YYYY-MM-DDTHH:MM:SSZ` form."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def contained(root: Path, relative: str) -> Path | None:
+    """`root / relative`, or None if it resolves outside `root` (e.g. through `..` or a symlink)."""
+    target = (root / relative).resolve()
+    return target if target.is_relative_to(root.resolve()) else None
 
 
 def _retry(fn, attempts: int = 50):
@@ -77,7 +105,7 @@ class Storage:
 
     # --- projects -------------------------------------------------------
     def project_dir(self, project_id: str) -> Path | None:
-        if not _ID_RE.fullmatch(project_id) or project_id in {".", ".."}:
+        if not valid_id(project_id):
             return None
         return self.projects_dir / project_id
 
@@ -88,7 +116,7 @@ class Storage:
     def all_projects(self) -> list[dict]:
         out = []
         for d in self.projects_dir.iterdir():
-            p = read_json(d / "project.json") if d.is_dir() else None
+            p = read_json_or_skip(d / "project.json") if d.is_dir() else None
             if p:
                 out.append(p)
         return out
@@ -124,7 +152,7 @@ class Storage:
 
     # --- jobs -----------------------------------------------------------
     def get_job(self, job_id: str) -> dict | None:
-        if not _ID_RE.match(job_id):
+        if not valid_id(job_id):
             return None
         return read_json(self.jobs_dir / f"{job_id}.json")
 
@@ -134,7 +162,7 @@ class Storage:
     def all_jobs(self) -> list[dict]:
         out = []
         for p in self.jobs_dir.glob("*.json"):
-            j = read_json(p)
+            j = read_json_or_skip(p)
             if j:
                 out.append(j)
         return out

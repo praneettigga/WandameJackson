@@ -1,5 +1,12 @@
 import { closestOnSegment } from './snapping';
-import { wallLength, type Opening, type Scene, type SceneObject, type V2, type Wall } from './scene';
+import {
+  wallLength,
+  type Opening,
+  type Scene,
+  type SceneObject,
+  type V2,
+  type Wall,
+} from './scene';
 import { danglingEnds } from './wallGraph';
 
 // Structural checks that point at likely reconstruction or editing mistakes. They never change the
@@ -32,14 +39,18 @@ export function insidePolygon([x, z]: V2, poly: V2[]) {
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
     const a = poly[i],
       b = poly[j];
-    if (a[1] > z !== b[1] > z && x < ((b[0] - a[0]) * (z - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+    if (a[1] > z !== b[1] > z && x < ((b[0] - a[0]) * (z - a[1])) / (b[1] - a[1]) + a[0])
+      inside = !inside;
   }
   return inside;
 }
 
 export function openingCentre(wall: Wall, o: Opening): V2 {
   const t = (o.offset + o.width / 2) / (wallLength(wall) || 1);
-  return [wall.start[0] + (wall.end[0] - wall.start[0]) * t, wall.start[1] + (wall.end[1] - wall.start[1]) * t];
+  return [
+    wall.start[0] + (wall.end[0] - wall.start[0]) * t,
+    wall.start[1] + (wall.end[1] - wall.start[1]) * t,
+  ];
 }
 
 /** Footprint corners of a furniture object on the floor plane. */
@@ -64,7 +75,8 @@ function rectsOverlap(a: V2[], b: V2[]) {
       const proj = (pts: V2[]) => pts.map((v) => v[0] * axis[0] + v[1] * axis[1]);
       const pa = proj(a),
         pb = proj(b);
-      if (Math.max(...pa) <= Math.min(...pb) + 1e-9 || Math.max(...pb) <= Math.min(...pa) + 1e-9) return false;
+      if (Math.max(...pa) <= Math.min(...pb) + 1e-9 || Math.max(...pb) <= Math.min(...pa) + 1e-9)
+        return false;
     }
   return true;
 }
@@ -102,12 +114,15 @@ export function completeness(scene: Scene): Issue[] {
       kind: 'no-rooms',
       severity: 'warning',
       entityId: null,
-      message: 'No enclosed rooms: the walls do not form a closed outline, so there are no floors or ceilings.',
+      message:
+        'No enclosed rooms: the walls do not form a closed outline, so there are no floors or ceilings.',
     });
   else
     for (const w of walls) {
       const mid: V2 = [(w.start[0] + w.end[0]) / 2, (w.start[1] + w.end[1]) / 2];
-      const bounds = scene.rooms.some((r) => edges(r.polygon).some(([a, b]) => onSegment(mid, a, b, Math.max(0.02, w.thickness / 2))));
+      const bounds = scene.rooms.some((r) =>
+        edges(r.polygon).some(([a, b]) => onSegment(mid, a, b, Math.max(0.02, w.thickness / 2))),
+      );
       if (!bounds)
         issues.push({
           kind: 'wall-outside-rooms',
@@ -138,7 +153,11 @@ export function completeness(scene: Scene): Issue[] {
     if (object.assetUrl) continue;
     const fp = footprint(object);
     const centre: V2 = [object.position[0], object.position[2]];
-    if (object.position[1] < 2 && scene.rooms.length && !scene.rooms.some((r) => insidePolygon(centre, r.polygon)))
+    if (
+      object.position[1] < 2 &&
+      scene.rooms.length &&
+      !scene.rooms.some((r) => insidePolygon(centre, r.polygon))
+    )
       issues.push({
         kind: 'furniture-outside-rooms',
         severity: 'info',

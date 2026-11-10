@@ -16,6 +16,7 @@ import {
   metersPerPixel,
   resizedObject,
   sceneSchema,
+  validateEdit,
   validateScene,
   wallLength,
   wallSegments,
@@ -84,6 +85,20 @@ describe('frozen Scene contract', () => {
     expect(() => validateScene(scene)).toThrow('does not fit');
     scene.openings[0].wallId = 'missing';
     expect(geometryWarnings(scene).join()).toContain('missing wall');
+  });
+  it('lets a scene with existing geometry warnings be edited, but blocks new warnings', () => {
+    const broken = demoScene();
+    broken.openings[0].width = 99;
+    const moved = structuredClone(broken);
+    moved.objects[0].position = [
+      moved.objects[0].position[0] + 0.1,
+      0,
+      moved.objects[0].position[2],
+    ];
+    expect(() => validateEdit(broken, moved)).not.toThrow();
+    const worse = structuredClone(moved);
+    worse.openings.push({ ...worse.openings[1], id: 'overlap' });
+    expect(() => validateEdit(broken, worse)).toThrow('overlap');
   });
   it('rejects overlapping openings and nonzero door sills', () => {
     const scene = demoScene();

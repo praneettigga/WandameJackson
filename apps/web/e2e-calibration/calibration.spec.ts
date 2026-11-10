@@ -5,7 +5,7 @@ import { Matrix4, Vector3 } from 'three';
 test('real surface picking, calibration API, export, floor alignment and reload agree', async ({
   page,
   request,
-}) => {
+}, testInfo) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   const endpoint = 'http://127.0.0.1:8012/api/projects/p_calibration/mesh';
@@ -80,6 +80,6 @@ test('real surface picking, calibration API, export, floor alignment and reload 
   const manifest = await (await request.get(`http://127.0.0.1:8012${aligned.manifestUrl}`)).json();
   expect(manifest.reconstructionToWorld).toEqual(aligned.reconstructionToWorld);
   await expect(page.locator('.mesh-viewport')).toHaveAttribute('data-rendered', 'true');
-  await page.screenshot({ path: '/tmp/roomshift-milestone3.png', fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('milestone3.png'), fullPage: true });
   expect(errors).toEqual([]);
 });

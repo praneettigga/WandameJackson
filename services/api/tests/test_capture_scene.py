@@ -78,8 +78,9 @@ def test_mesh_edits_save_reload_conflicts_and_immutable_assets(client, synthetic
 
 
 @pytest.mark.parametrize('layout,openings,objects', [
-    ('whatsapp-rectangular-room.scene.json', 3, 0),
-    ('whatsapp-classroom.scene.json', 7, 34),
+    ('whatsapp-rectangular-room.layout.json', 3, 0),
+    ('whatsapp-classroom.layout.json', 7, 34),
+    ('whatsapp-classroom.scene.json', 7, 34),  # name used by demo meshes baked before the rename
 ])
 def test_presets_have_individually_editable_structure(client, synthetic_worker, layout, openings, objects):
     pid, _ = mesh_ready(client)

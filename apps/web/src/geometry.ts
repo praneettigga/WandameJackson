@@ -128,7 +128,8 @@ function highlighted(source: THREE.Material) {
   if ('emissive' in m && m.emissive instanceof THREE.Color) {
     m.emissive.set('#b97e24');
     (m as THREE.MeshStandardMaterial).emissiveIntensity = 0.24;
-  } else if ('color' in m && m.color instanceof THREE.Color) m.color.lerp(new THREE.Color('#e8a64a'), 0.35);
+  } else if ('color' in m && m.color instanceof THREE.Color)
+    m.color.lerp(new THREE.Color('#e8a64a'), 0.35);
   return m;
 }
 /** A placed custom scan: shares the library template's geometry, stretched to the object's dimensions. */
@@ -137,7 +138,8 @@ function scanInstance(object: SceneObject, template: THREE.Object3D, options: Re
   instance.scale.set(...object.dimensions);
   const flat =
     options.ghost || options.xray || options.confidence || (options.seeThrough && object.assetUrl)
-      ? material(object, '#bba184', options) : null;
+      ? material(object, '#bba184', options)
+      : null;
   const selected = object.id === options.selectedId;
   instance.traverse((node) => {
     if (!(node instanceof THREE.Mesh)) return;
@@ -161,7 +163,8 @@ function furniture(object: SceneObject, options: RenderOptions) {
   group.position.set(...object.position);
   group.rotation.y = object.rotationY;
   const scan = customTemplate(object.assetUrl ?? object.componentId);
-  if (object.assetUrl && !scan) throw new Error('Captured mesh is not loaded. Reload the project before editing or exporting.');
+  if (object.assetUrl && !scan)
+    throw new Error('Captured mesh is not loaded. Reload the project before editing or exporting.');
   if (scan) {
     group.add(scanInstance(object, scan, options));
     return group;
@@ -287,6 +290,8 @@ export class GeometryCache {
     let object = this.entries.get(key);
     if (!object) {
       object = build();
+      // The cache owns this object's GPU resources; disposing a parent root must skip it.
+      object.userData.cached = true;
       this.entries.set(key, object);
     }
     this.used.add(key);
@@ -297,7 +302,7 @@ export class GeometryCache {
     for (const [key, object] of this.entries)
       if (!this.used.has(key)) {
         object.parent?.remove(object);
-        disposeGeometry(object);
+        disposeGeometry(object, { includeCached: true });
         this.entries.delete(key);
       }
     this.used.clear();
@@ -339,7 +344,12 @@ function roomObject(room: Room, options: RenderOptions) {
   return group;
 }
 
-function wallObject(wall: Wall, openings: Opening[], ext: [number, number], options: RenderOptions) {
+function wallObject(
+  wall: Wall,
+  openings: Opening[],
+  ext: [number, number],
+  options: RenderOptions,
+) {
   const group = new THREE.Group();
   group.name = wall.id;
   group.userData = meta(wall, 'wall');
@@ -357,9 +367,21 @@ function wallObject(wall: Wall, openings: Opening[], ext: [number, number], opti
     );
   // Corner closures beyond the centreline endpoints.
   if (ext[0] > 1e-6)
-    box(group, [ext[0], wall.height, wall.thickness], [-ext[0] / 2, wall.height / 2, 0], mat, wall.id);
+    box(
+      group,
+      [ext[0], wall.height, wall.thickness],
+      [-ext[0] / 2, wall.height / 2, 0],
+      mat,
+      wall.id,
+    );
   if (ext[1] > 1e-6)
-    box(group, [ext[1], wall.height, wall.thickness], [length + ext[1] / 2, wall.height / 2, 0], mat, wall.id);
+    box(
+      group,
+      [ext[1], wall.height, wall.thickness],
+      [length + ext[1] / 2, wall.height / 2, 0],
+      mat,
+      wall.id,
+    );
   for (const opening of validOpenings(wall, openings).valid) {
     const frame = new THREE.Group();
     frame.name = opening.id;
@@ -432,7 +454,13 @@ function wallObject(wall: Wall, openings: Opening[], ext: [number, number], opti
   return group;
 }
 
-export function buildSceneGeometry(scene: Scene, options: RenderOptions = {}, cache?: GeometryCache) {
+export function buildSceneGeometry(
+  scene: Scene,
+  options: RenderOptions = {},
+  cache?: GeometryCache,
+  /** Namespaces cache keys so identical entities on different floors never share an object. */
+  cacheScope = '',
+) {
   const root = new THREE.Group();
   root.name = 'ROOMSHIFT_semantic_geometry';
   root.userData = {
@@ -444,8 +472,10 @@ export function buildSceneGeometry(scene: Scene, options: RenderOptions = {}, ca
     generator: 'ROOMSHIFT',
   };
   const flags = `${options.xray ? 1 : 0}${options.confidence ? 1 : 0}${options.ghost ? 1 : 0}${options.seeThrough ? 1 : 0}`;
-  const get = (key: string, build: () => THREE.Object3D) => (cache ? cache.get(key, build) : build());
-  const sel = (...ids: string[]) => (options.selectedId && ids.includes(options.selectedId) ? 1 : 0);
+  const get = (key: string, build: () => THREE.Object3D) =>
+    cache ? cache.get(`${cacheScope}|${key}`, build) : build();
+  const sel = (...ids: string[]) =>
+    options.selectedId && ids.includes(options.selectedId) ? 1 : 0;
   for (const room of scene.rooms)
     root.add(
       get(`room|${flags}|${options.ceilings ? 1 : 0}|${sel(room.id)}|${JSON.stringify(room)}`, () =>
@@ -470,7 +500,11 @@ export function buildSceneGeometry(scene: Scene, options: RenderOptions = {}, ca
         `object|${flags}|${sel(object.id)}|${customTemplate(object.assetUrl ?? object.componentId)?.uuid ?? ''}|${JSON.stringify(object)}`,
         () => {
           const group = furniture(object, options);
-          group.userData = { ...meta(object, 'furniture'), category: object.category, componentId: object.componentId };
+          group.userData = {
+            ...meta(object, 'furniture'),
+            category: object.category,
+            componentId: object.componentId,
+          };
           return group;
         },
       ),
@@ -481,9 +515,11 @@ export function buildSceneGeometry(scene: Scene, options: RenderOptions = {}, ca
     });
   return root;
 }
-export function disposeGeometry(root: THREE.Object3D) {
+export function disposeGeometry(root: THREE.Object3D, { includeCached = false } = {}) {
   const materials = new Set<THREE.Material>();
-  root.traverse((node) => {
+  const visit = (node: THREE.Object3D, top: boolean) => {
+    // Cached subtrees are reused by the next build; only GeometryCache.sweep frees them.
+    if (node.userData.cached && !(top && includeCached)) return;
     if (node instanceof THREE.Mesh) {
       // Custom-scan geometry and materials belong to the library template and outlive any placement.
       if (!node.geometry.userData.shared) node.geometry.dispose();
@@ -491,7 +527,9 @@ export function disposeGeometry(root: THREE.Object3D) {
         if (!m.userData.shared) materials.add(m);
       });
     }
-  });
+    node.children.forEach((child) => visit(child, false));
+  };
+  visit(root, true);
   materials.forEach((m) => m.dispose());
 }
 // Exports are rebuilt from semantic data, so controls/grid/ghosts can never leak in.
@@ -568,6 +606,7 @@ export function buildAssemblyGeometry(
   scenes: Record<string, Scene>,
   view: FloorView,
   options: RenderOptions & { activeProjectId?: string | null } = {},
+  cache?: GeometryCache,
 ) {
   const root = new THREE.Group();
   root.name = assembly.name;
@@ -575,10 +614,16 @@ export function buildAssemblyGeometry(
   const all = placements(assembly, scenes, view.mode === 'exploded' ? view.gap : 0);
   for (const placement of visiblePlacements(all, view)) {
     if (!placement.scene) continue;
-    const child = buildSceneGeometry(placement.scene, {
-      ...options,
-      selectedId: placement.floor.projectId === options.activeProjectId ? options.selectedId : null,
-    });
+    const child = buildSceneGeometry(
+      placement.scene,
+      {
+        ...options,
+        selectedId:
+          placement.floor.projectId === options.activeProjectId ? options.selectedId : null,
+      },
+      cache,
+      `floor:${placement.floor.id}`,
+    );
     child.name = `floor:${placement.floor.id}`;
     child.position.set(...placement.position);
     child.rotation.y = placement.rotationY;

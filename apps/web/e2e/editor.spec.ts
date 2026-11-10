@@ -17,16 +17,32 @@ type EditorWindow = Window & {
     };
   };
   __three: {
-    scene: { getObjectByName: (name: string) => { position: { x: number; z: number }; material: { map: { image: HTMLCanvasElement } } } | undefined };
+    scene: {
+      getObjectByName: (
+        name: string,
+      ) =>
+        | { position: { x: number; z: number }; material: { map: { image: HTMLCanvasElement } } }
+        | undefined;
+    };
     camera: { position: unknown; updateMatrixWorld: () => void };
-    Vector3: new (x: number, y: number, z: number) => { project: (c: unknown) => { x: number; y: number } };
+    Vector3: new (
+      x: number,
+      y: number,
+      z: number,
+    ) => { project: (c: unknown) => { x: number; y: number } };
   };
 };
 
 const state = (page: Page) =>
   page.evaluate(() => {
     const s = (window as unknown as EditorWindow).__editor.getState();
-    return { scene: s.scene, gridStep: s.gridStep, tool: s.tool, error: s.error, selectedId: s.selectedId };
+    return {
+      scene: s.scene,
+      gridStep: s.gridStep,
+      tool: s.tool,
+      error: s.error,
+      selectedId: s.selectedId,
+    };
   });
 
 /** Page coordinates of a floor point [x, z]. */
@@ -70,7 +86,9 @@ test('renders the demo room with WebGL', async ({ page }) => {
   expect(new Set(shot.subarray(1000, 60000)).size).toBeGreaterThan(20);
 });
 
-test('resizes the review dock with pointer and keyboard while retaining the viewport', async ({ page }) => {
+test('resizes the review dock with pointer and keyboard while retaining the viewport', async ({
+  page,
+}) => {
   const splitter = page.getByRole('separator', { name: 'Resize bottom panel' });
   const dock = page.locator('.bottom-dock');
   const height = () => dock.evaluate((el) => el.getBoundingClientRect().height);
@@ -89,7 +107,9 @@ test('resizes the review dock with pointer and keyboard while retaining the view
   await page.screenshot({ path: 'test-results/merged-resizable-dock.png' });
 });
 
-test('selects a floor label, renames the room, toggles labels and reloads the saved name', async ({ page }) => {
+test('selects a floor label, renames the room, toggles labels and reloads the saved name', async ({
+  page,
+}) => {
   const room = (await state(page)).scene!.rooms[0];
   const labelPosition = await page.evaluate((id) => {
     const label = (window as unknown as EditorWindow).__three.scene.getObjectByName(`${id}:label`)!;
@@ -114,7 +134,13 @@ test('selects a floor label, renames the room, toggles labels and reloads the sa
   await expect.poll(async () => (await state(page)).scene!.rooms[0].name).toBe('Home Office');
   await page.screenshot({ path: 'test-results/room-floor-label.png' });
   await page.getByLabel('Room labels', { exact: true }).uncheck();
-  expect(await page.evaluate((id) => Boolean((window as unknown as EditorWindow).__three.scene.getObjectByName(`${id}:label`)), room.id)).toBe(false);
+  expect(
+    await page.evaluate(
+      (id) =>
+        Boolean((window as unknown as EditorWindow).__three.scene.getObjectByName(`${id}:label`)),
+      room.id,
+    ),
+  ).toBe(false);
   await page.getByLabel('Room labels', { exact: true }).check();
   await page.getByRole('button', { name: 'Save scene' }).click();
   await expect.poll(async () => (await state(page)).scene!.revision).toBe(1);
@@ -145,7 +171,9 @@ test('draws a wall that snaps to existing endpoints and splits the room', async 
   const s = (await state(page)).scene!;
   expect(s.rooms).toHaveLength(2);
   const drawn = s.walls.filter((w) => !['wall-n', 'wall-e', 'wall-s', 'wall-w'].includes(w.id));
-  const added = drawn.find((w) => Math.abs(w.start[0] - w.end[0]) < 1e-6 && Math.abs(w.start[1] - w.end[1]) > 2);
+  const added = drawn.find(
+    (w) => Math.abs(w.start[0] - w.end[0]) < 1e-6 && Math.abs(w.start[1] - w.end[1]) > 2,
+  );
   expect(added, JSON.stringify(drawn)).toBeTruthy();
   expect([added!.start[1], added!.end[1]].sort()).toEqual([1, 4]);
   // Undo removes the wall and the extra room in one step.

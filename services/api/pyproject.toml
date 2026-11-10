@@ -1,0 +1,21 @@
+[project]
+name = "roomshift-api"
+version = "0.1.0"
+description = "Local RoomShift API: blueprint and capture reconstruction for the RoomShift editor."
+requires-python = ">=3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 140
+
+[tool.ruff.lint]
+# Correctness baseline: pyflakes plus syntax/statement errors. Compact one-line geometry statements
+# (E702) are an intentional style in the parser and tests.
+select = ["E4", "E7", "E9", "F", "B006"]
+ignore = ["E702", "E731", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixtures imported from other test modules look unused to pyflakes.
+"tests/*" = ["F401", "F811"]
+# Scripts put the API package on sys.path before importing it.
+"scripts/*" = ["E402"]

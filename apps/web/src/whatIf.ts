@@ -9,7 +9,13 @@ import { wallLength, type Room, type Scene, type V2 } from './scene';
 export const WHEELCHAIR = { door: 0.8, turn: 1.5 };
 
 const area = (poly: V2[]) =>
-  Math.abs(poly.reduce((s, p, i) => s + p[0] * poly[(i + 1) % poly.length][1] - poly[(i + 1) % poly.length][0] * p[1], 0)) / 2;
+  Math.abs(
+    poly.reduce(
+      (s, p, i) =>
+        s + p[0] * poly[(i + 1) % poly.length][1] - poly[(i + 1) % poly.length][0] * p[1],
+      0,
+    ),
+  ) / 2;
 const extent = (poly: V2[]) => {
   const xs = poly.map((p) => p[0]),
     zs = poly.map((p) => p[1]);
@@ -30,7 +36,9 @@ export function walkTo(scene: Scene, roomId: string): number | null {
     const c: V2 = [wall.start[0] + d[0] * t, wall.start[1] + d[1] * t];
     const off = wall.thickness / 2 + 0.15;
     const side = (s: number) =>
-      scene.rooms.find((r) => insidePolygon([c[0] - d[1] * off * s, c[1] + d[0] * off * s], r.polygon))?.id ?? 'outside';
+      scene.rooms.find((r) =>
+        insidePolygon([c[0] - d[1] * off * s, c[1] + d[0] * off * s], r.polygon),
+      )?.id ?? 'outside';
     return [{ c, a: side(1), b: side(-1) }];
   });
   if (!doors.some((d) => d.a === 'outside' || d.b === 'outside')) return null;
@@ -56,19 +64,28 @@ export function walkTo(scene: Scene, roomId: string): number | null {
   }
   const c = centre.get(roomId);
   if (!c) return null;
-  const best = doors.reduce((s, d, i) =>
-    (d.a === roomId || d.b === roomId) && Number.isFinite(dist[i])
-      ? Math.min(s, dist[i] + Math.hypot(d.c[0] - c[0], d.c[1] - c[1]))
-      : s, Infinity);
+  const best = doors.reduce(
+    (s, d, i) =>
+      (d.a === roomId || d.b === roomId) && Number.isFinite(dist[i])
+        ? Math.min(s, dist[i] + Math.hypot(d.c[0] - c[0], d.c[1] - c[1]))
+        : s,
+    Infinity,
+  );
   return Number.isFinite(best) ? best : null;
 }
 
 /** Up to `limit` impacts of changing `before` into `after`, most important first. */
-export function whatIf(before: Scene, after: Scene, uses: Record<string, RoomUse> = {}, limit = 3): string[] {
+export function whatIf(
+  before: Scene,
+  after: Scene,
+  uses: Record<string, RoomUse> = {},
+  limit = 3,
+): string[] {
   const out: string[] = [];
   const total = (s: Scene) => s.rooms.reduce((a, r) => a + area(r.polygon), 0);
   const dTotal = total(after) - total(before);
-  if (Math.abs(dTotal) >= 0.05) out.push(`Floor area ${dTotal > 0 ? 'increased' : 'decreased'} by ${m2(Math.abs(dTotal))}.`);
+  if (Math.abs(dTotal) >= 0.05)
+    out.push(`Floor area ${dTotal > 0 ? 'increased' : 'decreased'} by ${m2(Math.abs(dTotal))}.`);
   if (after.rooms.length !== before.rooms.length)
     out.push(`Room count changed from ${before.rooms.length} to ${after.rooms.length}.`);
 
@@ -82,14 +99,18 @@ export function whatIf(before: Scene, after: Scene, uses: Record<string, RoomUse
     const narrow0 = Math.min(w0, d0),
       narrow1 = Math.min(w1, d1);
     if (narrow1 < WHEELCHAIR.turn && narrow0 >= WHEELCHAIR.turn)
-      out.push(`${nameOf(r)} is now too narrow for a ${WHEELCHAIR.turn} m wheelchair turning circle.`);
+      out.push(
+        `${nameOf(r)} is now too narrow for a ${WHEELCHAIR.turn} m wheelchair turning circle.`,
+      );
   }
 
   for (const o of after.openings) {
     const old = before.openings.find((x) => x.id === o.id);
     if (o.type !== 'door' || !old || old.width === o.width) continue;
     if (o.width < WHEELCHAIR.door && old.width >= WHEELCHAIR.door)
-      out.push(`Wheelchair clearance reduced at ${o.id}: ${m(o.width)} wide, under ${WHEELCHAIR.door} m.`);
+      out.push(
+        `Wheelchair clearance reduced at ${o.id}: ${m(o.width)} wide, under ${WHEELCHAIR.door} m.`,
+      );
     else if (o.width >= WHEELCHAIR.door && old.width < WHEELCHAIR.door)
       out.push(`${o.id} is now wide enough for a wheelchair.`);
   }
@@ -103,7 +124,9 @@ export function whatIf(before: Scene, after: Scene, uses: Record<string, RoomUse
     const a = walkTo(before, r.id),
       b = walkTo(after, r.id);
     if (a === null || b === null || Math.abs(b - a) < 0.1) continue;
-    out.push(`Walking distance from the entrance to the ${use.use} ${b > a ? 'increased' : 'decreased'} by ${m(Math.abs(b - a))}.`);
+    out.push(
+      `Walking distance from the entrance to the ${use.use} ${b > a ? 'increased' : 'decreased'} by ${m(Math.abs(b - a))}.`,
+    );
   }
   return out.slice(0, limit);
 }

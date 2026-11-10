@@ -60,33 +60,58 @@ export const useLibrary = create<LibraryState>(() => ({
 /** Normalized meshes keyed by componentId: a unit footprint (x, z in ±0.5, y in 0–1) resting on the floor. */
 const templates = new Map<string, THREE.Object3D>();
 const serverLoads = new Map<string, Promise<void>>();
+/** Server-loaded capture meshes, least recently used first; capped so old captures are freed. */
+const serverTemplates: string[] = [];
+const MAX_SERVER_TEMPLATES = 3;
+const ASSET_TIMEOUT_MS = 120_000;
 
-/** Capture assets live on the API, so saved scenes reload on other browsers too. */
+function touchServerTemplate(key: string, keep: Set<string>) {
+  const at = serverTemplates.indexOf(key);
+  if (at >= 0) serverTemplates.splice(at, 1);
+  serverTemplates.push(key);
+  for (let i = 0; serverTemplates.length > MAX_SERVER_TEMPLATES && i < serverTemplates.length;) {
+    const old = serverTemplates[i];
+    if (keep.has(old)) {
+      i++;
+      continue;
+    }
+    serverTemplates.splice(i, 1);
+    const template = templates.get(old);
+    templates.delete(old);
+    if (template) disposeScan(template);
+  }
+}
+
+/**
+ * Capture assets live on the API, so saved scenes reload on other browsers too. A mesh that fails
+ * to load fails the scene load: a capture is never silently replaced by its bounding box.
+ */
 export async function loadSceneAssets(scene: Scene, imageUrl: (path: string) => string) {
+  const objects = scene.objects.filter((o) => o.assetUrl);
+  const keep = new Set(objects.map((o) => o.assetUrl!));
   await Promise.all(
-    scene.objects
-      .filter((o) => o.assetUrl)
-      .map(async (o) => {
-        const key = o.assetUrl!;
-        if (templates.has(key)) return;
+    objects.map(async (o) => {
+      const key = o.assetUrl!;
+      if (!templates.has(key)) {
         if (!serverLoads.has(key)) {
           serverLoads.set(
             key,
             (async () => {
-              const response = await fetch(imageUrl(key));
+              const response = await fetch(imageUrl(key), {
+                signal: AbortSignal.timeout(ASSET_TIMEOUT_MS),
+              });
               if (!response.ok)
                 throw new Error(`Could not load captured mesh (HTTP ${response.status}).`);
               const object = await parseScan(await response.arrayBuffer(), 'glb', o.name);
               templates.set(key, buildTemplate(object, 'y'));
               useLibrary.setState((s) => ({ revision: s.revision + 1 }));
-            })().catch((error) => {
-              serverLoads.delete(key);
-              throw error;
-            }),
+            })().finally(() => serverLoads.delete(key)),
           );
         }
         await serverLoads.get(key);
-      }),
+      }
+      touchServerTemplate(key, keep);
+    }),
   );
   return scene;
 }

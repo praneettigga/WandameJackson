@@ -17,14 +17,18 @@ describe('what-if impact feedback', () => {
     const before = demoScene();
     const after = structuredClone(before);
     after.openings[0].width = 0.7;
-    expect(whatIf(before, after)).toEqual(['Wheelchair clearance reduced at door-1: 0.7 m wide, under 0.8 m.']);
+    expect(whatIf(before, after)).toEqual([
+      'Wheelchair clearance reduced at door-1: 0.7 m wide, under 0.8 m.',
+    ]);
   });
   it('reports walking distance to a named kitchen only', () => {
     const before = servicesScene();
     expect(walkTo(before, 'room-kitchen')).toBeGreaterThan(1);
     const after = structuredClone(before);
     after.openings.find((o) => o.id === 'door-kitchen')!.offset = 3.5;
-    expect(whatIf(before, after).join(' ')).toMatch(/Walking distance from the entrance to the kitchen increased by \d/);
+    expect(whatIf(before, after).join(' ')).toMatch(
+      /Walking distance from the entrance to the kitchen increased by \d/,
+    );
     expect(whatIf(demoScene(), demoScene())).toEqual([]);
   });
 });

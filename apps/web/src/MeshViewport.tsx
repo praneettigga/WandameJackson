@@ -1,34 +1,31 @@
-import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Bounds, OrbitControls, Html, Line } from '@react-three/drei';
+import { Bounds, OrbitControls, Html, Line, useBounds } from '@react-three/drei';
 import type { MeshPoint } from './api';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as THREE from 'three';
+import { ErrorBoundary } from './ErrorBoundary';
 
-class MeshBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
-  state = { error: null as string | null };
-  static getDerivedStateFromError(error: Error) {
-    return { error: error.message };
-  }
-  render() {
-    return this.state.error ? (
-      <div className="mesh-load-state" role="alert">
-        Viewer unavailable: {this.state.error}. You can still download the GLB.
-      </div>
-    ) : (
-      this.props.children
-    );
-  }
-}
 function dispose(object: THREE.Object3D) {
   object.traverse((child) => {
     if (child instanceof THREE.Mesh) {
       child.geometry.dispose();
       (Array.isArray(child.material) ? child.material : [child.material]).forEach(
-        (m: THREE.Material) => m.dispose(),
+        (m: THREE.Material) => {
+          // Textured scans hold large images on the GPU; free them with the material.
+          for (const value of Object.values(m)) if (value instanceof THREE.Texture) value.dispose();
+          m.dispose();
+        },
       );
     }
   });
+}
+/** Re-frames the camera on the mesh whenever `token` changes (the "Fit mesh" button). */
+function Refit({ token }: { token: number }) {
+  const bounds = useBounds();
+  useEffect(() => {
+    if (token) bounds.refresh().clip().fit();
+  }, [token, bounds]);
+  return null;
 }
 function RenderReady({ onReady }: { onReady: () => void }) {
   const frames = useRef(0);
@@ -65,6 +62,7 @@ export function MeshViewport({
       try {
         const response = await fetch(url, { signal: controller.signal });
         if (!response.ok) throw new Error(`Mesh download failed (${response.status}).`);
+        const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
         const gltf = await new GLTFLoader().parseAsync(await response.arrayBuffer(), '');
         loaded = gltf.scene;
         if (controller.signal.aborted) dispose(loaded);
@@ -91,14 +89,7 @@ export function MeshViewport({
   return (
     <div className="mesh-viewport" data-rendered={rendered} data-picking={!!onPick}>
       <div className="mesh-view-controls">
-        <button
-          onClick={() => {
-            setRendered(false);
-            setFrame((v) => v + 1);
-          }}
-        >
-          Fit mesh
-        </button>
+        <button onClick={() => setFrame((v) => v + 1)}>Fit mesh</button>
         <button aria-pressed={wireframe} onClick={() => setWireframe(!wireframe)}>
           Wireframe
         </button>
@@ -112,8 +103,15 @@ export function MeshViewport({
           Loading colored mesh…
         </div>
       ) : (
-        <MeshBoundary key={`${url}-${frame}`}>
-          <Canvas key={frame} camera={{ position: [2, 1.5, 3], fov: 50 }} dpr={[1, 1.5]}>
+        <ErrorBoundary
+          resetKey={url}
+          fallback={(e) => (
+            <div className="mesh-load-state" role="alert">
+              Viewer unavailable: {e.message}. You can still download the GLB.
+            </div>
+          )}
+        >
+          <Canvas camera={{ position: [2, 1.5, 3], fov: 50 }} dpr={[1, 1.5]}>
             <color attach="background" args={['#171f22']} />
             <ambientLight intensity={1.4} />
             <directionalLight position={[5, 8, 5]} intensity={2} />
@@ -132,6 +130,7 @@ export function MeshViewport({
                   }
                 }}
               />
+              <Refit token={frame} />
             </Bounds>
             {points.length > 1 && <Line points={points} color="#ffcb70" lineWidth={2} />}
             {points.map((point, i) => (
@@ -148,7 +147,7 @@ export function MeshViewport({
               Loading colored mesh…
             </div>
           )}
-        </MeshBoundary>
+        </ErrorBoundary>
       )}
       <div className="mesh-view-caption">
         {onPick ? 'Click a surface to select a point · ' : ''}Drag to orbit · Scroll to zoom ·{' '}

@@ -3,6 +3,7 @@ import {
   ApiError,
   demoScene,
   HttpApi,
+  isCancellation,
   MockApi,
   pollJob,
   type Job,
@@ -115,7 +116,10 @@ for (const mode of ['mock', 'http'] as const)
       await expect(pollJob(api, cancelled, () => {}, { intervalMs: 0 })).rejects.toMatchObject({
         code: 'JOB_CANCELLED',
       });
-      await expect(api.cancelJob(job.id)).rejects.toMatchObject({ status: 409, code: 'JOB_NOT_ACTIVE' });
+      await expect(api.cancelJob(job.id)).rejects.toMatchObject({
+        status: 409,
+        code: 'JOB_NOT_ACTIVE',
+      });
       expect(await api.getScene('demo-room')).toEqual(before);
     });
     it('returns structured unknown-project errors', async () => {
@@ -135,8 +139,78 @@ describe('HTTP edge cases and polling', () => {
     const api = new HttpApi(undefined, vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     await expect(api.health()).rejects.toMatchObject({
       code: 'NETWORK_ERROR',
-      message: expect.stringContaining('Start the backend from services/api'),
+      message: expect.stringContaining('Make sure the local API is running'),
     });
+  });
+  it('reports a timeout as a timeout, not as an unreachable API', async () => {
+    const hang = vi.fn(
+      (_url: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_, reject) =>
+          init?.signal?.addEventListener('abort', () => reject(init.signal!.reason)),
+        ),
+    );
+    const api = new HttpApi(undefined, hang as unknown as typeof fetch);
+    await expect(
+      (
+        api as unknown as { request(p: string, i?: RequestInit, t?: number): Promise<unknown> }
+      ).request('/api/health', undefined, 10),
+    ).rejects.toMatchObject({ code: 'TIMEOUT' });
+  });
+  it('honours a caller abort signal and reports it as a cancellation', async () => {
+    const hang = vi.fn(
+      (_url: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_, reject) =>
+          init?.signal?.addEventListener('abort', () => reject(init.signal!.reason)),
+        ),
+    );
+    const api = new HttpApi(undefined, hang as unknown as typeof fetch);
+    const controller = new AbortController();
+    const pending = api.getJob('j1', controller.signal);
+    controller.abort();
+    const error = await pending.catch((e) => e);
+    expect(isCancellation(error)).toBe(true);
+  });
+  it('keeps polling through brief network failures, then gives up', async () => {
+    const api = new MockApi(),
+      { job } = await api.reconstruct('demo-room', input);
+    const offline = new ApiError(0, 'NETWORK_ERROR', 'offline');
+    const get = vi
+      .spyOn(api, 'getJob')
+      .mockRejectedValueOnce(offline)
+      .mockRejectedValueOnce(offline);
+    await expect(pollJob(api, job, () => {}, { intervalMs: 0 })).resolves.toMatchObject({
+      status: 'succeeded',
+    });
+    get.mockReset().mockRejectedValue(offline);
+    const { job: next } = await api.reconstruct('demo-room', input);
+    await expect(pollJob(api, next, () => {}, { intervalMs: 0, retries: 2 })).rejects.toBe(offline);
+    expect(get).toHaveBeenCalledTimes(3);
+  });
+  it('does not retry non-transient polling errors', async () => {
+    const api = new MockApi(),
+      { job } = await api.reconstruct('demo-room', input);
+    const missing = new ApiError(404, 'JOB_NOT_FOUND', 'gone');
+    const get = vi.spyOn(api, 'getJob').mockRejectedValue(missing);
+    await expect(pollJob(api, job, () => {}, { intervalMs: 0 })).rejects.toBe(missing);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+  it('persists mock cancellation so the next poll does not resurrect the job', async () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    const api = new MockApi(storage);
+    const { job } = await api.reconstruct('demo-room', input);
+    await api.cancelJob(job.id);
+    expect((await api.getJob(job.id)).job).toMatchObject({
+      status: 'failed',
+      error: { code: 'JOB_CANCELLED' },
+    });
+  });
+  it('survives corrupt mock storage', async () => {
+    const storage = { getItem: () => '{not json', setItem: () => {} };
+    await expect(new MockApi(storage).listProjects()).resolves.toBeTruthy();
   });
   it('reports non-JSON server failures', async () => {
     const api = new HttpApi(
@@ -171,6 +245,31 @@ describe('HTTP edge cases and polling', () => {
     const done: Job = { ...job, status: 'succeeded', sceneUrl: '/api/projects/demo-room/scene' };
     await expect(pollJob(api, done, () => {})).resolves.toEqual(done);
     expect(get).not.toHaveBeenCalled();
+  });
+  it('does not count time spent queued behind another job against the timeout', async () => {
+    const api = new MockApi(),
+      { job } = await api.reconstruct('demo-room', input);
+    const done: Job = { ...job, status: 'succeeded', sceneUrl: '/api/projects/demo-room/scene' };
+    // Queued for longer than the whole budget, then quick work.
+    const states: Job[] = [job, job, job, job, { ...job, status: 'running' }, done];
+    vi.spyOn(api, 'getJob').mockImplementation(async () => ({ job: states.shift() ?? done }));
+    await expect(
+      pollJob(api, job, () => {}, { timeoutMs: 40, intervalMs: 20 }),
+    ).resolves.toMatchObject({ status: 'succeeded' });
+    // A job that is running, not waiting, still times out.
+    vi.spyOn(api, 'getJob').mockResolvedValue({ job: { ...job, status: 'running' } });
+    await expect(
+      pollJob(api, { ...job, status: 'running' }, () => {}, { timeoutMs: 40, intervalMs: 20 }),
+    ).rejects.toThrow('timed out');
+  });
+  it('keeps serving the mock scene when its stored copy is corrupt', async () => {
+    const map = new Map<string, string>();
+    const api = new MockApi({
+      getItem: (k) => map.get(k) ?? null,
+      setItem: (k, v) => void map.set(k, v),
+    });
+    map.set('roomshift.mock.scene.v1', '{not json');
+    await expect(api.getScene('demo-room')).resolves.toMatchObject({ id: 'demo-room' });
   });
   it('persists mock saves and detects conflicts between local browser sessions', async () => {
     const map = new Map<string, string>();

@@ -2,15 +2,20 @@
 
 Authoritative for the prototype. Scene shape: [`scene.schema.json`](scene.schema.json). Fixture: [`fixtures/room.scene.json`](fixtures/room.scene.json) + [`fixtures/room.png`](fixtures/room.png) (synthetic, 300×250 px, 4 m × 3 m room at 0.02 m/px).
 
-Changes go through the integrator only. Agents propose changes in their `HANDOFF.md`.
+Changes to this contract must be made together with the code and tests that implement them.
 
 ## General
 
 - Default base URL: `http://127.0.0.1:8000`. All paths below are root-relative.
-- CORS (dev): `http://localhost:5173`, `http://127.0.0.1:5173`.
+- CORS (dev): `http://localhost:5173`, `http://127.0.0.1:5173` (override with `ROOMSHIFT_CORS_ORIGINS`).
+- The API is local-only. Requests whose `Host` header is not a local name return 400 `INVALID_HOST`
+  (`ROOMSHIFT_ALLOWED_HOSTS`), and state-changing requests carrying an `Origin` outside the CORS list
+  return 403 `FORBIDDEN_ORIGIN`.
 - JSON bodies are `application/json`, UTF-8. Timestamps are ISO-8601 UTC.
 - Image URLs in responses are root-relative (`/api/...`); never filesystem paths. Clients resolve them against the API base URL.
 - Uploads: PNG or JPEG only, validated by decoded content (not extension). Max 20 MB. Max 8000 px per side.
+- Request size limits: blueprint uploads 20 MB, capture uploads 512 MB in total (photos 20 MB each),
+  other JSON bodies 32 MB. Oversized requests return 413 `UPLOAD_TOO_LARGE`, even without `Content-Length`.
 
 ## Coordinates
 
@@ -34,18 +39,31 @@ Every non-2xx response, including framework/request validation errors:
 | HTTP | code | When |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | Malformed body/params, schema violation, invalid geometry |
-| 400 | `INVALID_CALIBRATION` | Points outside image, zero separation, non-finite/non-positive distance |
-| 404 | `PROJECT_NOT_FOUND` / `JOB_NOT_FOUND` | Unknown ID |
+| 400 | `INVALID_CALIBRATION` | Points outside image, zero separation, non-finite/non-positive distance, or an implausible scale (outside 1e-5–10 m/px) |
+| 400 | `INVALID_SOURCE` | Blueprint-only endpoint used on a capture, or vice versa |
+| 400 | `INVALID_FLOOR_HEIGHT` | Grouped floor height is lower than its tallest wall plus the 0.20 m slab |
+| 400 | `INVALID_HOST` | `Host` header is not an allowed local name |
+| 403 | `FORBIDDEN_ORIGIN` | Write request from an origin outside the CORS list |
+| 404 | `PROJECT_NOT_FOUND` / `JOB_NOT_FOUND` / `ASSEMBLY_NOT_FOUND` | Unknown ID |
 | 404 | `SCENE_NOT_READY` | No successful reconstruction yet |
+| 404 | `INPUT_NOT_READY` | `GET capture-input` before preparation succeeded |
+| 404 | `MESH_NOT_READY` | No published mesh for this capture |
+| 404 | `NOT_FOUND` / 405 `METHOD_NOT_ALLOWED` | Unknown route, file or method |
 | 409 | `REVISION_CONFLICT` | Stale `revision` on PUT |
 | 409 | `JOB_IN_PROGRESS` | A job for this project is already queued/running |
 | 409 | `JOB_NOT_ACTIVE` | Cancel requested for a job that already finished |
-| 409 | `PROJECT_ID_MISMATCH` | Scene `id` ≠ URL ID |
+| 409 | `INPUT_NOT_READY` | Mesh reconstruction requested before the capture was prepared |
+| 409 | `CALIBRATION_CONFLICT` | Stale mesh calibration revision or reconstruction job |
+| 409 | `PROJECT_ID_MISMATCH` / `ASSEMBLY_ID_MISMATCH` | Body `id` ≠ URL ID |
 | 409 | `IMMUTABLE_FIELD` | PUT attempted to change `source` or `reconstruction` |
 | 413 | `UPLOAD_TOO_LARGE` | Over size limit |
-| 415 | `UNSUPPORTED_MEDIA_TYPE` | Not a decodable PNG/JPEG |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | Not a decodable PNG/JPEG (or MP4/MOV for video captures) |
 | 422 | `RECONSTRUCTION_FAILED` | Reported on a failed job (inside `job.error`) |
-| 500 | `INTERNAL_ERROR` | Unexpected |
+| 422 | `INVALID_EDITOR_SCENE` | A capture could not be turned into a valid editor Scene |
+| 500 | `INTERNAL_ERROR` / `EDITOR_PREVIEW_FAILED` | Unexpected; details are logged on the server, never returned |
+
+Failed jobs report their error inside `job.error`. Besides the codes above, jobs end with
+`JOB_CANCELLED` (user cancel) or `INTERRUPTED` (the API stopped or restarted mid-job; submit again).
 
 ## Endpoints
 
@@ -170,9 +188,9 @@ Save-all uses separate revision checks for layout and child scenes; failed saves
 
 `POST /api/projects/{id}/editor-scene` creates a persistent metric Scene from a
 capture's published mesh, or returns its existing edited Scene without replacing
-anything. Uncalibrated captures return `MESH_SCALE_REQUIRED`; raw scans without
-a floor reference return `MESH_FLOOR_REQUIRED`. Blueprint projects return
-`INVALID_SOURCE`. The two supported architectural demo layouts produce separate
+anything. Uncalibrated or floor-unaligned captures still open; the Scene's
+`reconstruction.warnings` say so (1 reconstruction unit is shown as 1 m until a
+reference distance is set). Blueprint projects return `INVALID_SOURCE`. The two supported architectural demo layouts produce separate
 semantic walls/rooms/openings and editable procedural furniture. Other meshes
 produce one surface object, with no invented semantic structure.
 
@@ -235,10 +253,11 @@ See [ingestion behavior and limits](../docs/mode2-ingestion.md).
 ## Mode 2 mesh reconstruction (Milestone 2)
 
 - `GET /api/reconstruction/capabilities`: `{ready, code, message, device?}` from
-  an isolated worker probe. Missing environment/checkpoint/CUDA returns `ready:false`.
+  an isolated worker probe. A missing Meshroom install (default engine) or, for the
+  optional VGGT engine, a missing checkpoint/CUDA returns `ready:false`.
 - `POST /api/projects/{id}/reconstruct-mesh`: optional JSON
-  `{ "maxViews": 20 }` (12, 20, 32, or 40; defaults to 20). Requires accepted
-  capture input. Returns 202 `{job}`; active same-project jobs return 409.
+  `{ "maxViews": 40 }` (12, 20, 32, or 40; defaults to 40). Requires accepted
+  capture input (else 409 `INPUT_NOT_READY`). Returns 202 `{job}`; active same-project jobs return 409.
 - `GET /api/projects/{id}/mesh`: latest successful reconstruction manifest, or
   404 `MESH_NOT_READY`. Adds `meshUrl` and `diagnosticUrl` to manifest v1.0.0.
 - `GET /api/projects/{id}/mesh-artifacts/{jobId}/{filename}`: only `mesh.glb` and
@@ -254,10 +273,11 @@ The mesh manifest includes input job/frame hashes, both camera transform
 directions, intrinsics/content bounds, `units: uncalibrated`, `calibration: null`,
 model/checkpoint provenance, processing settings, statistics and warnings.
 `statistics.endToEndSeconds` is null for legacy inputs without preparation timing.
-Errors include `WORKER_NOT_CONFIGURED`, `GPU_UNAVAILABLE`, `CHECKPOINT_MISSING`,
-`CHECKPOINT_LICENSE_REQUIRED`, `GPU_OUT_OF_MEMORY`, `RECONSTRUCTION_TIMEOUT`,
-`WORKER_EXITED`, `INVALID_MESH`, and `JOB_CANCELLED`. Failed/cancelled reruns retain
-the previous published mesh. See [worker setup and validation boundaries](../services/reconstruction/README.md).
+Errors include `WORKER_NOT_CONFIGURED`, `GPU_UNAVAILABLE`, `RECONSTRUCTION_TIMEOUT`,
+`WORKER_EXITED`, `INVALID_MESH`, `JOB_CANCELLED` and `INTERRUPTED`; the optional VGGT
+engine adds `CHECKPOINT_MISSING`, `CHECKPOINT_LICENSE_REQUIRED` and `GPU_OUT_OF_MEMORY`.
+Failed/cancelled reruns retain the previous published mesh, and their working files
+(frames, Meshroom caches) are deleted; only the private worker log is kept. See [worker setup and validation boundaries](../services/reconstruction/README.md).
 
 ## Mode 2 scale and alignment (Milestone 3)
 

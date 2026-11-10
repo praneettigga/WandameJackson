@@ -11,7 +11,6 @@ import queue
 import shutil
 import threading
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 from .mesh_worker import WORKER_DIR, demo_preset, run_worker
@@ -21,21 +20,18 @@ from .config import SCHEMA_VERSION
 from .errors import ApiError
 from .images import load_gray
 from .parser import PARSER_NAME, PARSER_VERSION, ParseError, parse_blueprint
-from .mesh_calibration import save_calibration
-from .storage import Storage, read_json
+from .mesh_calibration import discard_calibrations, save_calibration
+from .storage import Storage, contained, now_iso, read_json
 from .validation import validate_scene
 
 log = logging.getLogger("roomshift.jobs")
 ACTIVE = {"queued", "running"}
 CANCELLED_MESSAGE = "The reconstruction was cancelled. The previous scene (if any) is unchanged."
+INTERRUPTED_MESSAGE = "The server stopped before this job finished. Submit it again."
 
 
 class Cancelled(Exception):
     """Raised inside a running job when the user asked to cancel it."""
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class JobRunner:
@@ -169,17 +165,34 @@ class JobRunner:
         run_worker(root, job, capture_input, progress, cancelled)
         with self._guard:
             if cancelled():
-                shutil.rmtree(root / "reconstructions" / job["id"], ignore_errors=True)
                 raise Cancelled()
             with self.storage.project_lock(job["projectId"]):
                 project = self.storage.get_project(job["projectId"])
+                superseded = project.get("meshManifestPath")
                 project["meshManifestPath"] = f"reconstructions/{job['id']}/manifest.json"
                 project["meshManifestUrl"] = f"/api/projects/{job['projectId']}/mesh"
                 project["hasMesh"] = True
+                # Calibrations belong to the mesh they were baked from.
+                project.pop("meshCalibration", None)
                 self.storage.save_project(project)
-            if preset:
+                # The previous mesh and its calibrated copies are no longer served; free their space.
+                # Editor snapshots are unaffected: they keep their own copy under editor-assets/.
+                discard_calibrations(root)
+                manifest_path = contained(root, superseded) if superseded else None
+                previous = manifest_path.parent if manifest_path else None
+                if previous and previous.parent == (root / "reconstructions").resolve() and previous.name != job["id"]:
+                    shutil.rmtree(previous, ignore_errors=True)
+        # The mesh is published; baking the demo calibration (a large GLB) must not hold the job lock,
+        # and a failure there must not report the published mesh as failed.
+        warnings = []
+        if preset:
+            try:
                 self._apply_demo_calibration(job, preset)
-            self._update(job, status="succeeded", stage="ready", progress=1., meshManifestUrl=project["meshManifestUrl"])
+            except Exception:
+                log.exception("demo calibration for job %s failed", job["id"])
+                warnings.append("The recorded demo calibration could not be applied; calibrate the mesh manually.")
+        self._update(job, status="succeeded", stage="ready", progress=1., meshManifestUrl=project["meshManifestUrl"],
+                     **({"warnings": warnings} if warnings else {}))
 
     def _apply_demo_calibration(self, job: dict, preset: str):
         """Open a demo mesh already scaled/floor-aligned with the calibration recorded at bake time."""
@@ -192,7 +205,7 @@ class JobRunner:
     def _prepare(self, job: dict) -> None:
         project = self.storage.get_project(job["projectId"])
         def progress(value, stage):
-            if job["id"] in self._cancel:
+            if job["id"] in self._cancel or self._stopping.is_set():
                 raise Cancelled()
             self._update(job, progress=value, stage=stage)
         manifest = prepare_capture(self.storage.project_dir(project["id"]), project, job["id"], progress)
@@ -230,6 +243,9 @@ class JobRunner:
     # --- worker -----------------------------------------------------------
     def _update(self, job: dict, **fields) -> None:
         job.update(fields)
+        # cancel() records the request on its own copy of the job; never let a worker write erase it.
+        if job["id"] in self._cancel and job.get("status") in ACTIVE:
+            job["cancelRequested"] = True
         job["updatedAt"] = now_iso()
         self.storage.save_job(job)
 
@@ -243,20 +259,43 @@ class JobRunner:
                 continue  # cancelled while queued
             try:
                 self._run(job)
-            except Cancelled:
-                self._update(job, status="failed", error={"code": "JOB_CANCELLED", "message": CANCELLED_MESSAGE, "details": None})
-            except ApiError as e:
-                self._update(job, status="failed", error=e.body()["error"])
+            except (Cancelled, ApiError) as e:
+                if isinstance(e, ApiError) and e.code != "JOB_CANCELLED":
+                    self._update(job, status="failed", error=e.body()["error"])
+                elif self._stopping.is_set() and job_id not in self._cancel:
+                    self._update(job, status="failed", error={"code": "INTERRUPTED", "message": INTERRUPTED_MESSAGE, "details": None})
+                else:
+                    self._update(job, status="failed", error={"code": "JOB_CANCELLED", "message": CANCELLED_MESSAGE, "details": None})
             except ParseError as e:
                 self._update(job, status="failed", error={"code": "RECONSTRUCTION_FAILED", "message": str(e), "details": None})
-            except Exception as e:  # never let one job kill the worker
+            except Exception:  # never let one job kill the worker
                 log.exception("job %s crashed", job_id)
-                self._update(job, status="failed", error={"code": "INTERNAL_ERROR", "message": f"Reconstruction crashed: {e}", "details": None})
+                self._update(job, status="failed", error={
+                    "code": "INTERNAL_ERROR",
+                    "message": "Reconstruction failed unexpectedly. The API log has the details.",
+                    "details": None,
+                })
             finally:
+                if job.get("kind") == "mesh-reconstruction" and job.get("status") != "succeeded":
+                    self._discard_mesh_scratch(job)
                 with self._guard:
                     if self._active.get(job["projectId"]) == job_id:
                         self._active.pop(job["projectId"], None)
                     self._cancel.discard(job_id)
+
+    def _discard_mesh_scratch(self, job: dict) -> None:
+        """A failed/cancelled mesh job keeps only its worker log; frames and Meshroom caches can be GBs."""
+        root = self.storage.project_dir(job["projectId"])
+        scratch = root / "reconstructions" / job["id"] if root else None
+        if not scratch or not scratch.is_dir():
+            return
+        for child in scratch.iterdir():
+            if child.name == "worker.log":
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
 
     def _run(self, job: dict) -> None:
         with self._guard:
@@ -278,7 +317,7 @@ class JobRunner:
         if cal is None:
             cal = estimate_scale(gray)
         def progress(p: float) -> None:
-            if job["id"] in self._cancel:
+            if job["id"] in self._cancel or self._stopping.is_set():
                 raise Cancelled()
             self._update(job, progress=round(0.05 + 0.85 * p, 3))
 

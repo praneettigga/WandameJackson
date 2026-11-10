@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import { useEffect, useState } from 'react';
 import {
   confidenceLevel,
@@ -158,18 +159,30 @@ function NumberField({
             return;
           }
           // Merely focusing a rounded value must not create an edit/undo entry.
+          const before = useEditor.getState().scene;
           if (n !== Number(displayNumber(value))) onCommit(n);
-          const entity =
-            useEditor.getState().scene &&
-            entityById(useEditor.getState().scene!, useEditor.getState().selectedId);
-          if (entity && useEditor.getState().error) setDraft(String(value));
+          // Rejected, or snapped back to the same value: the scene (and `value`) did not change,
+          // so nothing else would replace what was typed.
+          if (useEditor.getState().scene === before) setDraft(displayNumber(value));
         }}
       />
     </label>
   );
 }
 export function Inspector() {
-  const state = useEditor();
+  const state = useEditor(
+    useShallow((s) => ({
+      busy: s.busy,
+      duplicate: s.duplicate,
+      gridStep: s.gridStep,
+      patch: s.patch,
+      remove: s.remove,
+      scene: s.scene,
+      selectedId: s.selectedId,
+      snap: s.snap,
+      wallEdit: s.wallEdit,
+    })),
+  );
   const entity = state.scene ? entityById(state.scene, state.selectedId) : null;
   const patch = (field: string, value: unknown) =>
     entity && state.patch(entity.id, { [field]: value });

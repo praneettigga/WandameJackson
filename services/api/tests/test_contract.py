@@ -61,3 +61,11 @@ def test_storage_rejects_dot_directory_ids(tmp_path):
     assert storage.project_dir('..') is None
     assert storage.project_dir('valid\n') is None
     assert storage.project_dir('demo-room') == tmp_path / 'projects' / 'demo-room'
+
+
+def test_assembly_schema_matches_the_api_models():
+    """contracts/assembly.schema.json is generated from the Pydantic models; regenerate it when they change."""
+    from roomshift_api.assemblies import Assembly
+    committed = json.loads((CONTRACTS / "assembly.schema.json").read_text(encoding="utf-8"))
+    meta = {"$schema", "$id", "description"}
+    assert {k: v for k, v in committed.items() if k not in meta} == Assembly.model_json_schema()

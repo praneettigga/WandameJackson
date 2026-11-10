@@ -157,7 +157,6 @@ describe('placing custom components', () => {
   it('exports placed scans in a valid GLB', async () => {
     const item = await importChair();
     useEditor.getState().add(item.id);
-    // @ts-expect-error the validator ships without type declarations
     const validator = await import('gltf-validator');
     const report = await validator.validateBytes(
       new Uint8Array(await exportGlb(useEditor.getState().scene!, false)),

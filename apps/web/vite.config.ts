@@ -5,6 +5,19 @@ import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    rollupOptions: {
+      output: {
+        // Large, rarely-changing libraries get their own long-cached chunks.
+        manualChunks: {
+          three: ['three'],
+          r3f: ['@react-three/fiber', '@react-three/drei'],
+          react: ['react', 'react-dom', 'zustand'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 900,
+  },
   server: {
     port: 5173,
     strictPort: true,

@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from roomshift_api import auto_scale
+from roomshift_api import ocr
 from roomshift_api.auto_scale import Label, _dimension_span, estimate_scale, parse_measurement
 from conftest import l_shaped_plan, png_bytes, wait_job
 
@@ -44,7 +44,7 @@ def stub_labels(monkeypatch, label, original_shape=(600, 800)):
             return []
         sy, sx = gray.shape[0] / original_shape[0], gray.shape[1] / original_shape[1]
         return [Label(label.text, label.x * sx, label.y * sy, label.w * sx, label.h * sy, label.confidence)]
-    monkeypatch.setattr(auto_scale, 'read_labels', read)
+    monkeypatch.setattr(ocr, 'read_labels', read)
 
 
 def test_dimension_geometry_and_original_pixel_scale(monkeypatch):
@@ -79,8 +79,8 @@ def test_conflicting_measurements_fall_back(monkeypatch):
     calls = []
     def read(gray):
         calls.append(1)
-        return [Label(p.text, p.x * 2, p.y * 2, p.w * 2, p.h * 2, 99) for p in labels] if len(calls) == 1 else []
-    monkeypatch.setattr(auto_scale, 'read_labels', read)
+        return [Label(p.text, p.x, p.y, p.w, p.h, 99) for p in labels] if len(calls) == 1 else []
+    monkeypatch.setattr(ocr, 'read_labels', read)
     cal = estimate_scale(image)
     assert cal['method'] == 'wall-thickness'
     assert any('disagree' in note for note in cal['notes'])
@@ -89,7 +89,7 @@ def test_conflicting_measurements_fall_back(monkeypatch):
 def test_no_ocr_still_assigns_explicit_estimate(monkeypatch):
     def unavailable(_):
         raise RuntimeError('OCR unavailable')
-    monkeypatch.setattr(auto_scale, 'read_labels', unavailable)
+    monkeypatch.setattr(ocr, 'read_labels', unavailable)
     cal = estimate_scale(l_shaped_plan())
     assert cal['method'] == 'wall-thickness'
     assert cal['metersPerPixel'] == pytest.approx(.025)
@@ -119,7 +119,7 @@ def test_api_automatic_default_and_manual_override(client, monkeypatch):
 
 
 def test_api_estimates_without_preview(client, monkeypatch):
-    monkeypatch.setattr(auto_scale, 'read_labels', lambda _: [])
+    monkeypatch.setattr(ocr, 'read_labels', lambda _: [])
     pid = client.post('/api/projects', files={'blueprint': ('plan.png', png_bytes(l_shaped_plan()), 'image/png')}).json()['project']['id']
     response = client.post(f'/api/projects/{pid}/reconstruct', json={})
     assert wait_job(client, response.json()['job']['id'])['status'] == 'succeeded'
@@ -153,11 +153,11 @@ def test_dimension_line_interrupted_by_text_and_chained_segments():
 def test_explicit_unit_note_and_low_confidence_rejection(monkeypatch):
     image, label = dimensioned_plan('5000')
     def read(gray):
-        if gray.shape != (1200, 1600):
+        if gray.shape != (600, 800):  # OCR runs at native resolution, never upscaled
             return []
-        return [Label(label.text, label.x * 2, label.y * 2, label.w * 2, label.h * 2, 99),
-                Label('ALL DIMENSIONS IN mm', 20, 1100, 400, 20, 99)]
-    monkeypatch.setattr(auto_scale, 'read_labels', read)
+        return [Label(label.text, label.x, label.y, label.w, label.h, 99),
+                Label('ALL DIMENSIONS IN mm', 10, 550, 200, 10, 99)]
+    monkeypatch.setattr(ocr, 'read_labels', read)
     assert estimate_scale(image)['metersPerPixel'] == pytest.approx(.01, rel=.01)
     stub_labels(monkeypatch, Label('5 m', label.x, label.y, label.w, label.h, 30))
     assert estimate_scale(image)['method'] == 'wall-thickness'
@@ -188,3 +188,19 @@ def test_overall_dimension_without_ticks_matches_outer_walls(monkeypatch):
     cv2.line(image, (350, 80), (650, 80), 0, 2)
     stub_labels(monkeypatch, label, image.shape)
     assert estimate_scale(image)['method'] == 'wall-thickness'
+
+
+def test_implausible_candidate_is_skipped_not_fatal(monkeypatch):
+    from roomshift_api import auto_scale
+    from roomshift_api.errors import ApiError
+    image, label = dimensioned_plan()
+    stub_labels(monkeypatch, label)
+    real, calls = auto_scale.compute_calibration, []
+    def reject_candidate(*args):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ApiError(400, 'INVALID_CALIBRATION', 'not a plausible drawing scale')
+        return real(*args)
+    monkeypatch.setattr(auto_scale, 'compute_calibration', reject_candidate)
+    cal = estimate_scale(image)
+    assert cal['method'] == 'wall-thickness' and len(calls) == 2

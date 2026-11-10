@@ -110,6 +110,8 @@ def current_mesh(storage, project):
     if not project.get('meshManifestPath'):
         raise ApiError(404, 'MESH_NOT_READY', 'Reconstruct a mesh before calibrating it.')
     base = read_json(root/project['meshManifestPath'])
+    if base is None:
+        raise ApiError(404, 'MESH_NOT_READY', 'The reconstructed mesh is missing. Reconstruct it again.')
     pointer = project.get('meshCalibration')
     if pointer and pointer['jobId'] == base['jobId']:
         return read_json(root/pointer['manifestPath'])
@@ -184,4 +186,15 @@ def save_calibration(storage, project_id, body):
         except BaseException:
             shutil.rmtree(output, ignore_errors=True)
             raise
+        discard_calibrations(root, keep=revision)
         return mesh_response(result)
+
+
+def discard_calibrations(root, keep=None):
+    """Remove superseded calibrated copies (each a full GLB); only the published revision is served."""
+    folder = root/'calibrations'
+    if not folder.is_dir():
+        return
+    for child in folder.iterdir():
+        if child.is_dir() and child.name != keep:
+            shutil.rmtree(child, ignore_errors=True)

@@ -21,7 +21,7 @@ import {
   editEntity,
   entityById,
   sceneSchema,
-  validateScene,
+  validateEdit,
   type Entity,
   type Scene,
   type SceneObject,
@@ -65,8 +65,10 @@ export type EditorState = {
   jobs: Record<string, Job>;
   view: FloorView;
   loadAssembly: (envelope: AssemblyEnvelope) => void;
+  /** Load a newly created/extended grouped project, keeping unsaved edits of floors it still contains. */
+  adoptAssembly: (envelope: AssemblyEnvelope) => void;
   refreshAssembly: (envelope: AssemblyEnvelope) => void;
-  activateFloor: (projectId: string, entityId?: string) => void;
+  activateFloor: (projectId: string, entityId?: string, options?: { force?: boolean }) => void;
   updateAssembly: (mutate: (assembly: Assembly) => void) => void;
   setView: (patch: Partial<FloorView>) => void;
   hasUnsaved: () => boolean;
@@ -117,7 +119,8 @@ export type EditorState = {
   commit: (mutate: (scene: Scene) => void) => boolean;
   /** Topology edit: applies `mutate`, rebuilds rooms from walls, and commits as one undo step. */
   wallEdit: (mutate: (scene: Scene) => void) => boolean;
-  patch: (id: string, patch: Record<string, unknown>) => void;
+  /** Returns false when the edit was rejected (invalid) or changed nothing. */
+  patch: (id: string, patch: Record<string, unknown>) => boolean;
   add: (componentId: string) => void;
   duplicate: () => void;
   remove: () => void;
@@ -150,6 +153,24 @@ export const useEditor = create<EditorState>((set, get) => ({
       activeProjectId: floor.projectId,
     });
   },
+  adoptAssembly: (envelope) => {
+    const contexts = stashFloor(get());
+    get().loadAssembly(envelope);
+    const allowed = new Set(floorsOf(envelope.assembly).map((f) => f.projectId));
+    const retained = Object.fromEntries(Object.entries(contexts).filter(([id]) => allowed.has(id)));
+    set({ floorStates: retained, busy: false });
+    const active = get().activeProjectId;
+    const context = active ? retained[active] : undefined;
+    if (context)
+      set({
+        scene: context.scene,
+        past: context.past,
+        future: context.future,
+        dirty: context.dirty,
+        conflict: context.conflict,
+        selectedId: context.selectedId,
+      });
+  },
   refreshAssembly: (envelope) => {
     const s = get();
     const contexts = stashFloor(s);
@@ -173,9 +194,10 @@ export const useEditor = create<EditorState>((set, get) => ({
       frame: s.frame + (changed ? 1 : 0),
     });
   },
-  activateFloor: (projectId, entityId) => {
+  activateFloor: (projectId, entityId, options) => {
     const s = get();
-    if (!s.assembly || !s.projects[projectId] || s.busy) return;
+    // `force` lets the job tracker, which owns the busy flag, switch floors.
+    if (!s.assembly || !s.projects[projectId] || (s.busy && !options?.force)) return;
     const floorStates = stashFloor(s);
     const saved = floorStates[projectId];
     const scene = saved?.scene ?? s.scenes[projectId] ?? null;
@@ -220,7 +242,13 @@ export const useEditor = create<EditorState>((set, get) => ({
       assemblySchema.parse(next);
       const errors = layoutErrors(next, editorScenes(s));
       if (errors.length) throw new Error(errors[0]);
-      set({ assembly: next, assemblyDirty: true, error: null, frame: s.frame + 1 });
+      // Re-frame only when floors appear/disappear; typing names or offsets keeps the camera.
+      const floorIds = (a: Assembly) =>
+        floorsOf(a)
+          .map((f) => f.id)
+          .join();
+      const reframe = floorIds(next) !== floorIds(s.assembly);
+      set({ assembly: next, assemblyDirty: true, error: null, frame: s.frame + (reframe ? 1 : 0) });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     }
@@ -228,7 +256,12 @@ export const useEditor = create<EditorState>((set, get) => ({
   setView: (patch) => {
     const s = get();
     if (s.busy) return;
-    set({ view: { ...s.view, ...patch }, selectedId: null, measures: [], frame: s.frame + 1 });
+    const view = { ...s.view, ...patch };
+    const reframe =
+      view.mode !== s.view.mode ||
+      view.floorId !== s.view.floorId ||
+      view.buildingId !== s.view.buildingId;
+    set({ view, selectedId: null, measures: [], frame: s.frame + (reframe ? 1 : 0) });
   },
   scene: null,
   selectedId: null,
@@ -261,7 +294,10 @@ export const useEditor = create<EditorState>((set, get) => ({
     set({ lengthUnit: unit });
   },
   seeThrough: false,
-  serviceLayers: Object.fromEntries(serviceKinds.map((k) => [k, true])) as Record<ServiceKind, boolean>,
+  serviceLayers: Object.fromEntries(serviceKinds.map((k) => [k, true])) as Record<
+    ServiceKind,
+    boolean
+  >,
   serviceProposal: null,
   serviceFocus: null,
   roomUses: storedRoomUses(),
@@ -314,7 +350,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     try {
       const next = structuredClone(scene);
       mutate(next);
-      validateScene(next);
+      validateEdit(scene, next);
       if (JSON.stringify(scene) === JSON.stringify(next)) return false;
       set({ scene: next, past: [...past.slice(-49), scene], future: [], dirty: true, error: null });
       return true;
@@ -402,7 +438,11 @@ export const useEditor = create<EditorState>((set, get) => ({
       });
     else if (scene.walls.some((w) => w.id === id)) {
       const hosted = scene.openings.filter((o) => o.wallId === id).length;
-      if (hosted && typeof window !== 'undefined' && !window.confirm(`Delete this wall and its ${hosted} door/window opening(s)?`))
+      if (
+        hosted &&
+        typeof window !== 'undefined' &&
+        !window.confirm(`Delete this wall and its ${hosted} door/window opening(s)?`)
+      )
         return;
       ok = get().wallEdit((s) => deleteWall(s, id));
     }
@@ -532,7 +572,9 @@ function stashFloor(s: EditorState): Record<string, FloorSnapshot> {
       : {}),
   };
 }
-export function editorScenes(s: EditorState): Record<string, Scene> {
+export function editorScenes(
+  s: Pick<EditorState, 'scenes' | 'floorStates' | 'scene'>,
+): Record<string, Scene> {
   return {
     ...s.scenes,
     ...Object.fromEntries(

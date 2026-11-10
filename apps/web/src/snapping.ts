@@ -8,13 +8,7 @@ export const MIN_GRID_PX = 16;
 export const GRID_STEPS = [0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1, 2, 5];
 
 export type SnapKind =
-  | 'endpoint'
-  | 'intersection'
-  | 'midpoint'
-  | 'perpendicular'
-  | 'guide'
-  | 'angle'
-  | 'grid';
+  'endpoint' | 'intersection' | 'midpoint' | 'perpendicular' | 'guide' | 'angle' | 'grid';
 export type SnapSettings = Record<SnapKind, boolean>;
 export const defaultSnapSettings: SnapSettings = {
   endpoint: true,
@@ -86,7 +80,9 @@ const round = (value: number, step: number) => Math.round(value / step) * step;
 export function closestOnSegment(p: V2, a: V2, b: V2): { point: V2; t: number } {
   const d = sub(b, a);
   const lengthSq = d[0] * d[0] + d[1] * d[1];
-  const t = lengthSq ? Math.min(1, Math.max(0, ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / lengthSq)) : 0;
+  const t = lengthSq
+    ? Math.min(1, Math.max(0, ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / lengthSq))
+    : 0;
   return { point: [a[0] + t * d[0], a[1] + t * d[1]], t };
 }
 
@@ -164,14 +160,19 @@ export function snapPoint(p: V2, ctx: SnapContext): SnapResult {
     if (hit) return { point: hit.point, kind: 'midpoint', guides: [], targetId: hit.id };
   }
   if (settings.perpendicular) {
-    const feet = segments.map((s) => ({ point: closestOnSegment(p, s.start, s.end).point, id: s.id }));
+    const feet = segments.map((s) => ({
+      point: closestOnSegment(p, s.start, s.end).point,
+      id: s.id,
+    }));
     const hit = nearest(p, feet, tolerance);
     if (hit) {
       // Prefer a grid-rounded distance along the wall when that stays on the wall.
       const seg = segments.find((s) => s.id === hit.id)!;
       const length = dist(seg.start, seg.end);
       const along = closestOnSegment(p, seg.start, seg.end).t * length;
-      const t = settings.grid ? Math.min(length, round(along, ctx.gridStep)) / (length || 1) : along / (length || 1);
+      const t = settings.grid
+        ? Math.min(length, round(along, ctx.gridStep)) / (length || 1)
+        : along / (length || 1);
       const point: V2 = [
         seg.start[0] + t * (seg.end[0] - seg.start[0]),
         seg.start[1] + t * (seg.end[1] - seg.start[1]),
@@ -199,7 +200,11 @@ export function snapPoint(p: V2, ctx: SnapContext): SnapResult {
           for (const axis of [0, 1] as const) {
             if (Math.abs(dir[axis]) < 1e-9) continue;
             const t = (e.point[axis] - anchor[axis]) / dir[axis];
-            if (t > 0 && Math.abs(t - length) <= tolerance && (kind !== 'guide' || Math.abs(t - length) < Math.abs(along - length))) {
+            if (
+              t > 0 &&
+              Math.abs(t - length) <= tolerance &&
+              (kind !== 'guide' || Math.abs(t - length) < Math.abs(along - length))
+            ) {
               along = t;
               kind = 'guide';
               const at: V2 = [anchor[0] + t * dir[0], anchor[1] + t * dir[1]];
@@ -209,7 +214,8 @@ export function snapPoint(p: V2, ctx: SnapContext): SnapResult {
           }
         }
       }
-      if (kind === 'angle' && settings.grid) along = Math.max(ctx.gridStep, round(along, ctx.gridStep));
+      if (kind === 'angle' && settings.grid)
+        along = Math.max(ctx.gridStep, round(along, ctx.gridStep));
       return {
         point: [anchor[0] + along * dir[0], anchor[1] + along * dir[1]],
         kind,
@@ -290,7 +296,11 @@ export function snapOpeningOffset(
   const targets = allTargets.filter((t) => t.offset >= -1e-9 && t.offset <= max + 1e-9);
   let best: (typeof targets)[number] | null = null;
   for (const t of targets)
-    if (Math.abs(t.offset - raw) <= tolerance && (!best || Math.abs(t.offset - raw) < Math.abs(best.offset - raw))) best = t;
+    if (
+      Math.abs(t.offset - raw) <= tolerance &&
+      (!best || Math.abs(t.offset - raw) < Math.abs(best.offset - raw))
+    )
+      best = t;
   if (best) return { offset: clamp(best.offset), kind: best.kind };
   return { offset: clamp(round(raw, gridStep)), kind: 'grid' };
 }
@@ -330,10 +340,14 @@ export function snapToWalls(
       const len = Math.hypot(wall.end[0] - wall.start[0], wall.end[1] - wall.start[1]);
       if (len < 1e-9) continue;
       const d: V2 = [(wall.end[0] - wall.start[0]) / len, (wall.end[1] - wall.start[1]) / len];
-      if (used.some((u) => {
-        const ul = Math.hypot(u.end[0] - u.start[0], u.end[1] - u.start[1]);
-        return Math.abs(((u.end[0] - u.start[0]) * d[1] - (u.end[1] - u.start[1]) * d[0]) / ul) < 0.2;
-      }))
+      if (
+        used.some((u) => {
+          const ul = Math.hypot(u.end[0] - u.start[0], u.end[1] - u.start[1]);
+          return (
+            Math.abs(((u.end[0] - u.start[0]) * d[1] - (u.end[1] - u.start[1]) * d[0]) / ul) < 0.2
+          );
+        })
+      )
         continue;
       const rel: V2 = [p[0] - wall.start[0], p[1] - wall.start[1]];
       const t = rel[0] * d[0] + rel[1] * d[1];

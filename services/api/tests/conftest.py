@@ -17,6 +17,7 @@ def make_settings(tmp_path: Path, **over) -> Settings:
     base = dict(
         data_dir=tmp_path / "data", contracts_dir=CONTRACTS, max_upload_bytes=5 * 1024 * 1024,
         max_image_side=8000, dev_seed_fixture=False, cors_origins=("http://localhost:5173",),
+        allowed_hosts=("localhost", "127.0.0.1", "testserver"),
     )
     base.update(over)
     return Settings(**base)

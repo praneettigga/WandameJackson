@@ -2,7 +2,7 @@ import copy
 import cv2
 import numpy as np
 from conftest import l_shaped_plan, png_bytes, wait_job
-from roomshift_api import auto_scale
+from roomshift_api import ocr
 
 
 def upload(client, image=None):
@@ -70,7 +70,7 @@ def test_captures_cannot_be_used_as_blueprint_floors(client):
 
 
 def test_independent_auto_scales_partial_failure_and_retry(client, monkeypatch):
-    monkeypatch.setattr(auto_scale, 'read_labels', lambda _: [])
+    monkeypatch.setattr(ocr, 'read_labels', lambda _: [])
     image = l_shaped_plan()
     ids = [upload(client, image), upload(client, cv2.resize(image, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)), upload(client, np.full((600, 600), 255, np.uint8))]
     a = make_group(client, ids)['assembly']; aid = a['id']
@@ -95,7 +95,7 @@ def test_independent_auto_scales_partial_failure_and_retry(client, monkeypatch):
 
 
 def test_floor_manual_reference_is_used_and_job_links_cannot_be_forged(client, monkeypatch):
-    monkeypatch.setattr(auto_scale, 'read_labels', lambda _: [])
+    monkeypatch.setattr(ocr, 'read_labels', lambda _: [])
     ids = [upload(client), upload(client)]
     a = make_group(client, ids)['assembly']; aid = a['id']
     a['buildings'][0]['floors'][0]['settings'] = {'scaleMode': 'manual', 'calibration': {'pointA': [100, 100], 'pointB': [500, 100], 'distanceMeters': 8}}

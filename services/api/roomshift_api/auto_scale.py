@@ -6,21 +6,15 @@ with the outside walls of the plan. No network API.
 """
 from __future__ import annotations
 
-import csv
-import io
-import importlib.util
-import json
-import sys
-from pathlib import Path
 import re
-import shutil
-import subprocess
-from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
+from . import ocr
 from .calibration import compute_calibration
+from .errors import ApiError
+from .ocr import Label
 from .parser import estimate_thickness_px, normalize_drawing
 
 NUMBER = r"\d+(?:\.\d+)?"
@@ -30,6 +24,8 @@ UNITS = {"mm": .001, "cm": .01, "m": 1., "ft": .3048, "in": .0254}
 def parse_measurement(text: str, default_unit: str | None = None) -> float | None:
     """Accept explicit metric/imperial lengths; never guess units from magnitude."""
     text = text.lower().strip().replace("′", "'").replace("’", "'").replace("″", '"').replace('“', '"').replace('”', '"')
+    # OCR often reads the feet-inches hyphen as an underscore or dash variant (16'_5").
+    text = re.sub(r"(?<=')\s*[_–—]\s*", "-", text)
     # Thousands separators only; decimal commas remain ambiguous and are rejected.
     text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", text)
     metric = re.fullmatch(rf"({NUMBER})\s*(mm|cm|m|ft|in)", text)
@@ -52,67 +48,6 @@ def parse_measurement(text: str, default_unit: str | None = None) -> float | Non
         else:
             return None
     return value if .05 <= value <= 200 else None
-
-
-@dataclass(frozen=True)
-class Label:
-    text: str
-    x: float
-    y: float
-    w: float
-    h: float
-    confidence: float
-
-
-def read_labels(gray: np.ndarray) -> list[Label]:
-    """Local OCR boxes, grouped into short spatially adjacent phrases."""
-    executable = shutil.which("tesseract")
-    ok, encoded = cv2.imencode(".png", gray)
-    if not ok:
-        raise RuntimeError("The image could not be prepared for measurement reading.")
-    if not executable and sys.platform == "darwin" and importlib.util.find_spec("Vision"):
-        try:
-            result = subprocess.run([sys.executable, str(Path(__file__).with_name("ocr_macos.py"))],
-                                    input=encoded.tobytes(), capture_output=True, timeout=8, check=True)
-            h, w = gray.shape
-            return [Label(p["text"], p["x"] * w, p["y"] * h, p["w"] * w, p["h"] * h, p["confidence"])
-                    for p in json.loads(result.stdout)]
-        except (OSError, subprocess.SubprocessError, ValueError, KeyError) as exc:
-            raise RuntimeError("Native measurement reading failed or timed out; automatic scale is estimated.") from exc
-    if not executable:
-        raise RuntimeError("Printed measurements could not be read: install Tesseract OCR (or the macOS Vision dependencies).")
-    try:
-        result = subprocess.run(
-            [executable, "stdin", "stdout", "-l", "eng", "--psm", "11", "tsv"],
-            input=encoded.tobytes(), capture_output=True, timeout=6, check=True,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError("Printed measurement reading failed or timed out; automatic scale is estimated.") from exc
-    lines: dict[tuple, list[Label]] = {}
-    for row in csv.DictReader(io.StringIO(result.stdout.decode("utf-8", errors="replace")), delimiter="\t", quoting=csv.QUOTE_NONE):
-        if row.get("level") != "5" or not row.get("text", "").strip():
-            continue
-        try:
-            label = Label(row["text"], float(row["left"]), float(row["top"]), float(row["width"]), float(row["height"]), float(row["conf"]))
-        except (ValueError, KeyError):
-            continue
-        key = tuple(row[k] for k in ("page_num", "block_num", "par_num", "line_num"))
-        lines.setdefault(key, []).append(label)
-    labels = []
-    for words in lines.values():
-        words.sort(key=lambda word: word.x)
-        for i, word in enumerate(words):
-            phrase = []
-            for next_word in words[i:i + 7]:
-                if phrase and next_word.x - (phrase[-1].x + phrase[-1].w) > max(word.h, next_word.h) * 2:
-                    break
-                phrase.append(next_word)
-                x, y = min(p.x for p in phrase), min(p.y for p in phrase)
-                labels.append(Label(" ".join(p.text for p in phrase), x, y,
-                                    max(p.x + p.w for p in phrase) - x,
-                                    max(p.y + p.h for p in phrase) - y,
-                                    min(p.confidence for p in phrase)))
-    return labels
 
 
 def _unit_note(labels: list[Label]) -> str | None:
@@ -225,10 +160,15 @@ def estimate_scale(gray: np.ndarray) -> dict:
     sy, sx = work.shape[0] / original_h, work.shape[1] / original_w
     candidates = []
     warnings = []
+    # OCR reads native resolution best (upscaling blurs decimal points); labels are mapped to `work`.
+    ocr_ratio = min(ratio, 1.)
+    ocr_image = work if ocr_ratio == ratio else gray
     for rotation in (0, 1, 3):
         view = np.ascontiguousarray(np.rot90(work, rotation))
         try:
-            labels = read_labels(view)
+            k = ratio / ocr_ratio
+            labels = [Label(l.text, l.x * k, l.y * k, l.w * k, l.h * k, l.confidence)
+                      for l in ocr.read_labels(np.ascontiguousarray(np.rot90(ocr_image, rotation)))]
         except RuntimeError as exc:
             warnings.append(str(exc))
             break
@@ -253,7 +193,10 @@ def estimate_scale(gray: np.ndarray) -> dict:
                         x, y = y, work.shape[0] - 1 - x
                     return [float(np.clip(x / sx, 0, original_w)), float(np.clip(y / sy, 0, original_h))]
                 a, b = original(span[0]), original(span[1])
-                cal = compute_calibration(a, b, meters, original_w, original_h)
+                try:
+                    cal = compute_calibration(a, b, meters, original_w, original_h)
+                except ApiError:
+                    continue  # an implausible reading is a rejected candidate, not a failed estimate
                 if not .0001 <= cal["metersPerPixel"] <= .5:
                     continue
                 # Phrase windows and rotated OCR must not count the same segment twice.
@@ -301,6 +244,9 @@ def estimate_scale(gray: np.ndarray) -> dict:
         notes = ["Approximate scale: assumes the longest image side represents 10 m because no reliable measurement or solid wall thickness was found. Use a manual reference for accurate dimensions."]
     # A visible reference segment expresses the assumed scale without pretending it was measured.
     a = [float(xs.min()), float(np.median(ys))] if xs.size else [0., 0.]
-    b = [float(xs.max()), a[1]] if xs.size and xs.max() > xs.min() else [float(max(1, original_w)), a[1]]
+    # The reference must span at least one pixel; otherwise show the scale across the image width.
+    b = [float(xs.max()), a[1]] if xs.size and xs.max() - xs.min() >= 1 else [float(max(1, original_w)), a[1]]
+    if b[0] - a[0] < 1:
+        a[0] = 0.
     cal = compute_calibration(a, b, (b[0] - a[0]) * mpp, original_w, original_h)
     return {**cal, "method": method, "notes": notes + warnings}

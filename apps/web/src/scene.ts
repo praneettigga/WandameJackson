@@ -347,3 +347,15 @@ export function metersPerPixel(a: V2, b: V2, distance: number) {
   return scale;
 }
 export const exportSceneJson = (scene: Scene) => JSON.stringify(sceneSchema.parse(scene), null, 2);
+
+/**
+ * Validates an edit: the schema must hold, and the edit may not introduce new geometry
+ * warnings. Warnings the scene already had (e.g. from reconstruction) never block edits.
+ */
+export function validateEdit(previous: Scene, value: unknown): Scene {
+  const scene = sceneSchema.parse(value);
+  const existing = new Set(geometryWarnings(previous));
+  const added = geometryWarnings(scene).filter((w) => !existing.has(w));
+  if (added.length) throw new Error(added.join('\n'));
+  return scene;
+}

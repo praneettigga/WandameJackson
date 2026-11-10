@@ -2,14 +2,12 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
-
 import cv2
 import numpy as np
 from shapely.geometry import Point, Polygon
 
-if TYPE_CHECKING:
-    from .auto_scale import Label
+from . import ocr
+from .ocr import Label
 
 # Conservative room vocabulary avoids assigning dimensions, furniture and drawing notes.
 ROOM_NAME = re.compile(
@@ -58,15 +56,12 @@ def assign_room_names(rooms: list[dict], labels: list[Label], meters_per_pixel: 
 def read_room_names(gray: np.ndarray, result: dict, meters_per_pixel: float) -> None:
     if not result['rooms']:
         return
-    # Import lazily: automatic scale itself uses parser normalization helpers.
-    from .auto_scale import Label, read_labels
-
     height, width = gray.shape
     ratio = min(2.0, 2200 / max(gray.shape))
     work = cv2.resize(gray, None, fx=ratio, fy=ratio,
                       interpolation=cv2.INTER_CUBIC if ratio > 1 else cv2.INTER_AREA)
     try:
-        labels = read_labels(work)
+        labels = ocr.read_labels(work)
     except RuntimeError:
         result['warnings'].append(
             'Room names could not be read automatically. Select a room floor in the 3D view '

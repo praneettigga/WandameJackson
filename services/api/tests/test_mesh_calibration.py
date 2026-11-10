@@ -157,3 +157,23 @@ def test_failed_export_keeps_published_calibration(client, synthetic_worker, mon
     assert client.get(f'/api/projects/{pid}/mesh').json()['calibrationRevision'] == saved['calibrationRevision']
     assert client.get(saved['meshUrl']).content == previous
     assert len(list((client.app.state.storage.project_dir(pid)/'calibrations').iterdir())) == 1
+
+
+def test_superseded_calibrations_and_meshes_are_removed(client, synthetic_worker):
+    pid, base = prepared(client)
+    root = client.app.state.storage.project_dir(pid)
+    url = f'/api/projects/{pid}/mesh/calibration'
+    body = {'jobId': base['jobId'], 'reference': {'pointA': [0,0,0], 'pointB': [1,0,0], 'distanceMeters': 2}}
+    first = client.put(url, json=body).json()
+    second = client.put(url, json={**body, 'expectedRevision': first['calibrationRevision'], 'rotationDegrees': [0, 30, 0]}).json()
+    assert [p.name for p in (root/'calibrations').iterdir()] == [second['calibrationRevision']]
+    assert client.get(second['meshUrl']).status_code == 200
+    assert client.get(first['meshUrl']).status_code == 404
+    # A new reconstruction replaces the mesh: the old one and its calibration are freed.
+    job = wait_job(client, submit(client, pid)['id'])
+    assert job['status'] == 'succeeded', job
+    assert [p.name for p in (root/'reconstructions').iterdir()] == [job['id']]
+    assert not list((root/'calibrations').iterdir())
+    fresh = client.get(f'/api/projects/{pid}/mesh').json()
+    assert fresh['jobId'] == job['id'] and fresh['calibrationRevision'] is None
+    assert client.get(fresh['meshUrl']).status_code == 200

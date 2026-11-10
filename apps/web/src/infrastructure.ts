@@ -1,6 +1,14 @@
 import { footprint, insidePolygon } from './completeness';
 import { closestOnSegment, segmentIntersection } from './snapping';
-import { wallLength, type Opening, type Room, type Scene, type V2, type V3, type Wall } from './scene';
+import {
+  wallLength,
+  type Opening,
+  type Room,
+  type Scene,
+  type V2,
+  type V3,
+  type Wall,
+} from './scene';
 
 // Invisible infrastructure: a rule-based layout of electrical wiring and plumbing that runs inside
 // the walls, dropping under the floor or into the ceiling void only where it has to. It is derived
@@ -19,13 +27,14 @@ export const roomUseLabels: Record<RoomUse, string> = {
 };
 export type ServiceKind = 'power' | 'lighting' | 'cold' | 'hot' | 'waste';
 export const serviceKinds: ServiceKind[] = ['power', 'lighting', 'cold', 'hot', 'waste'];
-export const serviceInfo: Record<ServiceKind, { label: string; color: string; diameter: number }> = {
-  power: { label: 'Power', color: '#f0a43a', diameter: 0.012 },
-  lighting: { label: 'Lighting', color: '#b98cff', diameter: 0.01 },
-  cold: { label: 'Cold water', color: '#3d9bff', diameter: 0.015 },
-  hot: { label: 'Hot water', color: '#ff5d5d', diameter: 0.015 },
-  waste: { label: 'Waste', color: '#a3927c', diameter: 0.04 },
-};
+export const serviceInfo: Record<ServiceKind, { label: string; color: string; diameter: number }> =
+  {
+    power: { label: 'Power', color: '#f0a43a', diameter: 0.012 },
+    lighting: { label: 'Lighting', color: '#b98cff', diameter: 0.01 },
+    cold: { label: 'Cold water', color: '#3d9bff', diameter: 0.015 },
+    hot: { label: 'Hot water', color: '#ff5d5d', diameter: 0.015 },
+    waste: { label: 'Waste', color: '#a3927c', diameter: 0.04 },
+  };
 const electrical = (k: ServiceKind) => k === 'power' || k === 'lighting';
 
 /** Heights in metres above the finished floor (negative = under the floor). */
@@ -171,7 +180,8 @@ export const strategies: Strategy[] = [
   {
     id: 'skirting-wall',
     name: 'Skirting power · water in the walls',
-    description: 'Cables and pipes both run low in the walls, the cheapest to chase but the most crowded.',
+    description:
+      'Cables and pipes both run low in the walls, the cheapest to chase but the most crowded.',
     power: 'skirting',
     water: 'wall',
   },
@@ -262,7 +272,8 @@ function hostWall(walls: Wall[], p: V2) {
     if (l < 1e-6) continue;
     const c = closestOnSegment(p, wall.start, wall.end);
     const d = dist2(c.point, p);
-    if (d <= wall.thickness / 2 + 0.12 && (!best || d < best.dist)) best = { wall, t: c.t * l, dist: d };
+    if (d <= wall.thickness / 2 + 0.12 && (!best || d < best.dist))
+      best = { wall, t: c.t * l, dist: d };
   }
   return best;
 }
@@ -276,14 +287,18 @@ export function exteriorWalls(scene: Scene): Set<string> {
     const n: V2 = [-d[1], d[0]];
     const mid = wallPoint(w, wallLength(w) / 2);
     const side = (s: number) =>
-      scene.rooms.some((r) => insidePolygon(add2(mid, mul2(n, s * (w.thickness / 2 + 0.1))), r.polygon));
+      scene.rooms.some((r) =>
+        insidePolygon(add2(mid, mul2(n, s * (w.thickness / 2 + 0.1))), r.polygon),
+      );
     if (side(1) !== side(-1)) out.add(w.id);
   }
   return out;
 }
 
 const nearOpening = (wall: Wall, t: number, openings: Opening[], margin: number) =>
-  openings.some((o) => o.wallId === wall.id && t > o.offset - margin && t < o.offset + o.width + margin);
+  openings.some(
+    (o) => o.wallId === wall.id && t > o.offset - margin && t < o.offset + o.width + margin,
+  );
 
 // ---- room uses ----------------------------------------------------------------------------------
 
@@ -311,7 +326,8 @@ export function assignRoomUses(
     }
   }
   const has = (...uses: RoomUse[]) => Object.values(out).some((a) => uses.includes(a.use));
-  const open = () => scene.rooms.filter((r) => !out[r.id]).sort((a, b) => roomArea(a) - roomArea(b));
+  const open = () =>
+    scene.rooms.filter((r) => !out[r.id]).sort((a, b) => roomArea(a) - roomArea(b));
   const assume = (room: Room | undefined, use: RoomUse) => {
     if (room) out[room.id] = { use, source: 'assumed' };
   };
@@ -348,7 +364,9 @@ export function assignRoomUses(
       const wet = bath ? wallsOf(bath) : new Set<string>();
       const candidates = rest.slice(0, -1).filter((r) => roomArea(r) >= 4);
       assume(
-        candidates.find((r) => [...wallsOf(r)].some((id) => wet.has(id))) ?? candidates[0] ?? rest[rest.length - 1],
+        candidates.find((r) => [...wallsOf(r)].some((id) => wet.has(id))) ??
+          candidates[0] ??
+          rest[rest.length - 1],
         candidates.length ? 'kitchen' : 'studio',
       );
     }
@@ -490,7 +508,9 @@ function longestClear(info: RoomInfo, avoid: Avoid[]) {
 }
 
 function doorSwingHinge(o: Opening): 'start' | 'end' {
-  return o.provenance.notes.find((n) => n.startsWith('Swing:'))?.includes('far edge') ? 'end' : 'start';
+  return o.provenance.notes.find((n) => n.startsWith('Swing:'))?.includes('far edge')
+    ? 'end'
+    : 'start';
 }
 
 function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: Set<string>) {
@@ -500,9 +520,9 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
   const taken = new Map<string, Avoid[]>(scene.rooms.map((r) => [r.id, []]));
   const wetSpots = new Map<string, Avoid[]>(scene.rooms.map((r) => [r.id, []]));
   let count = 0;
-  const useOf = (r: Room) => uses[r.id]?.use ?? 'living';
+  const roomUseOf = (r: Room) => uses[r.id]?.use ?? 'living';
   const roomsWith = (...list: RoomUse[]) =>
-    list.flatMap((u) => scene.rooms.filter((r) => useOf(r) === u));
+    list.flatMap((u) => scene.rooms.filter((r) => roomUseOf(r) === u));
   const place = (
     info: RoomInfo,
     st: Station,
@@ -532,7 +552,10 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
       wetSpots.get(info.room.id)!.push({ s: st.s, gap: RULES.wetZone });
     return f;
   };
-  const avoidIn = (id: string, wet = true) => [...taken.get(id)!, ...(wet ? wetSpots.get(id)! : [])];
+  const avoidIn = (id: string, wet = true) => [
+    ...taken.get(id)!,
+    ...(wet ? wetSpots.get(id)! : []),
+  ];
 
   // Soil stack: in a corner of the main wet room, on an outside wall where possible.
   const stackRoom = roomsWith('bathroom', 'kitchen', 'studio', 'utility')[0];
@@ -567,7 +590,7 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
       }
     }
     if (anchor) {
-      const hasToilet = useOf(stackRoom) === 'bathroom';
+      const hasToilet = roomUseOf(stackRoom) === 'bathroom';
       fixtures.push({
         id: `stack-${++count}`,
         kind: 'stack',
@@ -593,10 +616,19 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
     ];
     for (const [kind, offset, ports, wasteDiameter] of items) {
       const st =
-        pick(info, start + offset, avoidIn(room.id).map((a) => ({ ...a, gap: Math.max(a.gap, 0.6) }))) ??
-        pick(info, start + offset, avoidIn(room.id, false));
-      if (st) place(info, st, kind, kind === 'toilet' ? 0 : kind === 'shower' ? 1.1 : 0.85, ports, { wasteDiameter });
-      else notes.push(`${room.name || room.id}: no free wall for the ${fixtureLabels[kind].toLowerCase()}.`);
+        pick(
+          info,
+          start + offset,
+          avoidIn(room.id).map((a) => ({ ...a, gap: Math.max(a.gap, 0.6) })),
+        ) ?? pick(info, start + offset, avoidIn(room.id, false));
+      if (st)
+        place(info, st, kind, kind === 'toilet' ? 0 : kind === 'shower' ? 1.1 : 0.85, ports, {
+          wasteDiameter,
+        });
+      else
+        notes.push(
+          `${room.name || room.id}: no free wall for the ${fixtureLabels[kind].toLowerCase()}.`,
+        );
     }
   }
   const sinks = new Map<string, Fixture>();
@@ -607,13 +639,24 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
       notes.push(`${room.name || room.id}: no free wall for the sink.`);
       continue;
     }
-    sinks.set(room.id, place(info, st, 'sink', 0.9, { cold: 0.55, hot: 0.55, waste: 0.45 }, { wasteDiameter: 0.04 }));
+    sinks.set(
+      room.id,
+      place(info, st, 'sink', 0.9, { cold: 0.55, hot: 0.55, waste: 0.45 }, { wasteDiameter: 0.04 }),
+    );
   }
   const laundry = roomsWith('utility')[0] ?? roomsWith('kitchen', 'studio')[0];
   if (laundry) {
     const info = infos.get(laundry.id)!;
     const sink = sinks.get(laundry.id);
-    const sinkS = sink ? info.stations.find((s) => s.p && sink.anchor && s.wall?.id === sink.anchor.wallId && Math.abs(s.t - sink.anchor.t) < 0.03)?.s : undefined;
+    const sinkS = sink
+      ? info.stations.find(
+          (s) =>
+            s.p &&
+            sink.anchor &&
+            s.wall?.id === sink.anchor.wallId &&
+            Math.abs(s.t - sink.anchor.t) < 0.03,
+        )?.s
+      : undefined;
     const st = pick(info, (sinkS ?? info.perimeter / 2) - 0.9, avoidIn(laundry.id));
     if (st) place(info, st, 'washer', 0.85, { cold: 0.8, waste: 0.8 }, { wasteDiameter: 0.04 });
   }
@@ -623,33 +666,50 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
     const info = infos.get(heaterRoom.id)!;
     const target = (info.doors[0]?.s ?? 0) + info.perimeter / 2;
     const st =
-      pick(info, target, avoidIn(heaterRoom.id), (s) => s.exterior) ?? pick(info, target, avoidIn(heaterRoom.id));
+      pick(info, target, avoidIn(heaterRoom.id), (s) => s.exterior) ??
+      pick(info, target, avoidIn(heaterRoom.id));
     if (st)
-      place(info, st, 'heater', 1.3, { cold: 1.3, hot: 1.3, power: 1.3 }, { circuit: ensurePowerCircuit(heaterRoom) });
+      place(
+        info,
+        st,
+        'heater',
+        1.3,
+        { cold: 1.3, hot: 1.3, power: 1.3 },
+        { circuit: ensurePowerCircuit(heaterRoom) },
+      );
   }
   const mainRoom = roomsWith('kitchen', 'studio', 'utility', 'bathroom')[0];
   if (mainRoom) {
     const info = infos.get(mainRoom.id)!;
     const first = fixtures.find((f) => f.roomId === mainRoom.id && f.ports.cold !== undefined);
     const firstS = first?.anchor
-      ? (info.stations.find((s) => s.wall?.id === first.anchor!.wallId && Math.abs(s.t - first.anchor!.t) < 0.03)?.s ?? 0)
+      ? (info.stations.find(
+          (s) => s.wall?.id === first.anchor!.wallId && Math.abs(s.t - first.anchor!.t) < 0.03,
+        )?.s ?? 0)
       : 0;
-    const st = pick(info, firstS + 0.6, avoidIn(mainRoom.id), (s) => s.exterior) ?? pick(info, firstS + 0.6, avoidIn(mainRoom.id));
+    const st =
+      pick(info, firstS + 0.6, avoidIn(mainRoom.id), (s) => s.exterior) ??
+      pick(info, firstS + 0.6, avoidIn(mainRoom.id));
     if (st) place(info, st, 'water-main', 0.3, { cold: 0.3 });
   }
 
   // Distribution board beside the entrance: a door in an outside wall, not into a bathroom.
   const entrances = scene.rooms
-    .filter((r) => useOf(r) !== 'bathroom')
+    .filter((r) => roomUseOf(r) !== 'bathroom')
     .flatMap((r) => infos.get(r.id)!.doors.map((d) => ({ room: r, door: d })))
     .sort((a, b) => Number(ext.has(b.door.wall.id)) - Number(ext.has(a.door.wall.id)));
-  const panelRoom = entrances[0]?.room ?? [...scene.rooms].sort((a, b) => roomArea(b) - roomArea(a))[0];
+  const panelRoom =
+    entrances[0]?.room ?? [...scene.rooms].sort((a, b) => roomArea(b) - roomArea(a))[0];
   if (panelRoom) {
     const info = infos.get(panelRoom.id)!;
     const door = entrances[0]?.door;
     const target = door ? door.s - door.sign * (door.opening.width / 2 + 0.45) : 0;
     const st = pick(info, target, avoidIn(panelRoom.id));
-    if (st) place(info, st, 'panel', RULES.panelHeight, { power: RULES.panelHeight, lighting: RULES.panelHeight });
+    if (st)
+      place(info, st, 'panel', RULES.panelHeight, {
+        power: RULES.panelHeight,
+        lighting: RULES.panelHeight,
+      });
     else notes.push('No free wall for the distribution board.');
   }
   const panel = fixtures.find((f) => f.kind === 'panel');
@@ -657,10 +717,12 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
   // Switches on the latch side of each room's door (outside the door for bathrooms), and lights.
   for (const room of scene.rooms) {
     const info = infos.get(room.id)!;
-    const use = useOf(room);
+    const use = roomUseOf(room);
     const door = [...info.doors].sort((a, b) =>
-      panel ? dist2(wallPoint(a.wall, a.opening.offset), [panel.position[0], panel.position[2]]) -
-        dist2(wallPoint(b.wall, b.opening.offset), [panel.position[0], panel.position[2]]) : 0,
+      panel
+        ? dist2(wallPoint(a.wall, a.opening.offset), [panel.position[0], panel.position[2]]) -
+          dist2(wallPoint(b.wall, b.opening.offset), [panel.position[0], panel.position[2]])
+        : 0,
     )[0];
     let st: Station | null = null;
     if (door) {
@@ -677,7 +739,15 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
     st ??= pick(info, 0, avoidIn(room.id));
     const outside = use === 'bathroom' && door && !ext.has(door.wall.id) ? -1 : 1;
     if (st)
-      place(info, st, 'switch', RULES.switchHeight, { lighting: RULES.switchHeight }, { circuit: `${room.id}:lighting` }, outside);
+      place(
+        info,
+        st,
+        'switch',
+        RULES.switchHeight,
+        { lighting: RULES.switchHeight },
+        { circuit: `${room.id}:lighting` },
+        outside,
+      );
     const c = interiorPoint(room.polygon);
     fixtures.push({
       id: `light-${++count}`,
@@ -704,23 +774,40 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
   };
   for (const room of scene.rooms) {
     const info = infos.get(room.id)!;
-    const rule = sockets[useOf(room)];
+    const rule = sockets[roomUseOf(room)];
     const sink = sinks.get(room.id);
     const sinkS = sink?.anchor
-      ? info.stations.find((s) => s.wall?.id === sink.anchor!.wallId && Math.abs(s.t - sink.anchor!.t) < 0.03)?.s
+      ? info.stations.find(
+          (s) => s.wall?.id === sink.anchor!.wallId && Math.abs(s.t - sink.anchor!.t) < 0.03,
+        )?.s
       : undefined;
     if (sinkS !== undefined)
       for (const offset of [-1.0, 1.0, 2.0].slice(0, rule.counter)) {
         const st = pick(info, sinkS + offset, avoidIn(room.id));
         if (st)
-          place(info, st, 'counter-outlet', RULES.counterHeight, { power: RULES.counterHeight }, { circuit: `${room.id}:power` });
+          place(
+            info,
+            st,
+            'counter-outlet',
+            RULES.counterHeight,
+            { power: RULES.counterHeight },
+            { circuit: `${room.id}:power` },
+          );
       }
     if (!rule.min) continue;
     const n = Math.max(rule.min, Math.round(info.perimeter / rule.spacing));
     const s0 = info.doors[0]?.s ?? 0;
     for (let k = 0; k < n; k++) {
       const st = pick(info, s0 + ((k + 0.5) * info.perimeter) / n, avoidIn(room.id));
-      if (st) place(info, st, 'outlet', RULES.outletHeight, { power: RULES.outletHeight }, { circuit: `${room.id}:power` });
+      if (st)
+        place(
+          info,
+          st,
+          'outlet',
+          RULES.outletHeight,
+          { power: RULES.outletHeight },
+          { circuit: `${room.id}:power` },
+        );
     }
   }
   return { fixtures, notes };
@@ -754,7 +841,9 @@ class Network {
         const x = segmentIntersection(w, o);
         if (x) ts.push(alongWall(w, x));
       }
-      const sorted = ts.sort((a, b) => a - b).filter((t, i, list) => i === 0 || t - list[i - 1] > 1e-4);
+      const sorted = ts
+        .sort((a, b) => a - b)
+        .filter((t, i, list) => i === 0 || t - list[i - 1] > 1e-4);
       for (let i = 0; i < sorted.length - 1; i++) {
         const a = this.node(wallPoint(w, sorted[i])),
           b = this.node(wallPoint(w, sorted[i + 1]));
@@ -774,22 +863,29 @@ function profile(e: Edge, h: number, dip: number, openings: Opening[]) {
   const m = RULES.openingMargin;
   const blocks = openings
     .filter((o) => o.wallId === e.wall.id && h > o.bottom - m && h < o.bottom + o.height + m)
-    .map((o) => [Math.max(lo, o.offset - m), Math.min(hi, o.offset + o.width + m)] as [number, number])
+    .map(
+      (o) => [Math.max(lo, o.offset - m), Math.min(hi, o.offset + o.width + m)] as [number, number],
+    )
     .filter(([s, t]) => t - s > 1e-6)
     .sort((x, y) => x[0] - y[0]);
   const merged: [number, number][] = [];
   for (const b of blocks)
-    if (merged.length && b[0] <= merged[merged.length - 1][1]) merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], b[1]);
+    if (merged.length && b[0] <= merged[merged.length - 1][1])
+      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], b[1]);
     else merged.push([...b]);
   const hop = h < 1.2 ? dip : e.wall.height + RULES.voidAbove;
   let pts: [number, number][] = [[lo, h]];
   for (const [s, t] of merged) pts.push([s, h], [s, hop], [t, hop], [t, h]);
   pts.push([hi, h]);
-  pts = pts.filter((p, i) => i === 0 || Math.abs(p[0] - pts[i - 1][0]) > 1e-9 || Math.abs(p[1] - pts[i - 1][1]) > 1e-9);
+  pts = pts.filter(
+    (p, i) =>
+      i === 0 || Math.abs(p[0] - pts[i - 1][0]) > 1e-9 || Math.abs(p[1] - pts[i - 1][1]) > 1e-9,
+  );
   // Ordered from node a (at ta) to node b; callers walking b → a reverse it.
   if (e.ta > e.tb) pts.reverse();
   let length = 0;
-  for (let i = 1; i < pts.length; i++) length += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  for (let i = 1; i < pts.length; i++)
+    length += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
   return { pts, length, hops: merged.length };
 }
 
@@ -890,7 +986,13 @@ type Tree = {
   nodeDist: Map<number, number>;
 };
 /** Connects targets one by one (nearest first) to the closest point of the growing tree. */
-function growTree(ctx: Context, root: number, targets: Fixture[], cost: (e: number) => number, length: (e: number) => number): Tree {
+function growTree(
+  ctx: Context,
+  root: number,
+  targets: Fixture[],
+  cost: (e: number) => number,
+  length: (e: number) => number,
+): Tree {
   const first = shortest(ctx.net, [root], cost);
   const order = [...targets].sort((a, b) => first.dist[ctx.nodeOf(a)] - first.dist[ctx.nodeOf(b)]);
   const tree = new Set([root]);
@@ -917,7 +1019,15 @@ function growTree(ctx: Context, root: number, targets: Fixture[], cost: (e: numb
 }
 
 /** Horizontal-at-height route from the tree to a fixture, plus the riser to its port. */
-function levelLeg(ctx: Context, steps: Step[], start: number, h: number, dip: number, target: Fixture, kind: ServiceKind) {
+function levelLeg(
+  ctx: Context,
+  steps: Step[],
+  start: number,
+  h: number,
+  dip: number,
+  target: Fixture,
+  kind: ServiceKind,
+) {
   const segs: Segment[] = [];
   let last = at3(ctx.net.nodes[start], h);
   for (const s of steps) {
@@ -949,7 +1059,10 @@ function routeProposal(ctx: Context, strategy: Strategy) {
       if (c === undefined) {
         const e = net.edges[ei];
         const p = profile(e, h, dip, scene.openings);
-        c = p.length + 0.3 * p.hops + (avoidStack && (e.a === stackNode || e.b === stackNode) ? 25 : 0);
+        c =
+          p.length +
+          0.3 * p.hops +
+          (avoidStack && (e.a === stackNode || e.b === stackNode) ? 25 : 0);
         cache.set(ei, c);
       }
       return c;
@@ -975,12 +1088,30 @@ function routeProposal(ctx: Context, strategy: Strategy) {
     for (const [circuit, members] of circuits) {
       const kind: ServiceKind = circuit.endsWith(':lighting') ? 'lighting' : 'power';
       const h = kind === 'lighting' || strategy.power === 'ceiling' ? ctx.ceiling : RULES.skirting;
-      const tree = growTree(ctx, ctx.nodeOf(panel), members, costFor(h, RULES.cableDip, true), (e) => profile(net.edges[e], h, RULES.cableDip, scene.openings).length);
+      const tree = growTree(
+        ctx,
+        ctx.nodeOf(panel),
+        members,
+        costFor(h, RULES.cableDip, true),
+        (e) => profile(net.edges[e], h, RULES.cableDip, scene.openings).length,
+      );
       unreachable.push(...tree.unreachable);
       const label = `${roomName(members[0].roomId)} ${kind === 'lighting' ? 'lighting' : 'power'}`;
       tree.legs.forEach((leg, i) => {
-        const segments = [...(i === 0 ? rootRiser(panel, kind, h) : []), ...levelLeg(ctx, leg.steps, leg.start, h, RULES.cableDip, leg.target, kind)];
-        runs.push(finishRun({ id: `${circuit}:${i}`, kind, label: `${label} → ${fixtureLabels[leg.target.kind].toLowerCase()}`, circuit, diameter: serviceInfo[kind].diameter, segments }));
+        const segments = [
+          ...(i === 0 ? rootRiser(panel, kind, h) : []),
+          ...levelLeg(ctx, leg.steps, leg.start, h, RULES.cableDip, leg.target, kind),
+        ];
+        runs.push(
+          finishRun({
+            id: `${circuit}:${i}`,
+            kind,
+            label: `${label} → ${fixtureLabels[leg.target.kind].toLowerCase()}`,
+            circuit,
+            diameter: serviceInfo[kind].diameter,
+            segments,
+          }),
+        );
       });
     }
     // Switch drop up to the ceiling void and across to the light it controls.
@@ -998,30 +1129,84 @@ function routeProposal(ctx: Context, strategy: Strategy) {
       pushSeg(segments, a, b, null);
       pushSeg(segments, b, c, null);
       pushSeg(segments, c, d, null);
-      runs.push(finishRun({ id: `${light.id}:feed`, kind: 'lighting', label: `${roomName(light.roomId)} switch → light`, circuit: light.circuit ?? light.id, diameter: serviceInfo.lighting.diameter, segments }));
+      runs.push(
+        finishRun({
+          id: `${light.id}:feed`,
+          kind: 'lighting',
+          label: `${roomName(light.roomId)} switch → light`,
+          circuit: light.circuit ?? light.id,
+          diameter: serviceInfo.lighting.diameter,
+          segments,
+        }),
+      );
     }
   }
 
   // Water supply: cold from the main to every outlet (and the heater), hot from the heater.
   const supply = (kind: 'cold' | 'hot', root: Fixture | undefined) => {
     if (!root?.anchor) return;
-    const h = strategy.water === 'wall' ? (kind === 'cold' ? RULES.wallCold : RULES.wallHot) : kind === 'cold' ? RULES.floorCold : RULES.floorHot;
+    const h =
+      strategy.water === 'wall'
+        ? kind === 'cold'
+          ? RULES.wallCold
+          : RULES.wallHot
+        : kind === 'cold'
+          ? RULES.floorCold
+          : RULES.floorHot;
     const dip = kind === 'cold' ? RULES.floorCold : RULES.floorHot;
     const targets = fixtures.filter((f) => f !== root && f.anchor && f.ports[kind] !== undefined);
-    const tree = growTree(ctx, ctx.nodeOf(root), targets, costFor(h, dip), (e) => profile(net.edges[e], h, dip, scene.openings).length);
+    const tree = growTree(
+      ctx,
+      ctx.nodeOf(root),
+      targets,
+      costFor(h, dip),
+      (e) => profile(net.edges[e], h, dip, scene.openings).length,
+    );
     unreachable.push(...tree.unreachable);
     if (kind === 'cold') {
       const segments: Segment[] = [];
-      pushSeg(segments, at3(root.anchor.point, -0.8), at3(root.anchor.point, root.ports.cold!), null);
-      runs.push(finishRun({ id: 'cold:incoming', kind, label: 'Incoming water main', circuit: 'cold', diameter: 0.022, segments }));
+      pushSeg(
+        segments,
+        at3(root.anchor.point, -0.8),
+        at3(root.anchor.point, root.ports.cold!),
+        null,
+      );
+      runs.push(
+        finishRun({
+          id: 'cold:incoming',
+          kind,
+          label: 'Incoming water main',
+          circuit: 'cold',
+          diameter: 0.022,
+          segments,
+        }),
+      );
     }
     tree.legs.forEach((leg, i) => {
-      const segments = [...(i === 0 ? rootRiser(root, kind, h) : []), ...levelLeg(ctx, leg.steps, leg.start, h, dip, leg.target, kind)];
-      runs.push(finishRun({ id: `${kind}:${i}`, kind, label: `${serviceInfo[kind].label} → ${leg.target.label}`, circuit: kind, diameter: serviceInfo[kind].diameter, segments }));
+      const segments = [
+        ...(i === 0 ? rootRiser(root, kind, h) : []),
+        ...levelLeg(ctx, leg.steps, leg.start, h, dip, leg.target, kind),
+      ];
+      runs.push(
+        finishRun({
+          id: `${kind}:${i}`,
+          kind,
+          label: `${serviceInfo[kind].label} → ${leg.target.label}`,
+          circuit: kind,
+          diameter: serviceInfo[kind].diameter,
+          segments,
+        }),
+      );
     });
   };
-  supply('cold', fixtures.find((f) => f.kind === 'water-main'));
-  supply('hot', fixtures.find((f) => f.kind === 'heater'));
+  supply(
+    'cold',
+    fixtures.find((f) => f.kind === 'water-main'),
+  );
+  supply(
+    'hot',
+    fixtures.find((f) => f.kind === 'heater'),
+  );
 
   // Waste: always under the floor, falling 1:50 towards the stack.
   const stack = fixtures.find((f) => f.kind === 'stack');
@@ -1034,7 +1219,10 @@ function routeProposal(ctx: Context, strategy: Strategy) {
     };
     const tree = growTree(ctx, ctx.nodeOf(stack), targets, flat, flat);
     unreachable.push(...tree.unreachable);
-    const reach = Math.max(0, ...tree.legs.map((l) => tree.nodeDist.get(ctx.nodeOf(l.target)) ?? 0));
+    const reach = Math.max(
+      0,
+      ...tree.legs.map((l) => tree.nodeDist.get(ctx.nodeOf(l.target)) ?? 0),
+    );
     const yAt = (d: number) => RULES.floorWaste - RULES.wasteFall * (reach - d);
     deepest = -yAt(0);
     tree.legs.forEach((leg, i) => {
@@ -1047,12 +1235,30 @@ function routeProposal(ctx: Context, strategy: Strategy) {
       }
       const wall = scene.walls.find((w) => w.id === leg.target.anchor!.wallId)!;
       pushRiser(segments, leg.target.anchor!.point, last[1], leg.target.ports.waste!, wall);
-      runs.push(finishRun({ id: `waste:${i}`, kind: 'waste', label: `Waste ← ${leg.target.label}`, circuit: 'waste', diameter: leg.target.wasteDiameter ?? 0.04, segments }));
+      runs.push(
+        finishRun({
+          id: `waste:${i}`,
+          kind: 'waste',
+          label: `Waste ← ${leg.target.label}`,
+          circuit: 'waste',
+          diameter: leg.target.wasteDiameter ?? 0.04,
+          segments,
+        }),
+      );
     });
     const top = Math.max(...scene.walls.map((w) => w.height)) + 0.4;
     const segments: Segment[] = [];
     pushSeg(segments, at3(stack.anchor.point, yAt(0) - 0.25), at3(stack.anchor.point, top), null);
-    runs.push(finishRun({ id: 'waste:stack', kind: 'waste', label: fixtureLabels.stack, circuit: 'waste', diameter: stack.wasteDiameter ?? 0.11, segments }));
+    runs.push(
+      finishRun({
+        id: 'waste:stack',
+        kind: 'waste',
+        label: fixtureLabels.stack,
+        circuit: 'waste',
+        diameter: stack.wasteDiameter ?? 0.11,
+        segments,
+      }),
+    );
   }
   return { runs, unreachable, deepest };
 }
@@ -1090,7 +1296,10 @@ function segmentDistance(p1: V3, q1: V3, p2: V3, q2: V3) {
   }
   const c1: V3 = [p1[0] + d1[0] * s, p1[1] + d1[1] * s, p1[2] + d1[2] * s];
   const c2: V3 = [p2[0] + d2[0] * t, p2[1] + d2[1] * t, p2[2] + d2[2] * t];
-  return { d: len3(c1, c2), mid: [(c1[0] + c2[0]) / 2, (c1[1] + c2[1]) / 2, (c1[2] + c2[2]) / 2] as V3 };
+  return {
+    d: len3(c1, c2),
+    mid: [(c1[0] + c2[0]) / 2, (c1[1] + c2[1]) / 2, (c1[2] + c2[2]) / 2] as V3,
+  };
 }
 /** Whether a wall-plane segment passes through the inside of a rectangle (Liang–Barsky). */
 function crossesRect(a: V2, b: V2, x0: number, x1: number, y0: number, y1: number) {
@@ -1123,7 +1332,12 @@ const bounds = (segs: Segment[]) =>
   }));
 const fmt = (n: number) => `${n.toFixed(2)} m`;
 
-function detectClashes(ctx: Context, runs: Run[], unreachable: Fixture[], deepest: number): Clash[] {
+function detectClashes(
+  ctx: Context,
+  runs: Run[],
+  unreachable: Fixture[],
+  deepest: number,
+): Clash[] {
   const { scene, fixtures } = ctx;
   const clashes: Clash[] = [];
   let n = 0;
@@ -1131,35 +1345,66 @@ function detectClashes(ctx: Context, runs: Run[], unreachable: Fixture[], deepes
   const wallById = new Map(scene.walls.map((w) => [w.id, w]));
 
   // Cables against pipes. Appliances that take both (the heater) are allowed to meet at their terminal.
-  const shared = fixtures.filter((f) => f.anchor && Object.keys(f.ports).some((k) => electrical(k as ServiceKind)) && Object.keys(f.ports).some((k) => !electrical(k as ServiceKind)));
+  const shared = fixtures.filter(
+    (f) =>
+      f.anchor &&
+      Object.keys(f.ports).some((k) => electrical(k as ServiceKind)) &&
+      Object.keys(f.ports).some((k) => !electrical(k as ServiceKind)),
+  );
   const cables = runs.filter((r) => electrical(r.kind)).map((r) => ({ r, b: bounds(r.segments) }));
   const pipes = runs.filter((r) => !electrical(r.kind)).map((r) => ({ r, b: bounds(r.segments) }));
   const sep = RULES.separation;
   // One entry per wall and pair of services; repeats along the same wall are counted.
-  const found = new Map<string, { d: number; mid: V3; wallId: string | null; cable: Run; pipe: Run; places: Set<string> }>();
+  const found = new Map<
+    string,
+    { d: number; mid: V3; wallId: string | null; cable: Run; pipe: Run; places: Set<string> }
+  >();
   for (const c of cables)
     for (const p of pipes)
       for (const x of c.b)
         for (const y of p.b) {
-          if ([0, 1, 2].some((i) => x.min[i] > y.max[i] + sep || y.min[i] > x.max[i] + sep)) continue;
+          if ([0, 1, 2].some((i) => x.min[i] > y.max[i] + sep || y.min[i] > x.max[i] + sep))
+            continue;
           const hit = segmentDistance(x.s.a, x.s.b, y.s.a, y.s.b);
           if (hit.d >= sep) continue;
-          if (shared.some((f) => Math.hypot(f.anchor!.point[0] - hit.mid[0], f.anchor!.point[1] - hit.mid[2]) < 0.35)) continue;
+          if (
+            shared.some(
+              (f) =>
+                Math.hypot(f.anchor!.point[0] - hit.mid[0], f.anchor!.point[1] - hit.mid[2]) < 0.35,
+            )
+          )
+            continue;
           const wallId = x.s.wallId ?? y.s.wallId;
           const pipeKind = p.r.id === 'waste:stack' ? 'stack' : p.r.kind;
           const key = `${wallId ?? (hit.mid[1] < 0 ? 'floor' : 'void')}|${c.r.kind}|${pipeKind}`;
           const place = `${Math.round(hit.mid[0] * 2)}|${Math.round(hit.mid[1] * 2)}|${Math.round(hit.mid[2] * 2)}`;
           const prev = found.get(key);
-          if (!prev) found.set(key, { d: hit.d, mid: hit.mid, wallId, cable: c.r, pipe: p.r, places: new Set([place]) });
+          if (!prev)
+            found.set(key, {
+              d: hit.d,
+              mid: hit.mid,
+              wallId,
+              cable: c.r,
+              pipe: p.r,
+              places: new Set([place]),
+            });
           else {
             prev.places.add(place);
-            if (hit.d < prev.d) Object.assign(prev, { d: hit.d, mid: hit.mid, cable: c.r, pipe: p.r });
+            if (hit.d < prev.d)
+              Object.assign(prev, { d: hit.d, mid: hit.mid, cable: c.r, pipe: p.r });
           }
         }
   for (const f of found.values()) {
-    const where = f.wallId ? `in ${f.wallId}` : f.mid[1] < 0 ? 'under the floor' : 'in the ceiling void';
+    const where = f.wallId
+      ? `in ${f.wallId}`
+      : f.mid[1] < 0
+        ? 'under the floor'
+        : 'in the ceiling void';
     const crossing = f.d < 0.02;
-    const pipe = f.pipe.id === 'waste:stack' ? 'soil stack' : `${serviceInfo[f.pipe.kind].label.toLowerCase()} pipe`;
+    const pipe =
+      f.pipe.id === 'waste:stack'
+        ? 'soil stack'
+        : `${serviceInfo[f.pipe.kind].label.toLowerCase()} pipe`;
     const times = f.places.size > 1 ? ` (${f.places.size} places)` : '';
     add({
       kind: crossing ? 'crossing' : 'separation',
@@ -1184,7 +1429,17 @@ function detectClashes(ctx: Context, runs: Run[], unreachable: Fixture[], deepes
       const a: V2 = [alongWall(wall, [s.a[0], s.a[2]]), s.a[1]],
         b: V2 = [alongWall(wall, [s.b[0], s.b[2]]), s.b[1]];
       for (const o of scene.openings)
-        if (o.wallId === wall.id && crossesRect(a, b, o.offset + 0.01, o.offset + o.width - 0.01, o.bottom + 0.01, o.bottom + o.height - 0.01))
+        if (
+          o.wallId === wall.id &&
+          crossesRect(
+            a,
+            b,
+            o.offset + 0.01,
+            o.offset + o.width - 0.01,
+            o.bottom + 0.01,
+            o.bottom + o.height - 0.01,
+          )
+        )
           add({
             kind: 'opening',
             severity: 'warning',
@@ -1200,7 +1455,8 @@ function detectClashes(ctx: Context, runs: Run[], unreachable: Fixture[], deepes
           kind: 'thin-wall',
           severity: 'warning',
           message: `${Math.round(run.diameter * 1000)} mm ${serviceInfo[run.kind].label.toLowerCase()} does not fit in ${wall.id} (${Math.round(wall.thickness * 1000)} mm thick, needs ${Math.round((run.diameter + 2 * RULES.cover) * 1000)} mm).`,
-          suggestion: 'Box it in on the wall face, thicken the wall, or bring it up through the floor next to the fixture.',
+          suggestion:
+            'Box it in on the wall face, thicken the wall, or bring it up through the floor next to the fixture.',
           position: s.a,
           wallId: wall.id,
         });
@@ -1228,7 +1484,11 @@ function detectClashes(ctx: Context, runs: Run[], unreachable: Fixture[], deepes
   for (const f of fixtures.filter((x) => ['outlet', 'counter-outlet', 'switch'].includes(x.kind)))
     for (const w of wet) {
       const d = Math.hypot(f.position[0] - w.position[0], f.position[2] - w.position[2]);
-      if (d < RULES.wetZone && w.roomId === f.roomId && f.normal[0] * w.normal[0] + f.normal[1] * w.normal[1] > -0.5)
+      if (
+        d < RULES.wetZone &&
+        w.roomId === f.roomId &&
+        f.normal[0] * w.normal[0] + f.normal[1] * w.normal[1] > -0.5
+      )
         add({
           kind: 'wet-zone',
           severity: 'warning',
@@ -1269,7 +1529,8 @@ function detectClashes(ctx: Context, runs: Run[], unreachable: Fixture[], deepes
       wallId: f.anchor?.wallId ?? null,
     });
   const circuits = new Map<string, number>();
-  for (const r of runs) if (r.kind === 'power') circuits.set(r.circuit, (circuits.get(r.circuit) ?? 0) + r.length);
+  for (const r of runs)
+    if (r.kind === 'power') circuits.set(r.circuit, (circuits.get(r.circuit) ?? 0) + r.length);
   for (const [circuit, length] of circuits)
     if (length > RULES.maxCircuit) {
       const room = scene.rooms.find((r) => `${r.id}:power` === circuit);
@@ -1296,15 +1557,24 @@ function detectClashes(ctx: Context, runs: Run[], unreachable: Fixture[], deepes
 
 // ---- plan ---------------------------------------------------------------------------------------
 
-export function planInfrastructure(scene: Scene, overrides: Record<string, RoomUse> = {}): InfrastructurePlan {
+export function planInfrastructure(
+  scene: Scene,
+  overrides: Record<string, RoomUse> = {},
+): InfrastructurePlan {
   const uses = assignRoomUses(scene, overrides);
   const walls = scene.walls.filter((w) => wallLength(w) > 1e-6);
   if (!walls.length || !scene.rooms.length)
-    return { uses, fixtures: [], proposals: [], notes: ['Services are laid out once the walls enclose at least one room.'] };
+    return {
+      uses,
+      fixtures: [],
+      proposals: [],
+      notes: ['Services are laid out once the walls enclose at least one room.'],
+    };
   const ext = exteriorWalls(scene);
   const { fixtures, notes } = placeFixtures(scene, uses, ext);
   const taps = new Map<string, number[]>();
-  for (const f of fixtures) if (f.anchor) taps.set(f.anchor.wallId, [...(taps.get(f.anchor.wallId) ?? []), f.anchor.t]);
+  for (const f of fixtures)
+    if (f.anchor) taps.set(f.anchor.wallId, [...(taps.get(f.anchor.wallId) ?? []), f.anchor.t]);
   const net = new Network(walls, taps);
   const ctx: Context = {
     scene,
@@ -1313,11 +1583,15 @@ export function planInfrastructure(scene: Scene, overrides: Record<string, RoomU
     nodeOf: (f) => net.node(f.anchor!.point),
     ceiling: Math.min(...walls.map((w) => w.height)) - RULES.ceilingDrop,
   };
-  if (!ext.size) notes.push('No outside walls were found; the water main and board are placed on inside walls.');
+  if (!ext.size)
+    notes.push('No outside walls were found; the water main and board are placed on inside walls.');
   const proposals: Proposal[] = strategies.map((strategy) => {
     const { runs, unreachable, deepest } = routeProposal(ctx, strategy);
     const clashes = detectClashes(ctx, runs, unreachable, deepest);
-    const totals = Object.fromEntries(serviceKinds.map((k) => [k, 0])) as Record<ServiceKind, number>;
+    const totals = Object.fromEntries(serviceKinds.map((k) => [k, 0])) as Record<
+      ServiceKind,
+      number
+    >;
     for (const r of runs) totals[r.kind] += r.length;
     const total = Object.values(totals).reduce((a, b) => a + b, 0);
     const score =
@@ -1335,6 +1609,7 @@ let memo: { scene: Scene; key: string; plan: InfrastructurePlan } | null = null;
 /** The viewport and the panel share one plan per scene revision and set of room uses. */
 export function cachedPlan(scene: Scene, overrides: Record<string, RoomUse> = {}) {
   const key = JSON.stringify(overrides);
-  if (!memo || memo.scene !== scene || memo.key !== key) memo = { scene, key, plan: planInfrastructure(scene, overrides) };
+  if (!memo || memo.scene !== scene || memo.key !== key)
+    memo = { scene, key, plan: planInfrastructure(scene, overrides) };
   return memo.plan;
 }

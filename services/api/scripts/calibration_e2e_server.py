@@ -46,8 +46,8 @@ if __name__ == '__main__':
             output = storage.project_dir(pid)/'reconstructions/j_editor'
             output.mkdir(parents=True)
             if pid == 'p_editor_classroom':
-                v, t, colors = build(json.loads((ROOT/'contracts/fixtures/whatsapp-classroom.scene.json').read_text()))
-                processing = {'pipeline': 'precomputed-architectural-demo', 'layout': 'whatsapp-classroom.scene.json'}
+                v, t, colors = build(json.loads((ROOT/'contracts/fixtures/whatsapp-classroom.layout.json').read_text()))
+                processing = {'pipeline': 'precomputed-architectural-demo', 'layout': 'whatsapp-classroom.layout.json'}
             else:
                 v, t = vertices[:, [0, 2, 1]], triangles
                 colors = np.tile([.7, .8, .4], (len(v), 1))

@@ -17,16 +17,21 @@ there is no model checkpoint or licence step.
 
    ```bash
    uv venv --python 3.12 services/reconstruction/.venv
-   uv pip install --python services/reconstruction/.venv/Scripts/python.exe -r services/reconstruction/requirements-meshroom.txt
-   services/reconstruction/.venv/Scripts/python.exe services/reconstruction/meshroom_worker.py --check
+   uv pip install --python services/reconstruction/.venv/bin/python -r services/reconstruction/requirements-meshroom.txt
+   services/reconstruction/.venv/bin/python services/reconstruction/meshroom_worker.py --check
    ```
+
+   On Windows use `services/reconstruction/.venv/Scripts/python.exe` instead of `.venv/bin/python`.
 
 3. Photogrammetry takes minutes, not seconds. The API's default budget is
    `ROOMSHIFT_RECONSTRUCTION_TIMEOUT=3600`. Use the **All selected views** budget (default)
    for best coverage. Views Meshroom cannot place are recorded as `registered: false`; at
    least three must register.
 
-Set `ROOMSHIFT_RECONSTRUCTION_ENGINE=vggt` to use the previous VGGT worker (below).
+If the API process dies, the worker stops Meshroom too (POSIX). A failed or cancelled job keeps only
+its `worker.log`; frames and Meshroom caches are deleted.
+
+Set `ROOMSHIFT_RECONSTRUCTION_ENGINE=vggt` to use the optional VGGT worker (below).
 
 ## Demo presets (pre-baked videos)
 
@@ -37,7 +42,8 @@ uploaded:
 ```bash
 python services/reconstruction/bake_demo.py demo1.mp4 living_room --frames 80
 # Optional: open the app on the uncalibrated result, pick points, then bake the calibration in:
-python services/reconstruction/bake_demo.py demo1.mp4 living_room --skip-meshroom     --reference 0.1,0,0.2,1.9,0,0.2,3.5 --floor 0,0,0,1,0,0,0,0,1
+python services/reconstruction/bake_demo.py demo1.mp4 living_room --skip-meshroom \
+  --reference 0.1,0,0.2,1.9,0,0.2,3.5 --floor 0,0,0,1,0,0,0,0,1
 ```
 
 Outputs go to `services/reconstruction/demo/<name>/` (git-ignored; copy them to the demo
@@ -49,7 +55,10 @@ Meshroom live. The manifest records `provenance.precomputed: true`.
 
 ---
 
-# Previous VGGT worker (`ROOMSHIFT_RECONSTRUCTION_ENGINE=vggt`)
+# Optional VGGT worker (`ROOMSHIFT_RECONSTRUCTION_ENGINE=vggt`)
+
+This engine is optional and kept for comparison. It needs Linux with CUDA (its lock file pins
+Linux-only NVIDIA wheels) and a separately licensed checkpoint; the default Meshroom engine needs neither.
 
 Milestone 2 adds a separate VGGT/CUDA process, depth consistency filtering,
 Open3D TSDF fusion, colored triangle GLB/PLY export, a mesh viewer, and failure-safe
@@ -95,7 +104,7 @@ export ROOMSHIFT_VGGT_LICENSE=CC-BY-NC-4.0
 export ROOMSHIFT_VGGT_SHA256=the_actual_64_character_checkpoint_sha256
 # Optional: defaults to services/reconstruction/.venv/bin/python
 export ROOMSHIFT_RECONSTRUCTION_PYTHON=/absolute/path/to/worker/python
-# Default total preparation + reconstruction execution budget, seconds:
+# Total preparation + reconstruction budget in seconds (API default 3600; VGGT runs fit in 300):
 export ROOMSHIFT_RECONSTRUCTION_TIMEOUT=300
 services/reconstruction/.venv/bin/python services/reconstruction/worker.py --check
 ```
@@ -120,8 +129,8 @@ FastAPI. API shutdown also cancels an active reconstruction process.
 ## In the app
 
 Select **Mode 2 · Photos & video**. Upload/prepare, review the source filmstrip,
-then select a view budget and **Reconstruct mesh**. The default is 20 views for
-room coverage; 12 (lowest memory), 32, and all (up to 40) are also available. Views are selected
+then select a view budget and **Reconstruct mesh**. The default is all selected views (up to 40)
+for room coverage; 12 (lowest memory), 20 and 32 are also available. Views are selected
 uniformly in capture order including both endpoints. The chosen indices are
 recorded. Fewer views may reduce coverage; there is no silent OOM fallback or
 point-cloud substitute. Worker readiness can be refreshed after changing setup.

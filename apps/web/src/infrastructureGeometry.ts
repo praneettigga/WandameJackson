@@ -67,7 +67,9 @@ function fitting(f: Fixture) {
       color: fittingColor(f),
       roughness: 0.6,
       transparent: true,
-      opacity: ['sink', 'basin', 'toilet', 'shower', 'washer', 'heater'].includes(f.kind) ? 0.55 : 0.95,
+      opacity: ['sink', 'basin', 'toilet', 'shower', 'washer', 'heater'].includes(f.kind)
+        ? 0.55
+        : 0.95,
       depthWrite: false,
     }),
   );

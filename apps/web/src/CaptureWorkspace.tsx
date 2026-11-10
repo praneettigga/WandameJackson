@@ -15,9 +15,12 @@ import { CalibratedMesh } from './CalibratedMesh';
 export function CaptureWorkspace({
   onOpenEditor,
   onMeshReady,
+  onBusyChange,
 }: {
   onOpenEditor?: (id: string) => Promise<void>;
   onMeshReady?: (id: string | null) => void;
+  /** Lets the shell lock mode switching while an upload or job runs here. */
+  onBusyChange?: (busy: boolean) => void;
 } = {}) {
   const [viewBudget, setViewBudget] = useState(40);
   const [mesh, setMesh] = useState<MeshResult | null>(null);
@@ -36,6 +39,8 @@ export function CaptureWorkspace({
   const polling = useRef<AbortController | null>(null);
   const mounted = useRef(true);
   useEffect(() => onMeshReady?.(mesh?.projectId ?? null), [mesh?.projectId, onMeshReady]);
+  useEffect(() => onBusyChange?.(busy), [busy, onBusyChange]);
+  useEffect(() => () => onBusyChange?.(false), [onBusyChange]);
   useEffect(() => {
     mounted.current = true;
     void api
@@ -51,7 +56,7 @@ export function CaptureWorkspace({
     api
       .listCaptures()
       .then(setCaptures)
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
     return () => {
       mounted.current = false;
       polling.current?.abort();
@@ -369,7 +374,7 @@ export function CaptureWorkspace({
                   api
                     .cancelJob(job.id)
                     .then((r) => setJob(r.job))
-                    .catch((e) => setError(String(e)));
+                    .catch((e) => setError(e instanceof Error ? e.message : String(e)));
                 }}
               >
                 {job.cancelRequested
@@ -405,7 +410,7 @@ export function CaptureWorkspace({
           )}
           {mesh && view === 'mesh' ? (
             <CalibratedMesh key={mesh.jobId} mesh={mesh} onChange={setMesh} disabled={busy} />
-          ) : input ? (
+          ) : input?.frames.length ? (
             <div className="capture-source-preview">
               <img
                 src={api.imageUrl(input.frames[selectedFrame]?.url ?? input.frames[0].url)}
@@ -512,11 +517,13 @@ export function CaptureWorkspace({
             </div>
             <details className="capture-evidence">
               <summary>Capture evidence & quality · {input.rejected.length} omitted views</summary>
-              {(mesh?.warnings ?? input.warnings).map((w) => (
-                <p key={w}>{w}</p>
+              {(mesh?.warnings ?? input.warnings).map((w, i) => (
+                <p key={i}>{w}</p>
               ))}
               <a
-                href={api.imageUrl(`/api/projects/${input.projectId}/capture-input`)}
+                href={api.imageUrl(
+                  `/api/projects/${encodeURIComponent(input.projectId)}/capture-input`,
+                )}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -527,7 +534,7 @@ export function CaptureWorkspace({
                   {' '}
                   ·{' '}
                   <a
-                    href={api.imageUrl(`/api/projects/${mesh.projectId}/mesh`)}
+                    href={api.imageUrl(`/api/projects/${encodeURIComponent(mesh.projectId)}/mesh`)}
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -543,7 +550,7 @@ export function CaptureWorkspace({
                 {input.rejected.map((r, i) => (
                   <li key={i}>
                     {input.originals.find((o) => o.id === r.sourceId)?.filename}
-                    {r.timestampSeconds !== null ? ` · ${r.timestampSeconds}s` : ''}:{' '}
+                    {r.timestampSeconds != null ? ` · ${r.timestampSeconds.toFixed(1)}s` : ''}:{' '}
                     {r.reason.replaceAll('_', ' ')}
                   </li>
                 ))}

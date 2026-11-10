@@ -42,6 +42,7 @@ it('loads an API-backed mesh and measures its surface, not its bounding box', as
   await loadSceneAssets(scene, (path) => `http://localhost:8000${path}`);
   expect(fetch).toHaveBeenCalledWith(
     'http://localhost:8000/api/projects/p_test/editor-assets/abc123.glb',
+    expect.objectContaining({ signal: expect.any(AbortSignal) }),
   );
   const root = buildSceneGeometry(scene);
   root.updateMatrixWorld(true);

@@ -32,7 +32,16 @@ describe('invisible infrastructure', () => {
     expect(assignRoomUses(scene)['room-1']).toEqual({ use: 'studio', source: 'assumed' });
     const plan = planInfrastructure(scene);
     expect(kinds(plan)).toEqual(
-      expect.arrayContaining(['panel', 'switch', 'light', 'outlet', 'sink', 'heater', 'water-main', 'stack']),
+      expect.arrayContaining([
+        'panel',
+        'switch',
+        'light',
+        'outlet',
+        'sink',
+        'heater',
+        'water-main',
+        'stack',
+      ]),
     );
     expect(plan.proposals).toHaveLength(4);
     expect(plan.proposals.filter((p) => p.recommended)).toHaveLength(1);
@@ -45,7 +54,9 @@ describe('invisible infrastructure', () => {
     expect(bath.polygon.every((p) => p[0] <= 2.2 + 1e-6)).toBe(true);
     const plan = planInfrastructure(scene);
     const inBath = plan.fixtures.filter((f) => f.roomId === bath.id).map((f) => f.kind);
-    expect(inBath).toEqual(expect.arrayContaining(['shower', 'toilet', 'basin', 'switch', 'light']));
+    expect(inBath).toEqual(
+      expect.arrayContaining(['shower', 'toilet', 'basin', 'switch', 'light']),
+    );
     expect(inBath).not.toContain('outlet');
     // The bathroom switch is on the outside face of its door wall.
     const sw = plan.fixtures.find((f) => f.kind === 'switch' && f.roomId === bath.id)!;
@@ -54,8 +65,13 @@ describe('invisible infrastructure', () => {
 
   it('honours a user-chosen room use', () => {
     const scene = twoRooms();
-    const plan = planInfrastructure(scene, { [scene.rooms[0].id]: 'bedroom', [scene.rooms[1].id]: 'bedroom' });
-    expect(Object.values(plan.uses).every((u) => u.use === 'bedroom' && u.source === 'user')).toBe(true);
+    const plan = planInfrastructure(scene, {
+      [scene.rooms[0].id]: 'bedroom',
+      [scene.rooms[1].id]: 'bedroom',
+    });
+    expect(Object.values(plan.uses).every((u) => u.use === 'bedroom' && u.source === 'user')).toBe(
+      true,
+    );
     expect(kinds(plan)).not.toContain('sink');
     expect(plan.proposals[0].totals.cold).toBe(0);
   });
@@ -64,7 +80,9 @@ describe('invisible infrastructure', () => {
     for (const scene of [demoScene(), twoRooms()]) {
       const plan = planInfrastructure(scene);
       for (const proposal of plan.proposals) {
-        expect(proposal.clashes.filter((c) => c.kind === 'opening' || c.kind === 'unreachable')).toEqual([]);
+        expect(
+          proposal.clashes.filter((c) => c.kind === 'opening' || c.kind === 'unreachable'),
+        ).toEqual([]);
         for (const run of proposal.runs) {
           expect(run.length).toBeGreaterThan(0);
           for (const s of run.segments)
@@ -74,7 +92,9 @@ describe('invisible infrastructure', () => {
                 const dx = p[0] - wall.start[0],
                   dz = p[2] - wall.start[1];
                 const l = wallLength(wall);
-                const across = Math.abs((dx * (wall.end[1] - wall.start[1]) - dz * (wall.end[0] - wall.start[0])) / l);
+                const across = Math.abs(
+                  (dx * (wall.end[1] - wall.start[1]) - dz * (wall.end[0] - wall.start[0])) / l,
+                );
                 expect(across).toBeLessThan(1e-6);
                 expect(p[1]).toBeGreaterThanOrEqual(-1e-6);
                 expect(p[1]).toBeLessThanOrEqual(wall.height + 1e-6);
@@ -104,7 +124,8 @@ describe('invisible infrastructure', () => {
     const plan = planInfrastructure(twoRooms());
     const crowded = plan.proposals.find((p) => p.strategy.id === 'skirting-wall')!;
     const best = recommended(plan);
-    const conflicts = (p: typeof best) => p.clashes.filter((c) => c.kind === 'crossing' || c.kind === 'separation').length;
+    const conflicts = (p: typeof best) =>
+      p.clashes.filter((c) => c.kind === 'crossing' || c.kind === 'separation').length;
     expect(conflicts(crowded)).toBeGreaterThan(0);
     expect(conflicts(best)).toBeLessThan(conflicts(crowded));
     expect(best.score).toBe(Math.min(...plan.proposals.map((p) => p.score)));
@@ -140,7 +161,8 @@ describe('invisible infrastructure', () => {
     const scene = validateScene(servicesScene());
     const plan = planInfrastructure(scene);
     expect(Object.values(plan.uses).every((u) => u.source === 'name')).toBe(true);
-    const where = (kind: string) => plan.fixtures.filter((f) => f.kind === kind).map((f) => f.roomId);
+    const where = (kind: string) =>
+      plan.fixtures.filter((f) => f.kind === kind).map((f) => f.roomId);
     expect(where('sink')).toEqual(['room-kitchen']);
     expect(where('toilet')).toEqual(['room-bath']);
     expect(where('stack')).toEqual(['room-bath']);
@@ -153,7 +175,9 @@ describe('invisible infrastructure', () => {
       expect(best.totals[kind]).toBeGreaterThan(1);
     const { MockApi } = await import('../src/api');
     const mock = new MockApi();
-    expect((await mock.listProjects()).projects.map((p) => p.project.id)).toContain('services-apartment');
+    expect((await mock.listProjects()).projects.map((p) => p.project.id)).toContain(
+      'services-apartment',
+    );
     expect((await mock.getScene('services-apartment')).rooms).toHaveLength(6);
   });
 

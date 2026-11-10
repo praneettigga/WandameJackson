@@ -162,8 +162,6 @@ export function WallTools({ scene }: { scene: Scene }) {
     const move = (e: PointerEvent) => {
       const tool = useEditor.getState().tool;
       const drag = dragRef.current,
-        hover = hoverRef.current,
-        placement = placementRef.current,
         chain = chainRef.current;
       keys.current = { alt: e.altKey, shift: e.shiftKey };
       const hit = floor(e);

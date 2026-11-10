@@ -8,7 +8,10 @@ export default defineConfig({
   use: {
     baseURL: 'http://127.0.0.1:5174',
     viewport: { width: 1440, height: 900 },
-    launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
+    launchOptions: {
+      executablePath: process.env.ROOMSHIFT_CHROMIUM,
+      args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+    },
   },
   webServer: {
     command: 'node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5174 --strictPort',

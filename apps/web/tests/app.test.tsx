@@ -318,7 +318,7 @@ describe('application integration without WebGL', () => {
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Floors of the same building' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create grouped project' }));
-    await screen.findByText(/Start the backend from services\/api/);
+    await screen.findByText(/The API is unavailable. Make sure the local API is running/);
     expect(createProject).not.toHaveBeenCalled();
   });
   it('performs two-point visual calibration and mock job polling, then opens the fixture', async () => {

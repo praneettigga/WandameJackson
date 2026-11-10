@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { demoScene, MockApi } from '../src/api';
 import { useEditor } from '../src/store';
-import { ErrorBanner } from '../src/App';
+import { ErrorBanner } from '../src/components/controls';
 import { Inspector } from '../src/Inspector';
 
 beforeEach(() => {

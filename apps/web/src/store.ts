@@ -65,6 +65,8 @@ export type EditorState = {
   jobs: Record<string, Job>;
   view: FloorView;
   loadAssembly: (envelope: AssemblyEnvelope) => void;
+  /** Load a newly created/extended grouped project, keeping unsaved edits of floors it still contains. */
+  adoptAssembly: (envelope: AssemblyEnvelope) => void;
   refreshAssembly: (envelope: AssemblyEnvelope) => void;
   activateFloor: (projectId: string, entityId?: string, options?: { force?: boolean }) => void;
   updateAssembly: (mutate: (assembly: Assembly) => void) => void;
@@ -150,6 +152,24 @@ export const useEditor = create<EditorState>((set, get) => ({
       jobs: envelope.jobs,
       activeProjectId: floor.projectId,
     });
+  },
+  adoptAssembly: (envelope) => {
+    const contexts = stashFloor(get());
+    get().loadAssembly(envelope);
+    const allowed = new Set(floorsOf(envelope.assembly).map((f) => f.projectId));
+    const retained = Object.fromEntries(Object.entries(contexts).filter(([id]) => allowed.has(id)));
+    set({ floorStates: retained, busy: false });
+    const active = get().activeProjectId;
+    const context = active ? retained[active] : undefined;
+    if (context)
+      set({
+        scene: context.scene,
+        past: context.past,
+        future: context.future,
+        dirty: context.dirty,
+        conflict: context.conflict,
+        selectedId: context.selectedId,
+      });
   },
   refreshAssembly: (envelope) => {
     const s = get();

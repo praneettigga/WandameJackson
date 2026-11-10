@@ -74,7 +74,6 @@ describe('output geometry quality', () => {
 
 describe('GLB validity', () => {
   it('passes the Khronos glTF validator with no errors, including edited walls and doors', async () => {
-    // @ts-expect-error the validator ships without type declarations
     const validator = await import('gltf-validator');
     const scene = demoScene();
     scene.walls[1] = { ...scene.walls[1], end: [5.5, 4] };

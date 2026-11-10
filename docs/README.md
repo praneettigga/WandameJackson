@@ -1,18 +1,20 @@
 # Project documentation
 
-This folder describes the prototype scope and implementation handoffs. Start with the root [README](../README.md) to run the integrated application.
+Start with the root [README](../README.md) to run the application.
 
-## Read in this order
+- [Prototype scope](architecture/prototype-scope.md): what RoomShift does and deliberately does not do.
+- [End-to-end workflow](workflow/end-to-end-workflow.md): the user journey and acceptance checklist.
+- [Photo/video capture ingestion](mode2-ingestion.md): capture requirements, limits and evidence.
+- [Evaluation](eval/RESULTS.md) and [annotation guide](eval/ANNOTATING.md): how parser quality is measured.
 
-1. [Prototype scope](architecture/prototype-scope.md) — what the first version will and will not do.
-2. [Team boundaries](architecture/team-boundaries.md) — who owns which part.
-3. [Scene schema](../contracts/scene.schema.json) — the shared JSON shape.
-4. [Backend API](../contracts/api-contract.md) — requests, coordinates, and provenance.
-5. [Example project](../contracts/fixtures/room.scene.json) — the stable mock scene used by both sides.
-6. [End-to-end workflow](workflow/end-to-end-workflow.md) — the user journey and acceptance checklist.
+## Contracts
 
-## Shared-contract rule
+The files in [`contracts/`](../contracts) are the source of truth shared by the web app and the API:
 
-The files in root `contracts/` are the source of truth. Files in `docs/contracts/` and `docs/fixtures/` are superseded planning drafts. Contract changes must be made in both applications together.
+- [`scene.schema.json`](../contracts/scene.schema.json): the Scene JSON shape.
+- [`assembly.schema.json`](../contracts/assembly.schema.json): grouped buildings and floors (generated
+  from the API's Pydantic models; tests on both sides fail if they drift).
+- [`api-contract.md`](../contracts/api-contract.md): endpoints, coordinates, errors and provenance.
+- [`fixtures/room.scene.json`](../contracts/fixtures/room.scene.json): the synthetic demo scene.
 
-The documents describe contracts only. They do not start or prescribe an implementation.
+Contract changes are made together with the code and tests of both applications.

@@ -1,1 +1,33 @@
-.github/
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Secrets and local environment
+.aws/
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Node / web
+node_modules/
+dist/
+*.tsbuildinfo
+test-results/
+playwright-report/
+
+# Local data and heavy reconstruction assets (see the service READMEs)
+services/api/data/
+services/reconstruction/checkpoints/
+services/reconstruction/meshroom/
+services/reconstruction/.cache/
+services/reconstruction/.python/

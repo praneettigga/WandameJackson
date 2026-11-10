@@ -348,6 +348,8 @@ export function WallTools({ scene }: { scene: Scene }) {
     setTyped('');
     setHover(null);
     setPlacement(null);
+    // Drawing state resets when the tool changes; the setters update refs and are not reactive.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool]);
 
   function startDrag(next: Drag) {

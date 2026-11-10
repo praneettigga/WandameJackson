@@ -6,10 +6,15 @@
   "scripts": {
     "dev": "node ./node_modules/vite/bin/vite.js --host 127.0.0.1",
     "build": "node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build",
+    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit -p .",
+    "lint": "node ./node_modules/eslint/bin/eslint.js .",
     "preview": "node ./node_modules/vite/bin/vite.js preview --host 127.0.0.1",
     "test": "node ./node_modules/vitest/vitest.mjs run",
     "e2e": "node ./node_modules/@playwright/test/cli.js test",
-    "format": "node ./node_modules/prettier/bin/prettier.cjs --write src tests vite.config.ts"
+    "e2e:capture": "node ./node_modules/@playwright/test/cli.js test --config playwright.capture.config.ts",
+    "e2e:calibration": "node ./node_modules/@playwright/test/cli.js test --config playwright.calibration.config.ts",
+    "format": "node ./node_modules/prettier/bin/prettier.cjs --write src tests e2e e2e-capture e2e-calibration \"*.config.ts\" eslint.config.js",
+    "format:check": "node ./node_modules/prettier/bin/prettier.cjs --check src tests e2e e2e-capture e2e-calibration \"*.config.ts\" eslint.config.js"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.6",
@@ -23,6 +28,7 @@
     "zustand": "^5.0.8"
   },
   "devDependencies": {
+    "@eslint/js": "9.39.1",
     "@playwright/test": "^1.64.0",
     "@testing-library/jest-dom": "^6.8.0",
     "@testing-library/react": "^16.3.0",
@@ -33,11 +39,18 @@
     "@vitejs/plugin-react": "^5.0.3",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
+    "eslint": "9.39.1",
+    "eslint-plugin-react-hooks": "5.2.0",
+    "globals": "16.5.0",
     "gltf-validator": "^2.0.0-dev.3.10",
     "jsdom": "^27.0.0",
     "prettier": "^3.9.9",
     "typescript": "^5.9.2",
+    "typescript-eslint": "8.46.4",
     "vite": "^7.1.7",
     "vitest": "^5.0.3"
+  },
+  "engines": {
+    "node": ">=22.12"
   }
 }

@@ -500,9 +500,9 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
   const taken = new Map<string, Avoid[]>(scene.rooms.map((r) => [r.id, []]));
   const wetSpots = new Map<string, Avoid[]>(scene.rooms.map((r) => [r.id, []]));
   let count = 0;
-  const useOf = (r: Room) => uses[r.id]?.use ?? 'living';
+  const roomUseOf = (r: Room) => uses[r.id]?.use ?? 'living';
   const roomsWith = (...list: RoomUse[]) =>
-    list.flatMap((u) => scene.rooms.filter((r) => useOf(r) === u));
+    list.flatMap((u) => scene.rooms.filter((r) => roomUseOf(r) === u));
   const place = (
     info: RoomInfo,
     st: Station,
@@ -567,7 +567,7 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
       }
     }
     if (anchor) {
-      const hasToilet = useOf(stackRoom) === 'bathroom';
+      const hasToilet = roomUseOf(stackRoom) === 'bathroom';
       fixtures.push({
         id: `stack-${++count}`,
         kind: 'stack',
@@ -640,7 +640,7 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
 
   // Distribution board beside the entrance: a door in an outside wall, not into a bathroom.
   const entrances = scene.rooms
-    .filter((r) => useOf(r) !== 'bathroom')
+    .filter((r) => roomUseOf(r) !== 'bathroom')
     .flatMap((r) => infos.get(r.id)!.doors.map((d) => ({ room: r, door: d })))
     .sort((a, b) => Number(ext.has(b.door.wall.id)) - Number(ext.has(a.door.wall.id)));
   const panelRoom = entrances[0]?.room ?? [...scene.rooms].sort((a, b) => roomArea(b) - roomArea(a))[0];
@@ -657,7 +657,7 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
   // Switches on the latch side of each room's door (outside the door for bathrooms), and lights.
   for (const room of scene.rooms) {
     const info = infos.get(room.id)!;
-    const use = useOf(room);
+    const use = roomUseOf(room);
     const door = [...info.doors].sort((a, b) =>
       panel ? dist2(wallPoint(a.wall, a.opening.offset), [panel.position[0], panel.position[2]]) -
         dist2(wallPoint(b.wall, b.opening.offset), [panel.position[0], panel.position[2]]) : 0,
@@ -704,7 +704,7 @@ function placeFixtures(scene: Scene, uses: Record<string, RoomAssignment>, ext: 
   };
   for (const room of scene.rooms) {
     const info = infos.get(room.id)!;
-    const rule = sockets[useOf(room)];
+    const rule = sockets[roomUseOf(room)];
     const sink = sinks.get(room.id);
     const sinkS = sink?.anchor
       ? info.stations.find((s) => s.wall?.id === sink.anchor!.wallId && Math.abs(s.t - sink.anchor!.t) < 0.03)?.s

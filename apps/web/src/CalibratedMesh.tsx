@@ -32,6 +32,8 @@ export function CalibratedMesh({
     setError('');
     setAngles(mesh.calibration?.rotationDegrees ?? [0, 0, 0]);
     setDistance(String(mesh.calibration?.reference?.distanceMeters ?? 1));
+    // Reset the controls only when a different mesh or calibration revision is shown.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesh.jobId, mesh.calibrationRevision]);
   const matrix = reconstructionMatrix(mesh);
   const visiblePoints = points.map(

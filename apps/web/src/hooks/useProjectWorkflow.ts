@@ -230,8 +230,7 @@ export function useProjectWorkflow() {
       height: floor.settings.wallHeight == null ? '' : String(floor.settings.wallHeight),
       thickness: floor.settings.wallThickness == null ? '' : String(floor.settings.wallThickness),
     });
-    // Floor controls must not reset measurements on unrelated edits.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Floor controls reset only when the active floor or grouped project changes, never on edits.
   }, [activeProjectId, assemblyId]);
   async function trackAssembly(id: string, ids: string[]) {
     polling.current?.abort();

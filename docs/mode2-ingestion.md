@@ -1,6 +1,6 @@
 # Mode 2: capture ingestion (Milestone 1)
 
-In Reconstruct, select **Mode 2 · Photos & video**. Upload a 30–60 second MP4/MOV
+In Reconstruct, select **Mode 2 · Photos & video**. Upload a 10–60 second MP4/MOV
 walkthrough, or 20–40 PNG/JPEG photos in walking order. The file list shows the
 order that will be processed; use the arrow buttons to correct photo order. Cover one static room in good lighting, maintain
 roughly 70% overlap, and include textured corners, furniture, floor and ceiling.

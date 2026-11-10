@@ -218,6 +218,9 @@ function FirstPerson({ scene, placement }: { scene: Scene; placement?: Placement
       window.removeEventListener('keyup', up);
       window.removeEventListener('blur', clear);
     };
+    // Re-spawn only when the floor or its placement actually changes; `placement` is a new object
+    // on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camera, scene, placement?.floor.id, placement?.position.join(), placement?.rotationY]);
   useFrame((_, delta) => {
     if (!locked) return;
@@ -336,6 +339,9 @@ function World() {
         : new THREE.Group();
     cache.sweep();
     return next;
+    // `scenes` and `view` are derived from the store fields listed below (new objects each render);
+    // `libraryRevision` forces a rebuild when a custom mesh finishes loading.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
       state.scene,
       state.scenes,
@@ -357,6 +363,7 @@ function World() {
       state.sourceScene && state.compare
         ? buildSceneGeometry(state.sourceScene, { ghost: true, ceilings: state.ceilings })
         : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rebuild when a custom mesh loads
     [state.sourceScene, state.compare, state.ceilings, libraryRevision],
   );
   // Services of the active scene, shown only while walls are see-through.

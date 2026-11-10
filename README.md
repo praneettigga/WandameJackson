@@ -33,18 +33,43 @@ The web app provides the editor, 3D viewport, project controls, and exports. The
 
 ## Run locally
 
-RoomShift requires Python 3.12+ and Node 22.12+.
+RoomShift requires Python 3.12+ and Node 22.12+. For automatic scale and room names install
+[Tesseract OCR](https://tesseract-ocr.github.io/) with English data (macOS can use the built-in Vision
+OCR instead); for video captures install FFmpeg.
+
+```bash
+# Debian/Ubuntu: sudo apt install tesseract-ocr ffmpeg   ·   Arch: sudo pacman -S tesseract tesseract-data-eng ffmpeg
+# macOS: brew install tesseract ffmpeg                    ·   Windows: winget install UB-Mannheim.TesseractOCR Gyan.FFmpeg
+```
 
 Start the API in one terminal:
+
+```bash
+cd services/api
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m uvicorn roomshift_api.main:app --host 127.0.0.1 --port 8000
+```
+
+Start the web app in a second terminal:
+
+```bash
+cd apps/web
+npm ci
+VITE_USE_MOCK_API=false VITE_API_BASE_URL=http://127.0.0.1:8000 npm run dev
+```
+
+Open <http://127.0.0.1:5173>.
+
+<details>
+<summary>Windows (PowerShell)</summary>
 
 ```powershell
 cd services/api
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m uvicorn roomshift_api.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir roomshift_api
+.venv\Scripts\python -m uvicorn roomshift_api.main:app --host 127.0.0.1 --port 8000
 ```
-
-Start the web app in a second terminal:
 
 ```powershell
 cd apps/web
@@ -54,29 +79,31 @@ $env:VITE_API_BASE_URL = 'http://127.0.0.1:8000'
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173>.
+</details>
 
-For an offline blueprint demo, use mock mode instead:
+For an offline blueprint demo without the API, use mock mode: `VITE_USE_MOCK_API=true npm run dev`.
 
-```powershell
-cd apps/web
-$env:VITE_USE_MOCK_API = 'true'
-npm run dev
-```
+Run the API as a single process (no `--workers` greater than 1): jobs and locks live in that process.
+`--reload` is handy while developing the API, but it interrupts running reconstructions. The API is
+local-only; see [its settings](services/api/README.md#run) to change ports, origins or limits.
 
 Photo/video reconstruction also needs the local Meshroom worker. Follow [the reconstruction worker setup](services/reconstruction/README.md#meshroom-setup-default-engine). Project data is stored locally under `services/api/data/`.
 
 ## Verify
 
-```powershell
+```bash
 cd services/api
-.venv\Scripts\python -m pytest -q
+.venv/bin/python -m pytest -q
+.venv/bin/ruff check .
 ```
 
-```powershell
+```bash
 cd apps/web
-npm test
-npm run build
+npm run typecheck && npm run lint && npm test && npm run build
+npm run e2e                                    # Playwright (ROOMSHIFT_CHROMIUM=/path/to/chromium to reuse a system browser)
 ```
 
-See [the API guide](services/api/README.md), [the web-app guide](apps/web/README.md), and [the prototype scope](docs/architecture/prototype-scope.md) for more detail.
+The worker's geometry tests run in its own environment: `services/reconstruction/.venv/bin/python -m pytest services/reconstruction/tests`.
+GitHub Actions runs the API and web checks on every push and pull request.
+
+See [the API guide](services/api/README.md), [the web-app guide](apps/web/README.md), and [the documentation index](docs/README.md) for more detail.

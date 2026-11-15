@@ -105,6 +105,7 @@ def corner_metrics(pred_walls, gt_walls, tol: float = CORNER_TOL) -> dict:
 def opening_metrics(pred: list[dict], gt: list[dict], tol: float = OPENING_TOL) -> dict:
     out = {}
     width_err = []
+    styled = right = 0
     for kind in ("door", "window"):
         P = [o for o in pred if o["type"] == kind]
         G = [o for o in gt if o["type"] == kind]
@@ -119,9 +120,14 @@ def opening_metrics(pred: list[dict], gt: list[dict], tol: float = OPENING_TOL) 
             used_g.add(j)
             tp += 1
             width_err.append(abs(P[i]["width"] - G[j]["width"]))
+            if "style" in G[j]:
+                styled += 1
+                right += P[i].get("style") == G[j]["style"]
         out.update({f"{kind}_{k}": v for k, v in _prf(tp, len(P), len(G)).items()})
         out[f"{kind}_tp"], out[f"{kind}_pred"], out[f"{kind}_gt"] = tp, len(P), len(G)
     out["opening_width_err_m"] = sum(width_err) / len(width_err) if width_err else float("nan")
+    # Among doors found where one was drawn: how often the kind of door is right.
+    out["door_style_acc"] = right / styled if styled else float("nan")
     return out
 
 
@@ -135,7 +141,7 @@ def scene_openings(scene: dict) -> list[dict]:
             continue
         L = math.dist(w["start"], w["end"]) or 1
         t = (o["offset"] + o["width"] / 2) / L
-        out.append({"type": o["type"], "width": o["width"],
+        out.append({"type": o["type"], "width": o["width"], **({"style": o["style"]} if "style" in o else {}),
                     "centre": [w["start"][0] + (w["end"][0] - w["start"][0]) * t, w["start"][1] + (w["end"][1] - w["start"][1]) * t]})
     return out
 

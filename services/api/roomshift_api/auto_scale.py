@@ -1,8 +1,9 @@
 """Conservative automatic scale: OCR dimensions + extension lines, then an explicit prior.
 
-OCR numbers are never treated as lengths without a unit (or a drawing unit note),
-an unambiguous geometric association, and either extension marks or alignment
-with the outside walls of the plan. No network API.
+OCR numbers are never treated as lengths without an unambiguous geometric association and either
+extension marks or alignment with the outside walls of the plan. A reading must also make the drawn
+walls a believable thickness: that catches a decimal point lost in reading ("12.0 m" read as "120m")
+and settles the unit of a dimension printed without one ("10000"). No network API.
 """
 from __future__ import annotations
 
@@ -19,6 +20,44 @@ from .parser import estimate_thickness_px, normalize_drawing
 
 NUMBER = r"\d+(?:\.\d+)?"
 UNITS = {"mm": .001, "cm": .01, "m": 1., "ft": .3048, "in": .0254}
+# Solid wall strokes drawn to scale are between a thin partition and a thick masonry wall.
+WALL_RANGE_M = (.05, .6)
+# A repaired reading must land well inside that range, so only one power of ten can qualify.
+REPAIR_RANGE_M = (.08, .45)
+
+
+def _wall_thickness_px(work: np.ndarray, scale: float) -> tuple[float, np.ndarray]:
+    """Dominant solid wall stroke in original pixels (0 when the drawing has none) and the stroke mask."""
+    _, ink = cv2.threshold(work, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Require long solid strokes before trusting a thickness.
+    length = max(15, round(min(work.shape) * .04))
+    horizontal = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((1, length), np.uint8))
+    vertical = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((length, 1), np.uint8))
+    wall_ink = cv2.bitwise_or(horizontal, vertical)
+    thickness = estimate_thickness_px(wall_ink) / scale
+    return (thickness if thickness >= 3 and (wall_ink > 0).mean() < .45 else 0.), wall_ink
+
+
+def reconcile(meters: float, pixels: float, wall_px: float, unitless: bool) -> tuple[float, str | None] | None:
+    """Check a reading spanning `pixels` against the wall strokes it implies.
+
+    Returns (meters, note) with the reading kept or repaired, or None when it cannot be trusted.
+    """
+    if wall_px <= 0:
+        return None if unitless else (meters, None)
+    wall = wall_px * meters / pixels
+    if not unitless and WALL_RANGE_M[0] <= wall <= WALL_RANGE_M[1]:
+        return meters, None
+    # A unit-less number is millimetres, centimetres or metres; a misread one lost or gained a decimal place.
+    factors = {"metres": 1., "centimetres": .01, "millimetres": .001} if unitless else {"/10": .1, "/100": .01, "x10": 10.}
+    fits = [(name, f) for name, f in factors.items() if REPAIR_RANGE_M[0] <= wall * f <= REPAIR_RANGE_M[1]]
+    if len(fits) != 1:
+        return None
+    name, factor = fits[0]
+    if unitless:
+        return meters * factor, f"No unit is printed; {name} assumed because that makes the walls {wall * factor:.2f} m thick."
+    return meters * factor, (f"As read, the walls would be {wall:.2f} m thick; taken as {meters * factor:g} m instead "
+                             "(a decimal point was probably lost in reading).")
 
 
 def parse_measurement(text: str, default_unit: str | None = None) -> float | None:
@@ -160,6 +199,7 @@ def estimate_scale(gray: np.ndarray) -> dict:
     sy, sx = work.shape[0] / original_h, work.shape[1] / original_w
     candidates = []
     warnings = []
+    wall_px, wall_ink = _wall_thickness_px(work, (sx + sy) / 2)
     # OCR reads native resolution best (upscaling blurs decimal points); labels are mapped to `work`.
     ocr_ratio = min(ratio, 1.)
     ocr_image = work if ocr_ratio == ratio else gray
@@ -178,7 +218,10 @@ def estimate_scale(gray: np.ndarray) -> dict:
             if label.confidence < 65:
                 continue
             meters = parse_measurement(label.text, unit)
-            if meters is None:
+            unitless = meters is None and re.fullmatch(NUMBER, label.text.strip()) is not None
+            if unitless:
+                meters = float(label.text)
+            if meters is None or meters <= 0:
                 continue
             for transpose in (False, True):
                 oriented = Label(label.text, label.y, label.x, label.h, label.w, label.confidence) if transpose else label
@@ -193,8 +236,15 @@ def estimate_scale(gray: np.ndarray) -> dict:
                         x, y = y, work.shape[0] - 1 - x
                     return [float(np.clip(x / sx, 0, original_w)), float(np.clip(y / sy, 0, original_h))]
                 a, b = original(span[0]), original(span[1])
+                checked = reconcile(meters, float(np.hypot(a[0] - b[0], a[1] - b[1])), wall_px, unitless)
+                if checked is None:
+                    if not unitless:
+                        note = f'Printed dimension “{label.text}” does not fit the drawn wall thickness and was ignored.'
+                        if note not in warnings:
+                            warnings.append(note)
+                    continue
                 try:
-                    cal = compute_calibration(a, b, meters, original_w, original_h)
+                    cal = compute_calibration(a, b, checked[0], original_w, original_h)
                 except ApiError:
                     continue  # an implausible reading is a rejected candidate, not a failed estimate
                 if not .0001 <= cal["metersPerPixel"] <= .5:
@@ -206,7 +256,7 @@ def estimate_scale(gray: np.ndarray) -> dict:
                         if abs(existing["metersPerPixel"] / cal["metersPerPixel"] - 1) > .08:
                             existing["ambiguous"] = True
                     continue
-                cal["label"] = label.text
+                cal["label"], cal["repair"] = label.text, checked[1]
                 candidates.append(cal)
     if any(c.get("ambiguous") for c in candidates):
         warnings.append("Inconsistent OCR readings of the same dimension were ignored.")
@@ -217,24 +267,20 @@ def estimate_scale(gray: np.ndarray) -> dict:
         if len(cluster) > len(candidates) / 2:
             median = float(np.median([c["metersPerPixel"] for c in cluster]))
             chosen = min(cluster, key=lambda c: abs(c["metersPerPixel"] - median)).copy()
-            label = chosen.pop("label")
+            label, repair = chosen.pop("label"), chosen.pop("repair")
             notes = [f'Automatic scale from printed dimension “{label}” matched to its dimension line ({len(cluster)} agreeing measurement(s)). Verify the highlighted reference.']
+            if repair:
+                notes.append(repair)
             if len(cluster) < len(candidates):
                 notes.append("Conflicting dimension readings were excluded by majority agreement.")
             return {**chosen, "method": "printed-dimension", "notes": notes + warnings}
         warnings.append("Printed dimensions disagree; no reliable common scale could be selected.")
     else:
         warnings.append("No readable measurement could be reliably matched to a dimension line with known units.")
-    _, ink = cv2.threshold(work, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    # Require long solid strokes before using a wall-thickness prior.
-    length = max(15, round(min(work.shape) * .04))
-    horizontal = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((1, length), np.uint8))
-    vertical = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((length, 1), np.uint8))
-    wall_ink = cv2.bitwise_or(horizontal, vertical)
-    thickness = estimate_thickness_px(wall_ink) / ((sx + sy) / 2)
+    thickness = wall_px
     ys, xs = np.where(wall_ink > 0)
     ys, xs = ys / sy, xs / sx
-    if thickness >= 3 and xs.size and (wall_ink > 0).mean() < .45:
+    if thickness >= 3 and xs.size:
         mpp = .2 / thickness
         method = "wall-thickness"
         notes = [f"Estimated scale: assumes solid wall strokes ({thickness:g} px) represent 0.20 m walls. Actual wall thickness varies; use a manual reference for accurate dimensions."]

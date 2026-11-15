@@ -23,6 +23,7 @@ from typing import Callable
 import cv2
 import numpy as np
 from shapely.geometry import Polygon
+from . import plan_symbols
 from .room_labels import read_room_names
 
 PARSER_NAME = "opencv-rectilinear-fallback"
@@ -35,6 +36,9 @@ WINDOW_BOTTOM = 0.9
 WINDOW_HEIGHT = 1.2
 MIN_WALL_M = 0.3
 DOOR_RANGE_M = (0.6, 1.6)
+PASSAGE_MAX_M = 3.5  # a wider break in a wall line is two walls, not an opening in one
+SINGLE_LEAF_MAX_M = 1.35
+SYMBOL_DOOR_M = (0.5, 2.6)  # gaps where a swing symbol is looked for (single and double leaves)
 MIN_WINDOW_M = 0.3
 MIN_ROOM_M2 = 1.0
 
@@ -59,6 +63,7 @@ class ParserOptions:
     pier_split: bool = True  # short solid wall piers inside a gap separate adjacent doors/windows
     soft_gap_ink: bool = True  # read faint glazing lines in gaps with a softer threshold than Otsu
     thin_line_removal: bool = True  # morphological opening that drops text, arcs and glazing lines
+    door_styles: bool = True  # read door symbols: swing arcs (also over a threshold line), double, sliding, folding, open passages
 
     @classmethod
     def ablations(cls) -> dict[str, "ParserOptions"]:
@@ -84,6 +89,7 @@ class WallLine:
     a1: float
     thick: float
     openings: list = field(default_factory=list)  # (type, g0, g1, filled) in px along the axis
+    meta: dict = field(default_factory=dict)  # (g0, g1) -> what the door symbol said: style, hinge, side
     joined: int = 0  # endpoints snapped to a perpendicular wall (0-2)
 
 
@@ -142,9 +148,10 @@ def _classify_gap(gap_m: float, filled: float) -> str | None:
     return None
 
 
-def _pier_split(band_ink: np.ndarray, band_thick: np.ndarray, start: float, T: float, mpp: float):
+def _pier_split(band_ink: np.ndarray, band_thick: np.ndarray, start: float, T: float, mpp: float, decide=None):
     """Split a gap at short solid wall piers (thick ink across the band) and classify each part.
-    Returns [(kind, g0, g1, filled)] in absolute px, or None if any part is ambiguous or no pier exists."""
+    Returns [(kind, g0, g1, filled)] in absolute px, or None if any part is ambiguous or no pier exists.
+    `decide(g0, g1, filled)` classifies a part from its symbols; by default only its fill is used."""
     solid = band_thick.any(axis=0) if band_thick.size else np.zeros(0, bool)
     min_pier = max(2, int(T / 2))
     runs, i = [], 0
@@ -168,7 +175,7 @@ def _pier_split(band_ink: np.ndarray, band_thick: np.ndarray, start: float, T: f
     for i, j in parts:
         sub = band_ink[:, i:j] > 0
         filled = float(sub.any(axis=0).mean()) if sub.size else 0.0
-        kind = _classify_gap((j - i) * mpp, filled)
+        kind = decide(start + i, start + j, filled) if decide else _classify_gap((j - i) * mpp, filled)
         if kind is None:
             return None
         if kind != "tiny":
@@ -177,7 +184,8 @@ def _pier_split(band_ink: np.ndarray, band_thick: np.ndarray, start: float, T: f
 
 
 def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warnings: list[str],
-                 detect_openings: bool = True, thick_mask: np.ndarray | None = None) -> list[WallLine]:
+                 detect_openings: bool = True, thick_mask: np.ndarray | None = None,
+                 door_styles: bool = False) -> list[WallLine]:
     lines: list[WallLine] = []
     bands = sorted(bands, key=lambda b: b.pos)
     clusters: list[list[Band]] = []
@@ -188,6 +196,7 @@ def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warni
             clusters.append([b])
     ink_t = ink if bands and bands[0].orient == "h" else ink.T
     thick_t = None if thick_mask is None else (thick_mask if bands and bands[0].orient == "h" else thick_mask.T)
+    thin_t = (ink_t > 0) & ~(thick_t > 0) if door_styles and thick_t is not None else None
     for cl in clusters:
         cl.sort(key=lambda b: b.a0)
         pos = float(np.average([b.pos for b in cl], weights=[b.a1 - b.a0 for b in cl]))
@@ -206,9 +215,38 @@ def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warni
                 lines.append(cur)
                 cur = WallLine(b.orient, pos, b.a0, b.a1, thick)
                 continue
-            kind = _classify_gap(gap_m, filled)
-            if kind is None and thick_t is not None:
-                parts = _pier_split(band, thick_t[r0:r1, int(cur.a1):int(b.a0)] > 0, int(cur.a1), T, mpp)
+
+            def decide(g0, g1, fill, line=cur):
+                """What a gap is, from its drawn symbol first and how filled it is second."""
+                span = (g1 - g0) * mpp
+                kind = _classify_gap(span, fill)
+                if thin_t is None or kind == "tiny":
+                    return kind
+                symbol = (plan_symbols.door_symbol(thin_t, pos, g0, g1, T, single=span <= SINGLE_LEAF_MAX_M)
+                          if SYMBOL_DOOR_M[0] <= span <= SYMBOL_DOOR_M[1] else None)
+                if symbol:  # a swing arc makes it a door, whatever is drawn across the threshold
+                    line.meta[(g0, g1)] = symbol
+                    return "door"
+                if kind == "window" and plan_symbols.sliding_leaves(ink_t[r0:r1, int(g0):int(g1)] > 0):
+                    line.meta[(g0, g1)] = {"style": "sliding"}
+                    return "door"
+                if fill <= 0.2 and DOOR_RANGE_M[0] <= span <= PASSAGE_MAX_M:
+                    side = plan_symbols.folding_leaves(thin_t, pos, g0, g1, T)
+                    line.meta[(g0, g1)] = {"style": "folding", "side": side} if side else {"style": "passage"}
+                    return "door"
+                return kind
+
+            # With symbols in play, a wall pier inside the break separates two openings before the break
+            # as a whole is read (two doors either side of a partition end are not one double door).
+            parts = (_pier_split(band, thick_t[r0:r1, int(cur.a1):int(b.a0)] > 0, int(cur.a1), T, mpp, decide)
+                     if thin_t is not None else None)
+            if parts is not None:
+                cur.openings.extend(parts)
+                cur.a1 = b.a1
+                continue
+            kind = decide(cur.a1, b.a0, filled)
+            if kind is None and thick_t is not None and thin_t is None:
+                parts = _pier_split(band, thick_t[r0:r1, int(cur.a1):int(b.a0)] > 0, int(cur.a1), T, mpp, decide)
                 if parts is not None:
                     cur.openings.extend(parts)
                     cur.a1 = b.a1
@@ -224,6 +262,61 @@ def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warni
             cur.a1 = b.a1
         lines.append(cur)
     return lines
+
+
+def _split_crossings(lines: list[WallLine], perpendicular: list[WallLine], T: float) -> list[WallLine]:
+    """A corridor crossing a wall line leaves a door-sized break in it, with the corridor's own walls
+    at both ends of the break. That is two walls, not an opening: cut the line there."""
+    def meets(line, at):
+        return any(abs(p.pos - at) <= T and p.a0 - T <= line.pos <= p.a1 + T for p in perpendicular)
+
+    out = []
+    for line in lines:
+        pieces = [line]
+        for opening in sorted(line.openings, key=lambda o: o[1]):
+            _, g0, g1, _ = opening
+            if line.meta.get((g0, g1), {}).get("style") != "passage" or not (meets(line, g0) and meets(line, g1)):
+                continue
+            last = pieces.pop()
+            for a0, a1 in ((last.a0, g0), (g1, last.a1)):
+                part = WallLine(line.orient, line.pos, a0, a1, line.thick)
+                part.openings = [o for o in last.openings if a0 <= o[1] and o[2] <= a1 and o is not opening]
+                part.meta = {k: v for k, v in last.meta.items() if a0 <= k[0] and k[1] <= a1}
+                pieces.append(part)
+        out.extend(pieces)
+    return out
+
+
+def _end_doors(lines: list[WallLine], perpendicular: list[WallLine], thin: np.ndarray, thick: np.ndarray,
+               T: float, mpp: float) -> None:
+    """A door hung at the very end of a wall: the wall stops a door's width short of the wall it would
+    meet (a short stub of wall may stand beyond the door), and a swing arc fills the break. The wall is
+    taken to that wall, with the door in it. `thin` and `thick` are oriented so the walls run along columns."""
+    for line in lines:
+        for end, sign in (("a1", 1), ("a0", -1)):
+            e = getattr(line, end)
+            reach = [p for p in perpendicular if p.a0 - T <= line.pos <= p.a1 + T
+                     and 0.5 / mpp <= sign * (p.pos - e) - T / 2 <= 2.0 / mpp]
+            if not reach:
+                continue
+            target = min(reach, key=lambda p: abs(p.pos - e))
+            lo, hi = sorted((int(round(e)), int(round(target.pos - sign * T / 2))))
+            rows = slice(max(0, int(line.pos - T / 4)), int(line.pos + T / 4) + 1)
+            solid = thick[rows, lo:hi].any(axis=0)
+            # The break is the stretch with no wall in it; what stands beyond it is the stub.
+            edges = np.flatnonzero(np.diff(np.concatenate([[1], solid.astype(int), [1]])))
+            spans = [(a, b) for a, b in zip(edges[::2], edges[1::2])]
+            if not spans:
+                continue
+            a, b = max(spans, key=lambda span: span[1] - span[0])
+            g0, g1 = float(lo + a), float(lo + b)
+            if not 0.5 / mpp <= g1 - g0 <= SINGLE_LEAF_MAX_M / mpp or any(o[1] < g1 and g0 < o[2] for o in line.openings):
+                continue
+            symbol = plan_symbols.door_symbol(thin, line.pos, g0, g1, T)
+            if symbol:
+                line.openings.append(("door", g0, g1, 0.0))
+                line.meta[(g0, g1)] = symbol
+                setattr(line, end, target.pos)
 
 
 def _snap(lines: list[WallLine], perpendicular: list[WallLine], T: float) -> None:
@@ -724,14 +817,18 @@ def _wall_factors(ln: WallLine, thick_mask: np.ndarray, T: float) -> list[dict]:
 
 
 def _opening_factors(kind: str, ln: WallLine, g0: float, g1: float, filled: float,
-                     ink: np.ndarray, thick_mask: np.ndarray, T: float, mpp: float) -> list[dict]:
+                     ink: np.ndarray, thick_mask: np.ndarray, T: float, mpp: float, style: str | None = None) -> list[dict]:
     width_m = (g1 - g0) * mpp
     if kind == "door":
+        typical, limits = {"double": ((1.2, 1.8), (1.0, 2.6)), "sliding": ((1.2, 2.4), (0.7, PASSAGE_MAX_M)),
+                           "folding": ((0.7, 1.8), (0.6, PASSAGE_MAX_M)), "passage": ((0.7, 2.0), (0.6, PASSAGE_MAX_M)),
+                           }.get(style, ((0.7, 1.0), DOOR_RANGE_M))
         factors = [
             _factor("Gap clarity", 1 - 2.5 * filled,
                     f"The gap is {1 - filled:.0%} empty (a door needs at least 80%)."),
-            _factor("Width", _span_typicality(width_m, (0.7, 1.0), DOOR_RANGE_M),
-                    f"{width_m:.2f} m {'is a typical door width' if 0.7 <= width_m <= 1.0 else 'is an unusual door width; check the calibration'} (typical 0.70–1.00 m)."),
+            _factor("Width", _span_typicality(width_m, typical, limits),
+                    f"{width_m:.2f} m {'is a typical width' if typical[0] <= width_m <= typical[1] else 'is an unusual width; check the calibration'} "
+                    f"for this kind of door (typical {typical[0]:.2f}–{typical[1]:.2f} m)."),
         ]
         # A door swing arc or leaf is thin linework beside the gap, on either side of the wall.
         thin = (ink > 0) & ~(thick_mask > 0)
@@ -878,8 +975,13 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     progress(0.4)
 
     pier = thick if opts.pier_split else None
-    h_lines = _merge_lines(_bands(horiz, "h", min_band), soft_ink, T, mpp, warnings, opts.opening_detection, pier)
-    v_lines = _merge_lines(_bands(vert, "v", min_band), soft_ink, T, mpp, warnings, opts.opening_detection, pier)
+    h_lines = _merge_lines(_bands(horiz, "h", min_band), soft_ink, T, mpp, warnings, opts.opening_detection, pier, opts.door_styles)
+    v_lines = _merge_lines(_bands(vert, "v", min_band), soft_ink, T, mpp, warnings, opts.opening_detection, pier, opts.door_styles)
+    if opts.door_styles:
+        h_lines, v_lines = _split_crossings(h_lines, v_lines, T), _split_crossings(v_lines, h_lines, T)
+        line_weight = (soft_ink > 0) & ~(thick > 0)
+        _end_doors(h_lines, v_lines, line_weight, thick, T, mpp)
+        _end_doors(v_lines, h_lines, line_weight.T, thick.T, T, mpp)
     if opts.endpoint_snap:
         _snap(h_lines, v_lines, T)
         _snap(v_lines, h_lines, T)
@@ -948,12 +1050,28 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
             width = min((g1 - g0) * mpp, length_m - offset)
             if width <= 0:
                 continue
+            symbol = ln.meta.get((g0, g1), {})
+            style = symbol.get("style")
             if kind == "door":
                 o_h, o_b = min(DOOR_HEIGHT, height), 0.0
-                notes = ["Empty door-sized gap in a wall line interpreted as a door; height assumed."]
-                swing = door_swing(ln, g0, g1, soft_ink, thick, T)
+                notes = [{"hinged": "Swing arc beside a gap in a wall line read as a hinged door; height assumed.",
+                          "double": "Two swing arcs meeting in a gap read as a double door; height assumed.",
+                          "sliding": "Two overlapping leaves drawn in a gap read as a sliding door; height assumed.",
+                          "folding": "Zig-zag leaves beside a gap read as a folding door; height assumed.",
+                          "passage": "Empty gap in a wall line with no door symbol: an opening without a leaf; height assumed.",
+                          }.get(style, "Empty door-sized gap in a wall line interpreted as a door; height assumed.")]
+                # A leaf line without a full arc is still a hinged door, but only in a gap one leaf could close.
+                narrow = (g1 - g0) * mpp <= SINGLE_LEAF_MAX_M
+                swing = door_swing(ln, g0, g1, soft_ink, thick, T) if style in (None, "hinged") or (style == "passage" and narrow) else None
                 if swing:
                     notes.append(swing)
+                    if style == "passage":
+                        style = "hinged"
+                        notes[0] = "Door leaf beside a gap in a wall line read as a hinged door; height assumed."
+                elif style in ("double", "folding") and symbol.get("side"):
+                    # Same wording as the swing note: +rows is the left normal of a horizontal wall.
+                    left = (symbol["side"] > 0) == (ln.orient == "h")
+                    notes.append(f"Swing: hinge at the near edge (wall start side), opens to the {'left' if left else 'right'} side of the wall.")
                 fo = {"height": "inferred", "bottom": "inferred"}
             else:
                 o_b = min(WINDOW_BOTTOM, height / 3)
@@ -962,9 +1080,12 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
                 fo = {"height": "inferred", "bottom": "inferred"}
             openings.append({
                 "id": f"{kind}-{len(openings) + 1}", "type": kind, "wallId": wid,
+                **({"style": style} if kind == "door" and style else {}),
                 "offset": round(offset, 4), "width": round(width, 4), "height": o_h, "bottom": o_b,
                 "provenance": prov("inferred", fo, notes,
-                                   _opening_factors(kind, ln, g0, g1, filled, soft_ink, thick, T, mpp)),
+                                   # A door proven by its swing arc is not doubted for a threshold line drawn across it.
+                                   _opening_factors(kind, ln, g0, g1, 0.0 if style in ("hinged", "double", "sliding") else filled,
+                                                    soft_ink, thick, T, mpp, style)),
             })
     for dg in diagonals:
         wid = f"wall-{len(walls) + 1}"

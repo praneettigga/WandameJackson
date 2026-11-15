@@ -79,13 +79,14 @@ def _annotate_sheet(img, px, ox, oz, W, D, t, axes_x):
 
 def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool = True,
              style: str = "solid", chamfer: bool = False, annotated: bool = False,
-             partition: float | None = None) -> Plan:
+             partition: float | None = None, symbols: bool = False) -> Plan:
     """style: 'solid' (filled wall strokes), 'outline' (double-line walls) or 'hatched' (architectural
     poché: light diagonal hatching between a heavy line and a light line).
     chamfer: cut the top-left outer corner with a 45° diagonal wall.
     annotated: a drawing sheet like a real architectural plan: bold title, axis lines with bubbles,
     two rows of dimension lines and a border frame.
-    partition: interior walls this thick (m) instead of the outer wall thickness (mixed thickness)."""
+    partition: interior walls this thick (m) instead of the outer wall thickness (mixed thickness).
+    symbols: doors of every kind the parser reads (hinged over a threshold line, double, sliding, folding, open passage)."""
     rng = random.Random(seed)
     W, D = round(rng.uniform(6, 12), 1), round(rng.uniform(5, 9), 1)
     t = round(rng.uniform(0.15, 0.25), 2)
@@ -119,8 +120,14 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
                     openings.append({"type": kind, "centre": centre, "width": width, "seg": seg})
                     return
 
+    door_widths = {"hinged": (0.8, 0.95), "threshold": (0.8, 0.95), "double": (1.3, 1.7), "sliding": (1.4, 2.0),
+                   "folding": (1.0, 1.6), "passage": (0.9, 2.2)}
     for seg in parts:
-        place(seg, "door", round(rng.uniform(0.8, 0.95), 2))
+        kind = rng.choice(list(door_widths)) if symbols else "hinged"
+        before = len(openings)
+        place(seg, "door", round(rng.uniform(*door_widths[kind]), 2))
+        if len(openings) > before:
+            openings[-1]["drawn"] = kind
     place(rng.choice(outer), "door", round(rng.uniform(0.9, 1.0), 2))
     for _ in range(rng.randint(1, 3)):
         place(rng.choice(outer), "window", round(rng.uniform(1.0, 1.8), 1))
@@ -172,8 +179,35 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
                     cv2.line(img, (px(cx - h), px(cz + f * th)), (px(cx + h), px(cz + f * th)), 0, 1)
                 else:
                     cv2.line(img, (px(cx + f * th), px(cz - h)), (px(cx + f * th), px(cz + h)), 0, 1)
+        elif o.get("drawn", "hinged") not in ("hinged", "threshold"):
+            side = rng.choice([-1, 1])
+            w, r = o["width"], px(o["width"] / 2)
+            # Points are (along the wall, across it) in metres from the gap's centre; `at` maps them to pixels.
+            at = (lambda a, c: (px(cx + a), px(cz + c))) if horizontal else (lambda a, c: (px(cx + c), px(cz + a)))
+            o["style"] = o["drawn"]
+            if o["drawn"] == "double":
+                for end in (-1, 1):
+                    hinge = at(end * h, side * th / 2)
+                    cv2.line(img, hinge, at(end * h, side * (th / 2 + w / 2)), 0, 1)
+                    # Quarter circle from the leaf tip round to the middle of the gap.
+                    start = {(-1, 1): 0, (1, 1): 90, (1, -1): 180, (-1, -1): 270}[(end, side)] if horizontal else \
+                            {(-1, 1): 0, (-1, -1): 90, (1, -1): 180, (1, 1): 270}[(end, side)]
+                    cv2.ellipse(img, hinge, (r, r), 0, start, start + 90, 0, 1)
+            elif o["drawn"] == "sliding":
+                cv2.line(img, at(-h, -0.2 * th), at(0.1 * w, -0.2 * th), 0, 1)
+                cv2.line(img, at(-0.1 * w, 0.2 * th), at(h, 0.2 * th), 0, 1)
+            elif o["drawn"] == "folding":
+                zigzag = [at(-h + i * w / 4, side * (th / 2 + (0.25 * w if i % 2 else 0))) for i in range(5)]
+                cv2.polylines(img, [np.array(zigzag, np.int32)], False, 0, 1)
         else:
             # Door leaf and quarter swing arc on one side of the wall.
+            o["style"] = "hinged"
+            if o.get("drawn") == "threshold":
+                for f in (-0.5, 0.5):  # the sill drawn across the gap, which alone would read as glazing
+                    if horizontal:
+                        cv2.line(img, (px(cx - h), px(cz + f * th)), (px(cx + h), px(cz + f * th)), 0, 1)
+                    else:
+                        cv2.line(img, (px(cx + f * th), px(cz - h)), (px(cx + f * th), px(cz + h)), 0, 1)
             side = rng.choice([-1, 1])
             # Ground truth: the arc's world side (+1 = towards +z for horizontal walls, +x for vertical);
             # the hinge is always at the jamb with the smaller coordinate.
@@ -203,7 +237,9 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
     rooms = [([[x0 + c, z0], [x1, z0], [x1, z1], [x0, z1], [x0, z0 + c]] if c and (x0, z0) == (ox, oz)
               else [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]) for x0, z0, x1, z1 in leaves]
     ops = [{"type": o["type"], "centre": o["centre"], "width": o["width"],
-            **({"swing_side": o["swing_side"], "horizontal": o["seg"][0][1] == o["seg"][1][1]} if o["type"] == "door" else {})}
+            **({"style": o["style"]} if symbols and o["type"] == "door" else {}),
+            **({"swing_side": o["swing_side"], "horizontal": o["seg"][0][1] == o["seg"][1][1]}
+               if o["type"] == "door" and "swing_side" in o else {})}
            for o in openings]
     return Plan(img, mpp, walls, ops, rooms, {"seed": seed, "size": [W, D], "thickness": t,
                                               "style": style, "chamfer": c})
@@ -339,4 +375,6 @@ STYLES = {
     "annotated": {"annotated": True},
     # A realistic architectural sheet: hatched walls, thinner partitions, title, axes, dimensions, frame.
     "sheet": {"style": "hatched", "partition": 0.1, "annotated": True},
+    # Every kind of door symbol the parser reads.
+    "symbols": {"symbols": True},
 }

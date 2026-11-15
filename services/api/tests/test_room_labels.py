@@ -9,7 +9,7 @@ import pytest
 from roomshift_api import ocr
 from roomshift_api.auto_scale import Label
 from roomshift_api.parser import parse_blueprint
-from roomshift_api.room_labels import assign_room_names, read_room_names, room_name
+from roomshift_api.room_labels import assign_room_names, corrected_room_name, read_room_names, room_name, room_type
 from conftest import l_shaped_plan
 
 
@@ -26,6 +26,31 @@ def test_room_vocabulary(text):
 @pytest.mark.parametrize('text', ['4500 mm', '12 x 10', 'FIRST FLOOR PLAN', 'BEDROOM 12 m2', 'SCALE 1:100', 'SOFA'])
 def test_notes_and_dimensions_are_not_room_names(text):
     assert room_name(text) is None
+
+
+@pytest.mark.parametrize('text,name', [('LVING', 'LIVING'), ('STARS', 'STAIRS'), ('Bedrom 2', 'Bedroom 2'), ('KITCHEM', 'KITCHEN')])
+def test_garbled_room_names_are_corrected(text, name):
+    assert room_name(text) is None and corrected_room_name(text) == name
+
+
+@pytest.mark.parametrize('text', ['SOFA', 'FLOOR 1', 'NORTH', 'ROOF', 'SCALE', 'HALF', 'Kitchen'])
+def test_other_words_are_not_turned_into_room_names(text):
+    assert corrected_room_name(text) is None
+
+
+@pytest.mark.parametrize('name,kind', [('MASTER BEDROOM', 'bedroom'), ('STAIRS', 'stair'), ('LIFT', 'lift'), ('W.C.', 'bath'),
+                                       ('LIVING / DINING', 'dining'), ('Hall', 'hall'), ('Store Room', 'storage'), ('Room 3', 'other')])
+def test_room_type_from_name(name, kind):
+    assert room_type(name) == kind
+
+
+def test_corrected_reading_is_recorded_and_exact_reading_wins():
+    rooms = [room(), room(4)]
+    assign_room_names(rooms, [Label('LVING', 120, 100, 70, 20, 90), Label('STARS', 520, 100, 70, 20, 90),
+                              Label('STUDY', 520, 200, 70, 20, 80)], .01)
+    assert rooms[0]['name'] == 'LIVING' and rooms[0]['type'] == 'living'
+    assert 'taken to be LIVING' in rooms[0]['provenance']['notes'][-1]
+    assert rooms[1]['name'] == 'STUDY'  # read exactly, so preferred over the corrected STAIRS
 
 
 def test_spatial_assignment_full_phrases_and_fallback():

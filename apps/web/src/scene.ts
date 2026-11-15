@@ -39,9 +39,26 @@ export const objectSchema = z.strictObject({
   dimensions: z.tuple([positive, positive, positive]),
   provenance,
 });
+export const roomTypes = [
+  'bedroom',
+  'living',
+  'kitchen',
+  'dining',
+  'bath',
+  'hall',
+  'stair',
+  'lift',
+  'utility',
+  'storage',
+  'garage',
+  'outdoor',
+  'other',
+] as const;
+export const doorStyles = ['hinged', 'double', 'sliding', 'folding', 'passage'] as const;
 export const roomSchema = z.strictObject({
   id,
   name: z.string(),
+  type: z.enum(roomTypes).optional(),
   polygon: z.array(v2).min(3),
   height: positive,
   provenance,
@@ -57,6 +74,7 @@ export const wallSchema = z.strictObject({
 export const openingSchema = z.strictObject({
   id,
   type: z.enum(['door', 'window']),
+  style: z.enum(doorStyles).optional(),
   wallId: id,
   offset: nonnegative,
   width: positive,

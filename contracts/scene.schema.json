@@ -149,6 +149,10 @@
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
         "name": { "type": "string" },
+        "type": {
+          "enum": ["bedroom", "living", "kitchen", "dining", "bath", "hall", "stair", "lift", "utility", "storage", "garage", "outdoor", "other"],
+          "description": "Optional use of the room, from its printed name, its fixtures, or the user."
+        },
         "polygon": {
           "type": "array", "minItems": 3, "items": { "$ref": "#/$defs/V2" },
           "description": "Open simple polygon at y = 0; the first point is NOT repeated."
@@ -177,6 +181,10 @@
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
         "type": { "enum": ["door", "window"] },
+        "style": {
+          "enum": ["hinged", "double", "sliding", "folding", "passage"],
+          "description": "Optional kind of door. passage = an opening with no leaf. Omitted for windows and unknown doors (drawn as hinged)."
+        },
         "wallId": { "$ref": "#/$defs/Id" },
         "offset": { "$ref": "#/$defs/NonNegative", "description": "Distance along the centerline from wall.start to the opening's near edge. offset + width <= wall length." },
         "width": { "$ref": "#/$defs/Positive" },
@@ -192,7 +200,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
         "name": { "type": "string" },
-        "category": { "type": "string", "description": "chair, table, sofa, bed, cabinet, other" },
+        "category": { "type": "string", "description": "chair, table, sofa, bed, cabinet, stairs, other. For stairs, dimensions are [width, rise, run] and rotationY turns the climb direction (local -z is up the flight)." },
         "componentId": { "type": ["string", "null"], "description": "Procedural component such as table.basic; null for a generic box." },
         "assetUrl": { "type": "string", "pattern": "^/api/projects/[A-Za-z0-9_.-]+/editor-assets/[a-f0-9]+\\.glb$", "description": "Immutable server-backed mesh, normalized to the object's dimensions and transform." },
         "position": { "$ref": "#/$defs/V3", "description": "Centre of the object's BOTTOM face. Floor-snapped means position[1] = 0." },

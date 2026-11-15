@@ -26,7 +26,7 @@ from roomshift_api.parser import ParseError, ParserOptions, parse_blueprint
 from .generate import AUGMENTATIONS, STYLES, Plan, generate
 from .metrics import evaluate
 
-HEADLINE = ["wall_iou", "layout_iou", "room_f1", "room_mean_iou", "corner_f1", "door_f1", "window_f1",
+HEADLINE = ["wall_iou", "layout_iou", "room_f1", "room_mean_iou", "corner_f1", "door_f1", "window_f1", "door_style_acc",
             "dim_abs_err_m", "dim_rel_err", "failed", "seconds"]
 
 

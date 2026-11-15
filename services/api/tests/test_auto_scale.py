@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from roomshift_api import ocr
-from roomshift_api.auto_scale import Label, _dimension_span, estimate_scale, parse_measurement
+from roomshift_api.auto_scale import Label, _dimension_span, estimate_scale, parse_measurement, reconcile
 from conftest import l_shaped_plan, png_bytes, wait_job
 
 
@@ -188,6 +188,37 @@ def test_overall_dimension_without_ticks_matches_outer_walls(monkeypatch):
     cv2.line(image, (350, 80), (650, 80), 0, 2)
     stub_labels(monkeypatch, label, image.shape)
     assert estimate_scale(image)['method'] == 'wall-thickness'
+
+
+def test_reading_must_make_the_walls_a_believable_thickness():
+    # 500 px span, 10 px walls. "5.00 m" gives 0.10 m walls: kept as read.
+    assert reconcile(5.0, 500, 10, False) == (5.0, None)
+    # "50 m" (the decimal point lost) would make them 1 m thick: repaired to 5 m, and said so.
+    meters, note = reconcile(50.0, 500, 10, False)
+    assert meters == pytest.approx(5.0) and 'decimal point' in note
+    # A number with no unit is millimetres, centimetres or metres, whichever suits the walls.
+    meters, note = reconcile(5000.0, 500, 10, True)
+    assert meters == pytest.approx(5.0) and 'millimetres' in note
+    # Nothing fits: the reading is not used. Without solid walls a unit-less number is never a length.
+    assert reconcile(37.0, 500, 10, True) is None and reconcile(5000.0, 500, 0, True) is None
+    assert reconcile(5.0, 500, 0, False) == (5.0, None)
+
+
+@pytest.mark.parametrize('text,note', [('50.0 m', 'decimal point'), ('5000', 'millimetres')])
+def test_misread_and_unitless_dimensions_still_give_the_right_scale(monkeypatch, text, note):
+    image, label = dimensioned_plan()
+    stub_labels(monkeypatch, Label(text, label.x, label.y, label.w, label.h, 99))
+    cal = estimate_scale(image)
+    assert cal['method'] == 'printed-dimension' and cal['metersPerPixel'] == pytest.approx(.01, rel=.01)
+    assert cal['distanceMeters'] == pytest.approx(5.0, rel=.01) and any(note in n for n in cal['notes'])
+
+
+@pytest.mark.skipif(not shutil.which('tesseract'), reason='needs local OCR')
+@pytest.mark.parametrize('name,mpp', [('floor-1.png', .01), ('floor-4.png', .01), ('apartment_blueprint.png', .01), ('services-apartment.png', .02)])
+def test_fixture_plans_get_their_true_scale(name, mpp):
+    from roomshift_api.config import REPO_ROOT
+    gray = cv2.imread(str(REPO_ROOT / 'contracts/fixtures' / name), cv2.IMREAD_GRAYSCALE)
+    assert estimate_scale(gray)['metersPerPixel'] == pytest.approx(mpp, rel=.02)
 
 
 def test_implausible_candidate_is_skipped_not_fatal(monkeypatch):

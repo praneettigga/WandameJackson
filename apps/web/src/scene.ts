@@ -320,6 +320,15 @@ export const components: ComponentSpec[] = [
   { id: 'sofa.basic', name: 'Sofa', dimensions: [2, 0.85, 0.9] },
   { id: 'bed.basic', name: 'Bed', dimensions: [1.6, 0.65, 2] },
   { id: 'cabinet.basic', name: 'Cabinet', dimensions: [0.9, 1.8, 0.45] },
+  // Stairs: [width, rise, run]. They climb towards local -z; turn them with Rotation Y.
+  { id: 'stairs.straight', name: 'Stairs', category: 'stairs', dimensions: [1, 2.7, 2.8] },
+  { id: 'stairs.u', name: 'U stairs', category: 'stairs', dimensions: [2, 2.7, 2.4] },
+  {
+    id: 'stairs.u-right',
+    name: 'U stairs (right-hand)',
+    category: 'stairs',
+    dimensions: [2, 2.7, 2.4],
+  },
 ];
 export function createObject(c: ComponentSpec, position: V3 = [0, 0, 0]): SceneObject {
   return {

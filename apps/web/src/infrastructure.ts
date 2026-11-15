@@ -312,7 +312,19 @@ const keywords: [RoomUse, RegExp][] = [
   ['living', /living|lounge|family|dining|sitting|study|office|den/i],
 ];
 
-/** Uses from the user's choice, then the room name, then a stated assumption from size and layout. */
+const typeUse: Partial<Record<NonNullable<Scene['rooms'][number]['type']>, RoomUse>> = {
+  bedroom: 'bedroom',
+  living: 'living',
+  dining: 'living',
+  kitchen: 'kitchen',
+  bath: 'bathroom',
+  utility: 'utility',
+  hall: 'hall',
+  stair: 'hall',
+  lift: 'hall',
+};
+
+/** Uses from the user's choice, then the room type and name, then a stated assumption from size and layout. */
 export function assignRoomUses(
   scene: Scene,
   overrides: Record<string, RoomUse> = {},
@@ -320,6 +332,9 @@ export function assignRoomUses(
   const out: Record<string, RoomAssignment> = {};
   for (const room of scene.rooms) {
     if (overrides[room.id]) out[room.id] = { use: overrides[room.id], source: 'user' };
+    else if (room.type && typeUse[room.type])
+      // The room type read from the plan (or set in Properties) says more than a name pattern.
+      out[room.id] = { use: typeUse[room.type]!, source: 'name' };
     else {
       const named = keywords.find(([, re]) => re.test(room.name));
       if (named) out[room.id] = { use: named[0], source: 'name' };

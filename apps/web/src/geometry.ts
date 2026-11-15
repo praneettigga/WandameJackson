@@ -156,6 +156,8 @@ function scanInstance(object: SceneObject, template: THREE.Object3D, options: Re
   });
   return instance;
 }
+/** Risers of about 0.18 m for a given rise. */
+export const stairSteps = (rise: number) => Math.min(40, Math.max(3, Math.round(rise / 0.18)));
 function furniture(object: SceneObject, options: RenderOptions) {
   const group = new THREE.Group();
   group.name = object.id;
@@ -213,6 +215,31 @@ function furniture(object: SceneObject, options: RenderOptions) {
       for (const x of [-0.25, 0.25])
         part([0.46, 0.91, 0.025], [x, 0.5, 0.4875], material(object, '#c4b49d', options));
       break;
+    case 'stairs.straight': {
+      // Solid steps climbing from the +z end (floor) to the -z end (full rise).
+      const steps = stairSteps(h);
+      for (let i = 0; i < steps; i++)
+        part([1, (i + 1) / steps, 1 / steps], [0, (i + 1) / (2 * steps), 0.5 - (i + 0.5) / steps]);
+      break;
+    }
+    case 'stairs.u':
+    case 'stairs.u-right': {
+      // Up one half to a landing at the -z end, then back along the other half to the full rise.
+      const side = object.componentId === 'stairs.u' ? -1 : 1;
+      const landing = Math.min(0.45, 1 / Math.max(d, 0.1));
+      const steps = Math.max(2, Math.ceil(stairSteps(h) / 2));
+      const going = (1 - landing) / steps;
+      for (let i = 0; i < steps; i++) {
+        const top = (i + 1) / (2 * steps);
+        part([0.48, top, going], [side * 0.26, top / 2, 0.5 - (i + 0.5) * going]);
+        part(
+          [0.48, 0.5 + top, going],
+          [-side * 0.26, (0.5 + top) / 2, -0.5 + landing + (i + 0.5) * going],
+        );
+      }
+      part([1, 0.5, landing], [0, 0.25, -0.5 + landing / 2]);
+      break;
+    }
     default:
       part([1, 1, 1], [0, 0.5, 0]);
   }
@@ -430,24 +457,49 @@ function wallObject(
           material(opening, '#b9bdb6', options),
           opening.id,
         );
-    } else {
-      // Door leaf, shown open 90° from its hinge so the passage stays visible and walkable.
+    } else if (opening.style !== 'passage') {
+      // Door leaves, shown open so the passage stays visible and walkable. A passage has none.
       const swing = doorSwing(opening);
-      const leafWidth = Math.max(0.05, opening.width - 2 * trim);
+      const clear = Math.max(0.05, opening.width - 2 * trim);
       const leafHeight = Math.max(0.05, opening.height - trim - 0.01);
-      const hingeX = swing.hinge === 'start' ? left + trim : right - trim;
-      const leaf = box(
-        frame,
-        [0.04, leafHeight, leafWidth],
-        [
-          hingeX + (swing.hinge === 'start' ? 0.02 : -0.02),
-          bottom + leafHeight / 2,
-          swing.side * (wall.thickness / 2 + leafWidth / 2),
-        ],
-        material(opening, '#a98a62', options),
-        opening.id,
-      );
-      leaf.name = `${opening.id}:leaf`;
+      const wood = material(opening, '#a98a62', options);
+      const y = bottom + leafHeight / 2;
+      /** A leaf standing open at 90 degrees from the jamb at `hinge` ('start' or 'end'). */
+      const openLeaf = (hinge: 'start' | 'end', width: number, name: string) => {
+        const hingeX = hinge === 'start' ? left + trim : right - trim;
+        const leaf = box(
+          frame,
+          [0.04, leafHeight, width],
+          [
+            hingeX + (hinge === 'start' ? 0.02 : -0.02),
+            y,
+            swing.side * (wall.thickness / 2 + width / 2),
+          ],
+          wood,
+          opening.id,
+        );
+        leaf.name = name;
+      };
+      if (opening.style === 'double') {
+        openLeaf('start', clear / 2, `${opening.id}:leaf`);
+        openLeaf('end', clear / 2, `${opening.id}:leaf-2`);
+      } else if (opening.style === 'folding') {
+        // Folded back against both jambs: two narrow stacks.
+        openLeaf('start', clear / 4, `${opening.id}:leaf`);
+        openLeaf('end', clear / 4, `${opening.id}:leaf-2`);
+      } else if (opening.style === 'sliding') {
+        // Both panels slid to the start side, one in front of the other, in the plane of the wall.
+        for (const [i, z] of [-0.03, 0.03].entries()) {
+          const panel = box(
+            frame,
+            [clear / 2, leafHeight, 0.03],
+            [left + trim + clear / 4 + i * 0.04, y, z],
+            wood,
+            opening.id,
+          );
+          panel.name = i ? `${opening.id}:leaf-2` : `${opening.id}:leaf`;
+        }
+      } else openLeaf(swing.hinge, clear, `${opening.id}:leaf`);
     }
     group.add(frame);
   }

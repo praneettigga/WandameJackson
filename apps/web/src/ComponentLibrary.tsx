@@ -45,6 +45,7 @@ const glyphs = {
       <path d="M2.5 4.6 8 7.7l5.5-3.1M8 7.7v6.8" />
     </>
   ),
+  stairs: <path d="M1.5 13.5h3.5v-3h3v-3h3v-3h3.5" />,
   plus: <path d="M8 3v10M3 8h10" />,
   close: <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />,
   warning: <path d="M8 2.2 14.3 13.5H1.7zM8 6.6v3.1M8 11.5v.1" />,
@@ -76,6 +77,13 @@ export const libraryFolders: {
   { id: 'tables', label: 'Tables', icon: 'table', tint: '#d6ad78', items: ['table.basic'] },
   { id: 'beds', label: 'Beds', icon: 'bed', tint: '#ab98d6', items: ['bed.basic'] },
   { id: 'storage', label: 'Storage', icon: 'cabinet', tint: '#8fbf8a', items: ['cabinet.basic'] },
+  {
+    id: 'stairs',
+    label: 'Stairs',
+    icon: 'stairs',
+    tint: '#c9a27e',
+    items: ['stairs.straight', 'stairs.u', 'stairs.u-right'],
+  },
 ];
 const itemIcons: Record<string, Glyph> = {
   'chair.basic': 'chair',
@@ -83,6 +91,9 @@ const itemIcons: Record<string, Glyph> = {
   'table.basic': 'table',
   'bed.basic': 'bed',
   'cabinet.basic': 'cabinet',
+  'stairs.straight': 'stairs',
+  'stairs.u': 'stairs',
+  'stairs.u-right': 'stairs',
 };
 const unitLabels: Record<ScanUnits, string> = {
   m: 'Metres',

@@ -13,7 +13,16 @@ import {
   type V3,
 } from './scene';
 import { useEditor } from './store';
+import { doorStyles, roomTypes } from './scene';
 import { moveNode, splitWall } from './wallGraph';
+
+const doorStyleLabels: Record<(typeof doorStyles)[number], string> = {
+  hinged: 'Hinged (one leaf)',
+  double: 'Double (two leaves)',
+  sliding: 'Sliding',
+  folding: 'Folding',
+  passage: 'Open passage (no leaf)',
+};
 import { confidenceColors, originColors, originDescriptions, originLabels } from './geometry';
 
 export function OriginTag({ origin }: { origin: Origin }) {
@@ -380,6 +389,23 @@ export function Inspector() {
                     onCommit={(n) => patch(key, n)}
                   />
                 ))}
+                {entity.type === 'door' && (
+                  <label className="field">
+                    Door kind
+                    <select
+                      aria-label="Door kind"
+                      value={entity.style ?? 'hinged'}
+                      disabled={state.busy}
+                      onChange={(e) => patch('style', e.target.value)}
+                    >
+                      {doorStyles.map((style) => (
+                        <option key={style} value={style}>
+                          {doorStyleLabels[style]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <p className="hint">
                   Offset starts at wall.start. Doors must have a bottom of 0 m. Drag the handle in
                   the viewport to slide it along the wall.
@@ -417,6 +443,21 @@ export function Inspector() {
                       else e.target.value = name;
                     }}
                   />
+                </label>
+                <label className="field">
+                  Room type
+                  <select
+                    aria-label="Room type"
+                    value={entity.type ?? 'other'}
+                    disabled={state.busy}
+                    onChange={(e) => patch('type', e.target.value)}
+                  >
+                    {roomTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {type[0].toUpperCase() + type.slice(1)}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <p className="hint">
                   Shown on the 3D floor. Names read from the blueprint can be corrected here; enter

@@ -86,7 +86,8 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
     annotated: a drawing sheet like a real architectural plan: bold title, axis lines with bubbles,
     two rows of dimension lines and a border frame.
     partition: interior walls this thick (m) instead of the outer wall thickness (mixed thickness).
-    symbols: doors of every kind the parser reads (hinged over a threshold line, double, sliding, folding, open passage)."""
+    symbols: doors of every kind the parser reads (hinged over a threshold line, double, sliding, folding, open
+    passage) and a staircase with its arrow; `meta["objects"]` holds the stairs' footprint and climb direction."""
     rng = random.Random(seed)
     W, D = round(rng.uniform(6, 12), 1), round(rng.uniform(5, 9), 1)
     t = round(rng.uniform(0.15, 0.25), 2)
@@ -222,6 +223,34 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
                 tip = (hinge[0] + side * px(o["width"]), hinge[1])
                 cv2.line(img, hinge, tip, 0, 1)
                 cv2.ellipse(img, hinge, (px(o["width"]), px(o["width"])), 0, 0 if side > 0 else 90, 90 if side > 0 else 180, 0, 1)
+    objects = []
+    if symbols:
+        # A staircase in the biggest room, in the corner farthest from that room's doors.
+        x0, z0, x1, z1 = max(leaves, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]))
+        width, treads = round(rng.uniform(0.9, 1.2), 2), rng.randint(7, 10)
+        run, along_z = treads * 0.27, rng.random() < 0.5
+        sx, sz = (width, run) if along_z else (run, width)
+        gap = t / 2 + 0.35
+        nearby = [o["centre"] for o in openings if o["type"] == "door"]
+        spots = [(cx_, cz_) for cx_ in (x0 + gap + sx / 2, x1 - gap - sx / 2) for cz_ in (z0 + gap + sz / 2, z1 - gap - sz / 2)]
+        spot = max(spots, key=lambda c: min((math.dist(c, d) for d in nearby), default=9.0))
+        clear = min((math.dist(spot, d) for d in nearby), default=9.0)
+        if x1 - x0 >= sx + 1.6 and z1 - z0 >= sz + 1.6 and clear > math.hypot(sx, sz) / 2 + 1.2:
+            a, b = (spot[0] - sx / 2, spot[1] - sz / 2), (spot[0] + sx / 2, spot[1] + sz / 2)
+            cv2.rectangle(img, (px(a[0]), px(a[1])), (px(b[0]), px(b[1])), 0, 1)
+            for i in range(1, treads):
+                if along_z:
+                    cv2.line(img, (px(a[0]), px(a[1] + i * 0.27)), (px(b[0]), px(a[1] + i * 0.27)), 0, 1)
+                else:
+                    cv2.line(img, (px(a[0] + i * 0.27), px(a[1])), (px(a[0] + i * 0.27), px(b[1])), 0, 1)
+            up = rng.choice([-1, 1])
+            tail, tip = (0.15, run - 0.2) if up > 0 else (run - 0.15, 0.2)
+            if along_z:
+                cv2.arrowedLine(img, (px(spot[0]), px(a[1] + tail)), (px(spot[0]), px(a[1] + tip)), 0, 1, tipLength=0.1)
+            else:
+                cv2.arrowedLine(img, (px(a[0] + tail), px(spot[1])), (px(a[0] + tip), px(spot[1])), 0, 1, tipLength=0.1)
+            objects.append({"category": "stairs", "up": [0, up] if along_z else [up, 0],
+                            "polygon": [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]]})
     if clutter:
         for i, (x0, z0, x1, z1) in enumerate(leaves):
             cv2.putText(img, f"ROOM {i + 1}", (px((x0 + x1) / 2) - 30, px((z0 + z1) / 2)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, 0, 1)
@@ -242,7 +271,7 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
                if o["type"] == "door" and "swing_side" in o else {})}
            for o in openings]
     return Plan(img, mpp, walls, ops, rooms, {"seed": seed, "size": [W, D], "thickness": t,
-                                              "style": style, "chamfer": c})
+                                              "style": style, "chamfer": c, **({"objects": objects} if symbols else {})})
 
 
 # ---- augmentations (GT stays exact) ---------------------------------------------------------
@@ -254,7 +283,15 @@ def _map_points(plan: Plan, M: np.ndarray, new_mpp: float) -> Plan:
     walls = [{**w, "start": f(w["start"]), "end": f(w["end"])} for w in plan.walls]
     ops = [{**o, "centre": f(o["centre"])} for o in plan.openings]
     rooms = [[f(p) for p in r] for r in plan.rooms]
-    return Plan(plan.image, new_mpp, walls, ops, rooms, dict(plan.meta))
+    meta = dict(plan.meta)
+    if "objects" in meta:
+        (ox, oz), (ux, uz) = f([0, 0]), f([plan.mpp, 0])
+        turn = math.atan2(uz - oz, ux - ox)  # how far the plan was turned, to turn stair directions with it
+        meta["objects"] = [{**o, "polygon": [f(p) for p in o["polygon"]],
+                            **({"up": [o["up"][0] * math.cos(turn) - o["up"][1] * math.sin(turn),
+                                       o["up"][0] * math.sin(turn) + o["up"][1] * math.cos(turn)]} if "up" in o else {})}
+                           for o in meta["objects"]]
+    return Plan(plan.image, new_mpp, walls, ops, rooms, meta)
 
 
 def skew(plan: Plan, degrees: float) -> Plan:

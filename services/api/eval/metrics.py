@@ -17,6 +17,7 @@ from shapely.ops import unary_union
 ROOM_IOU = 0.5
 CORNER_TOL = 0.10
 OPENING_TOL = 0.15
+OBJECT_TOL = 0.50
 
 
 def _prf(tp: int, n_pred: int, n_gt: int) -> dict:
@@ -143,6 +144,65 @@ def scene_openings(scene: dict) -> list[dict]:
         t = (o["offset"] + o["width"] / 2) / L
         out.append({"type": o["type"], "width": o["width"], **({"style": o["style"]} if "style" in o else {}),
                     "centre": [w["start"][0] + (w["end"][0] - w["start"][0]) * t, w["start"][1] + (w["end"][1] - w["start"][1]) * t]})
+    return out
+
+
+def rectangle(centre, size, yaw=0.0):
+    """Corners of a (width, depth) footprint turned `yaw` radians about its centre, in (x, z)."""
+    across, along = (math.cos(yaw), math.sin(yaw)), (-math.sin(yaw), math.cos(yaw))
+    return [[centre[0] + sx * size[0] / 2 * across[0] + sz * size[1] / 2 * along[0],
+             centre[1] + sx * size[0] / 2 * across[1] + sz * size[1] / 2 * along[1]]
+            for sx, sz in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+
+
+def object_footprint(item: dict, factor: float = 1.0) -> list:
+    """Footprint of a Scene object. A three.js turn about +Y maps local x to (cos, -sin) in (x, z)."""
+    return rectangle([item["position"][0] * factor, item["position"][2] * factor],
+                     [item["dimensions"][0] * factor, item["dimensions"][2] * factor], -item["rotationY"])
+
+
+def object_metrics(pred: list[dict], gt: list[dict], tol: float = OBJECT_TOL, prefix: str = "object") -> dict:
+    """Objects as {"category", "polygon"}: same category and centre within `tol`; footprint IoU on matches."""
+    def centre(item):
+        xs, zs = zip(*item["polygon"])
+        return sum(xs) / len(xs), sum(zs) / len(zs)
+    pairs = sorted((math.dist(centre(p), centre(g)), i, j) for i, p in enumerate(pred) for j, g in enumerate(gt)
+                   if p["category"] == g["category"])
+    used_p, used_g, overlaps, matches = set(), set(), [], []
+    for distance, i, j in pairs:
+        if distance > tol:
+            break
+        if i in used_p or j in used_g:
+            continue
+        used_p.add(i)
+        used_g.add(j)
+        a, b = _poly(pred[i]["polygon"]), _poly(gt[j]["polygon"])
+        overlaps.append(a.intersection(b).area / (a.union(b).area or 1))
+        matches.append((i, j))
+    return {**{f"{prefix}_{k}": v for k, v in _prf(len(overlaps), len(pred), len(gt)).items()},
+            f"{prefix}_iou": sum(overlaps) / len(overlaps) if overlaps else float("nan"), "matches": matches}
+
+
+def symbol_metrics(pred_scene: dict, gt_objects: list[dict], gt_room_types: list | None = None) -> dict:
+    """Stairs, plan fixtures and room types of a parsed scene against what was drawn."""
+    found = [{"category": o["category"] if o["category"] != "other" else o["name"].split()[0].lower(),
+              "polygon": object_footprint(o), "rotationY": o["rotationY"]} for o in pred_scene.get("objects", [])]
+    stairs = object_metrics([o for o in found if o["category"] == "stairs"], [o for o in gt_objects if o["category"] == "stairs"], prefix="stairs")
+    right = [math.cos(found_stairs["rotationY"]) * -truth["up"][1] + math.sin(found_stairs["rotationY"]) * -truth["up"][0] > 0.7
+             for found_stairs, truth in (([o for o in found if o["category"] == "stairs"][i], [o for o in gt_objects if o["category"] == "stairs"][j])
+                                         for i, j in stairs.pop("matches"))]
+    fixtures = object_metrics([o for o in found if o["category"] != "stairs"], [o for o in gt_objects if o["category"] != "stairs"], prefix="fixture")
+    fixtures.pop("matches")
+    out = {**stairs, "stairs_dir_acc": sum(right) / len(right) if right else float("nan"), **fixtures}
+    if gt_room_types:
+        # gt_room_types: [(polygon, type)]; a room is right when the parsed room over its middle has that type.
+        hits = total = 0
+        for polygon, kind in gt_room_types:
+            middle = _poly(polygon).representative_point()
+            room = next((r for r in pred_scene["rooms"] if _poly(r["polygon"]).contains(middle)), None)
+            total += 1
+            hits += bool(room) and room.get("type") == kind
+        out["room_type_acc"] = hits / total if total else float("nan")
     return out
 
 

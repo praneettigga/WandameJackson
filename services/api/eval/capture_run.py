@@ -34,7 +34,7 @@ from roomshift_api.parser import ParseError
 from roomshift_api.scene_builder import blueprint_scene
 
 from .capture_generate import Case, cases, rectangle
-from .metrics import _prf, evaluate, scene_openings
+from .metrics import evaluate, object_footprint, object_metrics, scene_openings
 
 CORNER_TOL, OPENING_TOL, FURNITURE_TOL = 0.25, 0.30, 0.50
 HEADLINE = ["layout_iou", "corner_f1", "dim_rel_err", "scale_err", "door_f1", "window_f1", "furniture_f1",
@@ -52,16 +52,12 @@ def predict(case: Case):
 
 def layout(scene: dict, factor: float = 1.0) -> dict:
     """The comparable part of a Scene, with every length multiplied by `factor`."""
-    def footprint(item):
-        angle = item["rotationY"]  # three.js turn about +Y: local x maps to (cos, -sin) in (x, z)
-        return rectangle([item["position"][0] * factor, item["position"][2] * factor],
-                         [item["dimensions"][0] * factor, item["dimensions"][2] * factor], -angle)
     return {"walls": [{"id": w["id"], "start": [v * factor for v in w["start"]], "end": [v * factor for v in w["end"]],
                        "thickness": w["thickness"] * factor} for w in scene["walls"]],
             "rooms": [{"polygon": [[v * factor for v in p] for p in r["polygon"]]} for r in scene["rooms"]],
             "openings": [{"type": o["type"], "wallId": o["wallId"], "offset": o["offset"] * factor, "width": o["width"] * factor}
                          for o in scene["openings"]],
-            "objects": [{"category": o["category"], "polygon": footprint(o)} for o in scene["objects"] if o["category"] != "scan"]}
+            "objects": [{"category": o["category"], "polygon": object_footprint(o, factor)} for o in scene["objects"] if o["category"] != "scan"]}
 
 
 def moved(truth: dict, move) -> dict:
@@ -75,22 +71,9 @@ def moved(truth: dict, move) -> dict:
 
 
 def furniture_metrics(pred: list[dict], gt: list[dict]) -> dict:
-    def centre(item):
-        return np.mean(item["polygon"], axis=0)
-    pairs = sorted((float(np.linalg.norm(centre(p) - centre(g))), i, j) for i, p in enumerate(pred) for j, g in enumerate(gt)
-                   if p["category"] == g["category"])
-    used_p, used_g, overlaps = set(), set(), []
-    for distance, i, j in pairs:
-        if distance > FURNITURE_TOL:
-            break
-        if i in used_p or j in used_g:
-            continue
-        used_p.add(i)
-        used_g.add(j)
-        a, b = Polygon(pred[i]["polygon"]).buffer(0), Polygon(gt[j]["polygon"]).buffer(0)
-        overlaps.append(a.intersection(b).area / (a.union(b).area or 1))
-    return {**{f"furniture_{k}": v for k, v in _prf(len(overlaps), len(pred), len(gt)).items()},
-            "footprint_iou": sum(overlaps) / len(overlaps) if overlaps else float("nan")}
+    out = object_metrics(pred, gt, FURNITURE_TOL, "furniture")
+    out.pop("matches")
+    return {**{k: v for k, v in out.items() if k != "furniture_iou"}, "footprint_iou": out["furniture_iou"]}
 
 
 def fit(truth: dict, pred: dict):

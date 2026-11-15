@@ -22,7 +22,7 @@ from typing import Callable
 
 import cv2
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import Point, Polygon
 from . import plan_symbols
 from .room_labels import read_room_names
 
@@ -64,6 +64,7 @@ class ParserOptions:
     soft_gap_ink: bool = True  # read faint glazing lines in gaps with a softer threshold than Otsu
     thin_line_removal: bool = True  # morphological opening that drops text, arcs and glazing lines
     door_styles: bool = True  # read door symbols: swing arcs (also over a threshold line), double, sliding, folding, open passages
+    stairs: bool = True  # staircases drawn as evenly spaced tread lines become stair objects
 
     @classmethod
     def ablations(cls) -> dict[str, "ParserOptions"]:
@@ -1120,6 +1121,41 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
                                 "Ceiling inferred from this footprint at the room height; not observed in the drawing."],
                                _room_factors(outline_px, thick, T)),
         })
+    objects = []
+    if opts.stairs and rooms:
+        # Line-weight ink away from the walls and their openings (glazing and threshold lines are not treads).
+        wall_zone = np.zeros((h_img, w_img), np.uint8)
+        for ln in lines:
+            lo, hi = int(ln.pos - T / 2) - 2, int(math.ceil(ln.pos + T / 2)) + 2
+            a0, a1 = int(ln.a0 - T / 2) - 2, int(math.ceil(ln.a1 + T / 2)) + 2
+            cv2.rectangle(wall_zone, (a0, lo) if ln.orient == "h" else (lo, a0), (a1, hi) if ln.orient == "h" else (hi, a1), 255, -1)
+        line_ink = (soft_ink > 0) & ~(cv2.dilate(thick, np.ones((3, 3), np.uint8)) > 0) & ~(wall_zone > 0)
+        shapes = [(room, Polygon(room["polygon"])) for room in rooms]
+        for stair in plan_symbols.find_stairs(line_ink, mpp):
+            x, z = stair["x"] * mpp, stair["z"] * mpp
+            owner = next((room for room, shape in shapes if shape.contains(Point(x, z))), None)
+            if owner is None:
+                continue  # treads outside every room are a legend, a section or a dimension ladder
+            u_shaped = stair["kind"] != "straight"
+            notes = [f"{'Two flights side by side' if u_shaped else 'A flight'} of {stair['treads']} tread lines read from the drawing.",
+                     f"Rise assumed equal to the wall height ({height} m); a plan does not show it.",
+                     "Climb direction read from the arrow drawn on the stair." if stair["direction_known"] else
+                     "No arrow was found on the stair; the climb direction is assumed. Turn it in the editor if needed."]
+            objects.append({
+                "id": f"stairs-{len(objects) + 1}", "name": f"Stairs {len(objects) + 1}", "category": "stairs",
+                "componentId": {"straight": "stairs.straight", "u": "stairs.u", "u-right": "stairs.u-right"}[stair["kind"]],
+                "position": [round(x, 4), 0.0, round(z, 4)], "rotationY": round(stair["angle"], 6),
+                "dimensions": [round(stair["width"] * mpp, 4), height, round(stair["run"] * mpp, 4)],
+                "provenance": prov("evidence", {"dimensions": "inferred", **({} if stair["direction_known"] else {"rotationY": "inferred"})}, notes,
+                                   [_factor("Tread lines", min(1.0, stair["treads"] / 8), f"{stair['treads']} evenly spaced lines (a full flight has 8 or more)."),
+                                    _factor("Even spacing", stair["even"], f"Tread spacing varies by {1 - stair['even']:.0%}."),
+                                    _factor("Direction", 1.0 if stair["direction_known"] else 0.5,
+                                            "An arrow shows which way the stair climbs." if stair["direction_known"] else "No arrow found.")]),
+            })
+            if owner.get("type") in (None, "other", "hall"):
+                owner["type"] = "stair" if owner.get("type") != "hall" else "hall"
+                if owner["name"].startswith("Room "):
+                    owner["type"] = "stair"
     if not rooms:
         warnings.append("No enclosed rooms were detected; walls were reconstructed without floors.")
     warnings.extend(completeness_warnings(walls, openings, rooms))
@@ -1128,7 +1164,7 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     progress(0.9)
 
     return {
-        "rooms": rooms, "walls": walls, "openings": openings, "objects": [],
+        "rooms": rooms, "walls": walls, "openings": openings, "objects": objects,
         "warnings": warnings,
         "defaults": {"wallHeight": height, "wallThickness": round(wall_thickness if wall_thickness is not None else (measured_m if 0.03 <= measured_m <= 1.0 else DEFAULT_WALL_THICKNESS), 4)},
     }

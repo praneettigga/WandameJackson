@@ -6,7 +6,7 @@ import cv2
 import pytest
 
 from eval.generate import generate
-from eval.metrics import evaluate
+from eval.metrics import evaluate, symbol_metrics
 from roomshift_api.config import REPO_ROOT
 from roomshift_api.parser import ParserOptions, parse_blueprint
 
@@ -77,3 +77,53 @@ def test_plain_gap_is_an_open_passage_and_old_scenes_stay_valid():
     assert door['style'] == 'passage'
     legacy = parsed('room.png', 0.02, door_styles=False)
     assert 'style' not in doors(legacy)[0]
+
+
+def stairs(result):
+    return [o for o in result['objects'] if o['category'] == 'stairs']
+
+
+@pytest.mark.parametrize('name,centre,size', [
+    ('complex-01-house-with-stairs.png', (4.8, 8.6), (1.2, 2.4)),
+    ('complex-02-l-plan-stair-hall.png', (8.5, 8.4), (2.0, 2.0)),
+    ('complex-03-apartment-stair-core.png', (12.8, 3.75), (1.6, 2.5)),
+])
+def test_straight_stair_is_read_with_its_size_and_arrow(name, centre, size):
+    stair, = stairs(parsed(name, 0.02))
+    assert stair['componentId'] == 'stairs.straight'
+    assert stair['position'][0] == pytest.approx(centre[0], abs=0.2) and stair['position'][2] == pytest.approx(centre[1], abs=0.35)
+    assert stair['dimensions'][0] == pytest.approx(size[0], abs=0.1) and stair['dimensions'][2] == pytest.approx(size[1], abs=0.45)
+    # The arrow points up the page, which is the local climb direction: no turn. The label under it is not the arrow head.
+    assert stair['rotationY'] == 0 and 'arrow' in stair['provenance']['notes'][2]
+    assert stair['dimensions'][1] == 2.7 and stair['provenance']['fieldOrigins']['dimensions'] == 'inferred'
+
+
+def test_two_flights_side_by_side_are_one_u_stair_and_mark_the_stairwell():
+    for name in ('floor-1.png', 'floor-4.png'):
+        result = parsed(name, 0.01)
+        stair, = stairs(result)
+        # Up the left flight to the landing at the top wall, back down the page on the right one.
+        assert stair['componentId'] == 'stairs.u' and stair['rotationY'] == 0
+        assert stair['position'][0] == pytest.approx(7.0, abs=0.1) and stair['dimensions'][0] == pytest.approx(1.6, abs=0.1)
+        well = next(r for r in result['rooms'] if r['name'] == 'STAIRS')
+        assert well['type'] == 'stair'
+    assert not stairs(parsed('floor-1.png', 0.01, stairs=False))
+
+
+def test_generated_stairs_are_found_with_their_direction_and_nothing_else_is_a_stair():
+    found = wanted = right = judged = 0
+    for seed in range(20):
+        plan = generate(seed, symbols=True)
+        result = parse_blueprint(plan.image, plan.mpp)
+        metrics = symbol_metrics(result, plan.meta['objects'])
+        wanted += len(plan.meta['objects'])
+        found += len(stairs(result))
+        if not math.isnan(metrics['stairs_dir_acc']):
+            judged += 1
+            right += metrics['stairs_dir_acc']
+        assert metrics['stairs_precision'] == 1 and metrics['stairs_recall'] == 1
+    assert wanted >= 8 and found == wanted and right == judged
+    # Plans without stairs, with windows, dimension lines and room labels, have none.
+    assert not any(stairs(parse_blueprint(generate(seed).image, 0.02)) for seed in range(10))
+    for name, mpp in (('apartment_blueprint.png', 0.01), ('services-apartment.png', 0.02), ('synthetic-06-four-rooms.png', 0.0073)):
+        assert not stairs(parsed(name, mpp))

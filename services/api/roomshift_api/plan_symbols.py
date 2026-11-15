@@ -102,3 +102,153 @@ def folding_leaves(thin: np.ndarray, pos: float, g0: float, g1: float, T: float)
         if peaks >= 2 and smooth.max() >= 0.5 * depth:
             return side
     return None
+
+
+# --- stairs ------------------------------------------------------------------------------------
+
+TREAD_GOING_M = (0.10, 0.42)  # distance between tread lines (drawings often show fewer, closer treads than are built)
+TREAD_LENGTH_M = (0.55, 2.4)  # width of a flight
+MIN_TREAD_LINES = 4
+
+
+def _segments(mask: np.ndarray, minimum: int) -> list[tuple[int, int, int]]:
+    """Long thin strokes running along the columns of `mask`: [(first column, last column, row)]."""
+    long_lines = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, np.ones((1, minimum), np.uint8))
+    count, _, stats, _ = cv2.connectedComponentsWithStats(long_lines, connectivity=8)
+    return [(int(x), int(x + w - 1), int(y + (h - 1) / 2)) for x, y, w, h, _ in stats[1:count] if h <= 4]
+
+
+def _flights(thin: np.ndarray, mpp: float) -> list[dict]:
+    """Ladders of evenly spaced, equally long thin lines whose treads run along the columns of `thin`."""
+    shortest = max(4, int(TREAD_LENGTH_M[0] / mpp))
+    lines = sorted(_segments(thin, shortest), key=lambda s: s[2])
+    lines = [s for s in lines if (s[1] - s[0]) * mpp <= TREAD_LENGTH_M[1]]
+    slack = max(3, int(0.08 / mpp))
+    used: set[int] = set()
+    flights = []
+    for i, first in enumerate(lines):
+        if i in used:
+            continue
+        chain, going = [i], None
+        for j in range(i + 1, len(lines)):
+            if j in used:
+                continue
+            last, nxt = lines[chain[-1]], lines[j]
+            step = (nxt[2] - last[2]) * mpp
+            if step > TREAD_GOING_M[1] or (going and step > 1.35 * going):
+                break
+            if abs(nxt[0] - first[0]) > slack or abs(nxt[1] - first[1]) > slack:
+                continue
+            if step < TREAD_GOING_M[0] or (going and step < 0.65 * going):
+                continue
+            chain.append(j)
+            going = going or step
+        if len(chain) < MIN_TREAD_LINES:
+            continue
+        used.update(chain)
+        rows = [lines[k][2] for k in chain]
+        c0, c1 = int(np.median([lines[k][0] for k in chain])), int(np.median([lines[k][1] for k in chain]))
+        steps = np.diff(rows)
+        # A tiled or hatched floor is a grid: long strokes cross it the other way. Treads are only crossed by an arrow.
+        inside = thin[rows[0] + 1:rows[-1], c0 + slack:c1 - slack + 1]
+        crossing = inside.mean(axis=0) > 0.8 if inside.size else np.zeros(0, bool)
+        if np.count_nonzero(np.diff(np.concatenate([[0], crossing.astype(int)])) == 1) > 1:
+            continue
+        flights.append({"c0": c0, "c1": c1, "r0": rows[0], "r1": rows[-1], "lines": len(chain),
+                        "going": float(np.median(steps)), "even": float(1 - min(1.0, np.std(steps) / max(1.0, np.mean(steps)))),
+                        "up": _arrow(thin, c0, c1, rows[0], rows[-1], mpp)})
+    return flights
+
+
+def _arrow(thin: np.ndarray, c0: int, c1: int, r0: int, r1: int, mpp: float) -> float | None:
+    """Which way the arrow drawn along a flight points: negative towards the first row, positive towards
+    the last, or None. The size says how clearly the head stands out."""
+    margin = max(2, (c1 - c0) // 5)
+    reach = max(3, int(0.12 / mpp))  # an arrow stays on its flight; what is drawn past it is something else
+    top, bottom = max(0, r0 - reach), min(thin.shape[0], r1 + reach + 1)
+    core = thin[top:bottom, c0 + margin:c1 - margin + 1]
+    if core.size == 0:
+        return None
+    totals = core.sum(axis=0)
+    column = int(round(np.mean(np.flatnonzero(totals >= 0.8 * totals.max()))))  # the middle of the shaft, however thick it is drawn
+    head = max(3, int(0.22 / mpp))
+    treads = core.mean(axis=1) > 0.7
+    # Everything that is not a tread line: long strokes across the flight are removed, whatever their weight.
+    across = cv2.morphologyEx(core.astype(np.uint8), cv2.MORPH_OPEN, np.ones((1, max(3, core.shape[1] // 2)), np.uint8)) > 0
+    rest = core & ~across
+    inked = core[:, max(0, column - 1):column + 2].any(axis=1)
+    # One unbroken stroke: a label printed past the end of the arrow is not part of it.
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], inked.astype(int), [0]])))
+    start, stop = max(zip(edges[::2], edges[1::2]), key=lambda run: run[1] - run[0], default=(0, 0))
+    shaft = start + np.flatnonzero(~treads[start:stop])
+    if len(shaft) < 0.5 * (r1 - r0):
+        return None
+
+    def width(row):
+        """How wide the ink is across the shaft on this row."""
+        if not rest[row, column]:
+            return 0
+        left = right = column
+        while left > 0 and rest[row, left - 1]:
+            left -= 1
+        while right < rest.shape[1] - 1 and rest[row, right + 1]:
+            right += 1
+        return right - left + 1
+    widths = np.array([width(r) for r in shaft])
+    stem = float(np.median(widths))
+    # The head is a chevron: the stroke widens at that end of the shaft. A label past the tip, or a door
+    # leaf beside it, does not widen the shaft itself.
+    first = float(widths[:head].max() - stem)
+    last = float(widths[-head:].max() - stem)
+    if max(first, last) < 2 or max(first, last) < 2 * max(min(first, last), 0.5):
+        return None
+    return (last - first) / max(stem, 1.0)
+
+
+def find_stairs(thin: np.ndarray, mpp: float) -> list[dict]:
+    """Stairs drawn as treads: [{"x", "z" (centre, px), "width", "run" (px), "angle" (radians: rotationY that
+    turns the climb direction from -z), "kind": "straight" | "u" | "u-right", "treads", "even", "direction_known"}].
+
+    `thin`: boolean line-weight ink with walls and their openings removed.
+    """
+    found = []
+    for transposed, mask in ((False, thin), (True, thin.T)):
+        flights = sorted(_flights(mask, mpp), key=lambda f: f["c0"])
+        merged: list[dict] = []
+        while flights:
+            a = flights.pop(0)
+            partner = next((b for b in flights if 0 <= b["c0"] - a["c1"] <= 0.45 / mpp
+                            and min(a["r1"], b["r1"]) - max(a["r0"], b["r0"]) >= 0.7 * max(a["r1"] - a["r0"], b["r1"] - b["r0"])), None)
+            if partner is None:
+                merged.append({**a, "kind": "straight"})
+                continue
+            flights.remove(partner)
+            # Two flights side by side with a landing between them. The flight whose arrow points at the
+            # landing is the one going up; the landing is at the end that arrow points to.
+            # When the two arrows disagree (other linework can run into one), the clearer head decides.
+            readings = [v for v in (a["up"], None if partner["up"] is None else -partner["up"]) if v is not None]
+            towards = max(readings, key=abs) if readings else None
+            merged.append({"c0": a["c0"], "c1": partner["c1"], "r0": min(a["r0"], partner["r0"]), "r1": max(a["r1"], partner["r1"]),
+                           "lines": a["lines"] + partner["lines"], "going": (a["going"] + partner["going"]) / 2,
+                           "even": min(a["even"], partner["even"]), "up": towards, "kind": "u"})
+        for f in merged:
+            along, across = (f["r0"] + f["r1"]) / 2, (f["c0"] + f["c1"]) / 2
+            up = -1 if f["up"] is None or f["up"] < 0 else 1
+            # Rows are z (or x when transposed). rotationY turns the local climb direction (-z).
+            if not transposed:
+                angle = 0.0 if up < 0 else math.pi
+            else:
+                angle = math.pi / 2 if up < 0 else -math.pi / 2
+            kind = f["kind"]
+            if kind == "u" and transposed != (up > 0):
+                # Seen along the climb, the rising flight is on the right rather than the left.
+                kind = "u-right"
+            found.append({"x": along if transposed else across, "z": across if transposed else along,
+                          "width": f["c1"] - f["c0"], "run": f["r1"] - f["r0"] + f["going"], "angle": angle, "kind": kind,
+                          "treads": f["lines"], "even": f["even"], "direction_known": f["up"] is not None})
+    # One stair per place: the fuller reading wins.
+    kept: list[dict] = []
+    for stair in sorted(found, key=lambda f: -f["treads"]):
+        if all(math.hypot(stair["x"] - o["x"], stair["z"] - o["z"]) > 0.5 * max(stair["run"], o["run"]) for o in kept):
+            kept.append(stair)
+    return kept

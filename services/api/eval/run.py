@@ -24,9 +24,10 @@ import numpy as np
 from roomshift_api.parser import ParseError, ParserOptions, parse_blueprint
 
 from .generate import AUGMENTATIONS, STYLES, Plan, generate
-from .metrics import evaluate
+from .metrics import evaluate, symbol_metrics
 
 HEADLINE = ["wall_iou", "layout_iou", "room_f1", "room_mean_iou", "corner_f1", "door_f1", "window_f1", "door_style_acc",
+            "stairs_f1", "stairs_dir_acc",
             "dim_abs_err_m", "dim_rel_err", "failed", "seconds"]
 
 
@@ -78,6 +79,8 @@ def run(cases, configs: dict[str, callable]) -> list[dict]:
             try:
                 pred = predict(plan)
                 metrics = evaluate(pred, gt)
+                if "objects" in plan.meta:
+                    metrics.update(symbol_metrics(pred, plan.meta["objects"]))
                 failed = 0
             except ParseError:
                 metrics = evaluate({"walls": [], "openings": [], "rooms": []}, gt)
@@ -98,7 +101,7 @@ def summarise(rows: list[dict]) -> str:
     lines = ["| config | augmentation | n | " + " | ".join(HEADLINE) + " |",
              "|---|---|---|" + "---|" * len(HEADLINE)]
     for (config, aug), rs in sorted(groups.items()):
-        cells = [f"{mean([r[k] for r in rs]):.3f}" for k in HEADLINE]
+        cells = [f"{mean([r.get(k, float("nan")) for r in rs]):.3f}" for k in HEADLINE]
         lines.append(f"| {config} | {aug} | {len(rs)} | " + " | ".join(cells) + " |")
     # Overall per config, so ablations read as one row each.
     lines += ["", "| config | n | " + " | ".join(HEADLINE) + " |", "|---|---|" + "---|" * len(HEADLINE)]
@@ -106,7 +109,7 @@ def summarise(rows: list[dict]) -> str:
     for r in rows:
         by_config.setdefault(r["config"], []).append(r)
     for config, rs in by_config.items():
-        lines.append(f"| {config} | {len(rs)} | " + " | ".join(f"{mean([r[k] for r in rs]):.3f}" for k in HEADLINE) + " |")
+        lines.append(f"| {config} | {len(rs)} | " + " | ".join(f"{mean([r.get(k, float("nan")) for r in rs]):.3f}" for k in HEADLINE) + " |")
     return "\n".join(lines)
 
 
@@ -148,7 +151,7 @@ def main(argv=None):
     args.out.mkdir(parents=True, exist_ok=True)
     tag = f"{args.set}-{'ablation' if args.ablation else args.parser}"
     with open(args.out / f"{tag}.csv", "w", newline="", encoding="utf8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(f, fieldnames=list(dict.fromkeys(k for r in rows for k in r)), restval="")
         writer.writeheader()
         writer.writerows(rows)
     summary = summarise(rows)

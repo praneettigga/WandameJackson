@@ -327,6 +327,12 @@ export const useEditor = create<EditorState>((set, get) => ({
       jobs: {},
       view: { ...defaultView },
       scene: scene ? sceneSchema.parse(scene) : null,
+      // A capture with walls the camera barely saw opens with them coloured, so they get checked first.
+      ...(scene?.walls.some((w) =>
+        w.provenance.confidenceFactors?.some((f) => f.label === 'Seen in capture' && f.score < 0.5),
+      )
+        ? { confidenceMap: true, xray: false }
+        : {}),
       selectedId: null,
       past: [],
       future: [],

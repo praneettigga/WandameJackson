@@ -90,7 +90,16 @@ export const sceneSchema = z.strictObject({
       pointB: pixel,
       distanceMeters: positive,
       metersPerPixel: positive,
-      method: z.enum(['printed-dimension', 'wall-thickness', 'image-extent']).optional(),
+      method: z
+        .enum([
+          'printed-dimension',
+          'wall-thickness',
+          'image-extent',
+          'camera-height',
+          'depth-model',
+          'door-height',
+        ])
+        .optional(),
       notes: z.array(z.string()).optional(),
     }),
   }),

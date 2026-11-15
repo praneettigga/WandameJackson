@@ -62,3 +62,17 @@ Video tests require FFmpeg and generate a textured 30-second clip locally. Tests
 also exercise photo success, EXIF rotation, blank/duplicate/disconnected inputs,
 corrupt uploads, cancellation, retries, artifact access and saved metadata.
 These synthetic cases validate ingestion mechanics, not reconstruction quality.
+
+## From capture to editable room
+
+With a reconstruction worker set up, **Upload & build room** runs preparation and
+reconstruction in one step and opens the result in the shared editor as walls, rooms,
+doors, windows and furniture, exactly like a blueprint project. The API draws a floor plan from the
+reconstructed mesh and passes it to the blueprint parser; see
+[capture editor snapshots](../contracts/api-contract.md#capture-editor-snapshots).
+In **Reconstruct**, the generated plan is the project's blueprint: choose *Manual
+reference*, click two points a known distance apart and reconstruct to correct the scale.
+
+The texture and overlap checks above reject a capture only for the Meshroom engine.
+The learned depth engines reconstruct blank walls and turning on the spot, so for them
+those checks add warnings instead.

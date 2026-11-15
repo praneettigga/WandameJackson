@@ -10,8 +10,9 @@ export function CaptureGuide() {
           into 3D.
         </h2>
         <p>
-          One slow walkthrough. Overlapping views.
-          <br />A colored mesh you can orbit and export.
+          One slow look around the room.
+          <br />
+          Walls, doors, windows and furniture you can edit.
         </p>
         <div className="capture-format-tags">
           <span>10–60 sec video</span>

@@ -75,26 +75,3 @@ def test_mesh_edits_save_reload_conflicts_and_immutable_assets(client, synthetic
     malformed = copy.deepcopy(saved)
     malformed['objects'] = [None]
     assert client.put(f'/api/projects/{pid}/scene', json=malformed).status_code == 400
-
-
-@pytest.mark.parametrize('layout,openings,objects', [
-    ('whatsapp-rectangular-room.layout.json', 3, 0),
-    ('whatsapp-classroom.layout.json', 7, 34),
-    ('whatsapp-classroom.scene.json', 7, 34),  # name used by demo meshes baked before the rename
-])
-def test_presets_have_individually_editable_structure(client, synthetic_worker, layout, openings, objects):
-    pid, _ = mesh_ready(client)
-    storage = client.app.state.storage
-    path = storage.project_dir(pid)/storage.get_project(pid)['meshManifestPath']
-    manifest = read_json(path)
-    manifest.update(units='meters', processing={'pipeline': 'precomputed-architectural-demo', 'layout': layout})
-    atomic_write_json(path, manifest)
-    scene = open_scene(client, pid)
-    assert scene['source']['capture']['representation'] == 'layout'
-    assert len(scene['rooms']) == 1 and len(scene['walls']) == 4
-    assert len(scene['openings']) == openings and len(scene['objects']) == objects
-    assert all(w['provenance']['origin'] == 'generated' for w in scene['walls'])
-    scene['walls'][0]['height'] = 4
-    response = client.put(f'/api/projects/{pid}/scene', json=scene)
-    assert response.status_code == 200, response.text
-    assert open_scene(client, pid)['walls'][0]['height'] == 4

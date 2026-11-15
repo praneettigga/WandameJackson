@@ -259,12 +259,12 @@ def test_list_projects_newest_first(client):
 
 def test_cancel_running_job_keeps_previous_scene(client, monkeypatch):
     import threading
-    import roomshift_api.jobs as jobs
+    import roomshift_api.scene_builder as scene_builder
 
     pid = reconstructed(client)
     before = client.get(f"/api/projects/{pid}/scene").json()
     started, release = threading.Event(), threading.Event()
-    real = jobs.parse_blueprint
+    real = scene_builder.parse_blueprint
 
     def slow(gray, mpp, h, t, progress):
         started.set()
@@ -272,7 +272,7 @@ def test_cancel_running_job_keeps_previous_scene(client, monkeypatch):
         progress(0.5)  # the cancel takes effect at the next progress step
         return real(gray, mpp, h, t, progress)
 
-    monkeypatch.setattr(jobs, "parse_blueprint", slow)
+    monkeypatch.setattr(scene_builder, "parse_blueprint", slow)
     job = client.post(f"/api/projects/{pid}/reconstruct", json={"calibration": CAL}).json()["job"]
     assert started.wait(5)
     r = client.post(f"/api/jobs/{job['id']}/cancel")
@@ -284,6 +284,6 @@ def test_cancel_running_job_keeps_previous_scene(client, monkeypatch):
     assert_error(client.post(f"/api/jobs/{job['id']}/cancel"), 409, "JOB_NOT_ACTIVE")
     assert_error(client.post("/api/jobs/j_missing/cancel"), 404, "JOB_NOT_FOUND")
     # A new job can be submitted after cancellation.
-    monkeypatch.setattr(jobs, "parse_blueprint", real)
+    monkeypatch.setattr(scene_builder, "parse_blueprint", real)
     again = client.post(f"/api/projects/{pid}/reconstruct", json={"calibration": CAL}).json()["job"]
     assert wait_job(client, again["id"])["status"] == "succeeded"

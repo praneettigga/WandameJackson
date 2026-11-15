@@ -42,7 +42,8 @@ def need_project(storage: Storage, project_id: str) -> dict:
 
 
 def need_blueprint(p: dict) -> None:
-    if p.get("source", {}).get("kind", "blueprint") != "blueprint":
+    # A capture that has been drawn as a floor plan is reconstructed from that plan like any blueprint.
+    if p.get("source", {}).get("kind", "blueprint") != "blueprint" and not p.get("image"):
         raise ApiError(400, "INVALID_SOURCE", "This endpoint requires a blueprint. Use the capture mesh endpoint for photo/video reconstruction.")
 
 

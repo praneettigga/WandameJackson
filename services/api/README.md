@@ -52,11 +52,10 @@ refuses write requests from web pages other than the configured app origins.
 | `ROOMSHIFT_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` | Accepted `Host` names (`*` disables the check) |
 | `ROOMSHIFT_OCR_TIMEOUT` | `20` | Seconds per OCR pass before falling back to an estimated scale |
 | `ROOMSHIFT_DEV_SEED_FIXTURE` | off | `1` exposes the **synthetic** fixtures as projects `demo-room` and `services-apartment` (dev only) |
-| `ROOMSHIFT_RECONSTRUCTION_ENGINE` | `meshroom` | Mesh worker: `meshroom`, or the optional `vggt` |
+| `ROOMSHIFT_RECONSTRUCTION_ENGINE` | `da3` | Mesh worker: `da3` (Depth Anything 3, CPU), or the optional `meshroom` / `vggt` |
 | `ROOMSHIFT_RECONSTRUCTION_PYTHON` | `services/reconstruction/.venv` | Python interpreter of the isolated worker environment |
 | `ROOMSHIFT_RECONSTRUCTION_TIMEOUT` | `3600` | Seconds for one mesh job, including capture preparation |
 | `ROOMSHIFT_MESHROOM_BIN` | `services/reconstruction/meshroom` | Folder containing `meshroom_batch` |
-| `ROOMSHIFT_DEMO_PRESETS` | off | `1` serves offline-baked meshes for known demo videos ([details](../reconstruction/README.md)) |
 
 Invalid values stop the API at startup (or fail the job, for worker settings) with a message naming the variable.
 

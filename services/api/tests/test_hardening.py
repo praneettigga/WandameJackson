@@ -129,7 +129,7 @@ def test_blueprint_job_is_interrupted_by_shutdown(tmp_path, monkeypatch):
         while True:
             progress(.1)
             time.sleep(.01)
-    monkeypatch.setattr("roomshift_api.jobs.parse_blueprint", never_finishes)
+    monkeypatch.setattr("roomshift_api.scene_builder.parse_blueprint", never_finishes)
     app = create_app(make_settings(tmp_path))
     with TestClient(app) as c:
         pid = c.post("/api/projects", files={"blueprint": ("plan.png", png_bytes(l_shaped_plan()), "image/png")}).json()["project"]["id"]

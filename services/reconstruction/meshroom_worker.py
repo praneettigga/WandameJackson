@@ -18,7 +18,6 @@ import traceback
 
 VERSION = '2.0.0'
 HERE = Path(__file__).resolve().parent
-DEMO_DIR = HERE / 'demo'
 # meshroom_batch prints node names as it executes them; map them to app stages.
 STAGES = [('CameraInit', .04, 'loading_input'), ('FeatureExtraction', .08, 'extracting_features'),
           ('ImageMatching', .15, 'matching_images'), ('FeatureMatching', .20, 'matching_features'),
@@ -272,8 +271,6 @@ def manifest_for(request, cameras, stats, extra=None):
 def reconstruct(request, output, progress):
     started = time.monotonic()
     source = request['input']
-    if source.get('demoPreset'):
-        return serve_demo(request, output, progress)
     root = Path(request['projectRoot']).resolve()
     frames = source['frames']
     if not 8 <= len(frames) <= 40:
@@ -296,47 +293,6 @@ def reconstruct(request, output, progress):
             shutil.rmtree(output / name, ignore_errors=True)
     stats['workerSeconds'] = time.monotonic() - started
     save_json(output / 'manifest.json', manifest_for(request, cameras, stats))
-    progress(1, 'complete')
-
-
-def serve_demo(request, output, progress):
-    """Serve a mesh baked offline by bake_demo.py, replaying the real stage sequence."""
-    import numpy as np
-    preset = DEMO_DIR / request['input']['demoPreset']
-    delay = float(os.environ.get('ROOMSHIFT_DEMO_DELAY', '30'))
-    stages = sorted(STAGES, key=lambda s: s[1])
-    for node, value, stage in stages:
-        progress(value, stage)
-        time.sleep(delay / len(stages))
-    progress(.92, 'exporting_mesh')
-    for name in ('mesh.glb', 'diagnostic.ply'):
-        shutil.copyfile(preset / name, output / name)
-    baked = json.loads((preset / 'manifest.json').read_text())
-    frames = request['input']['frames']
-    registered = [c for c in baked['cameras'] if c.get('registered')]
-    cameras = []
-    for i, frame in enumerate(frames):
-        # Spread the baked (denser) camera path over the prepared frames in capture order.
-        if registered:
-            camera = dict(registered[round(i * (len(registered)-1) / max(1, len(frames)-1))])
-        else:
-            # A modeled architectural demo has no measured camera track. Supply a
-            # valid placeholder pose so the artifact contract remains explicit and
-            # the viewer can still associate every prepared frame with the preset.
-            width, height = frame.get('width', 1280), frame.get('height', 720)
-            focal = max(width, height)
-            camera = {'registered': True, 'imageSize': [width, height],
-                      'intrinsics': [[focal, 0, width / 2], [0, focal, height / 2], [0, 0, 1]],
-                      'worldToCamera': np.eye(4).tolist(), 'cameraToWorld': np.eye(4).tolist()}
-        camera.update(frameId=frame['id'], sourceId=frame.get('sourceId'), timestampSeconds=frame.get('timestampSeconds'))
-        cameras.append(camera)
-    result = manifest_for(request, cameras, baked['statistics'], baked.get('processing'))
-    if baked.get('provenance', {}).get('origin') == 'generated':
-        result['provenance'] = {**baked['provenance'], 'precomputed': True}
-        result['warnings'] = baked.get('warnings', result['warnings'])
-    else:
-        result['provenance']['precomputed'] = True
-    save_json(output / 'manifest.json', result)
     progress(1, 'complete')
 
 
@@ -372,7 +328,7 @@ def main():
             return 0
         request = json.loads(args.request.read_text())
         watch_parent(request.get('parentPid'))
-        if not status['ready'] and not request['input'].get('demoPreset'):
+        if not status['ready']:
             save_json(output / 'error.json', status)
             return 1
         with contextlib.redirect_stdout(sys.stderr):

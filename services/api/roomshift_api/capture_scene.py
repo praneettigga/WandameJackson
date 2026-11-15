@@ -1,86 +1,88 @@
-"""Explicit, persistent editor snapshots of a capture. Never infer semantic walls from a mesh."""
-from copy import deepcopy
-import json
-import math
-import struct
+"""Persistent editor scenes of a capture.
+
+A capture opens as an editable layout: its mesh is drawn as a floor plan (`capture_plan`) and that plan
+goes through the blueprint parser. When no room structure can be found, the mesh opens as one surface object.
+"""
 import uuid
 
 import cv2
 import numpy as np
 
+from .calibration import compute_calibration
+from .capture_plan import PLAN_VERSION, PlanError, build_plan, read_mesh
 from .errors import ApiError
 from .mesh_calibration import current_mesh
-from .storage import atomic_write_bytes, now_iso, read_json
+from .parser import ParseError
+from .scene_builder import blueprint_scene
+from .storage import atomic_write_bytes, now_iso
 from .validation import validate_scene
 
 
-def provenance(generated=False):
-    return {'origin': 'generated' if generated else 'inferred', 'confidence': None,
-            'source': 'architectural-demo-template' if generated else 'capture-mesh',
-            'userEdited': False, 'fieldOrigins': {},
-            'notes': ['Precomputed demo layout, not extracted from video.'] if generated else
-                     ['Unsegmented reconstructed surface. Individual walls and furniture are not identified.']}
+def provenance():
+    return {'origin': 'inferred', 'confidence': None, 'source': 'capture-mesh', 'userEdited': False, 'fieldOrigins': {},
+            'notes': ['Unsegmented reconstructed surface. Individual walls and furniture are not identified.']}
 
 
-# Precomputed architectural demo layouts in contracts/fixtures (layout specs, not Scenes).
-DEMO_LAYOUTS = {'whatsapp-classroom.layout.json', 'whatsapp-rectangular-room.layout.json'}
-# Demo meshes baked before the rename still reference the old file names.
-LEGACY_LAYOUT_NAMES = {name.replace('.layout.json', '.scene.json'): name for name in DEMO_LAYOUTS}
+def plan_project(project, manifest, plan, labelled):
+    """The project fields and scale calibration that present `plan` as the project's blueprint."""
+    tall, width = plan.image.shape
+    # The reference line is the longest drawn wall, so the user can check it against the room.
+    a, b = max(((np.asarray(s['start']), np.asarray(s['end'])) for s in plan.segments),
+               key=lambda s: np.linalg.norm(s[1]-s[0]))
+    calibration = compute_calibration((a/plan.meters_per_pixel).tolist(), (b/plan.meters_per_pixel).tolist(),
+                                      float(np.linalg.norm(b-a)), width, tall)
+    if plan.scale_method != 'calibrated':
+        calibration.update(method=plan.scale_method, notes=[plan.warnings[0]])
+    drawn = {**project,
+             'image': {'url': f"/api/projects/{project['id']}/blueprint", 'width': width, 'height': tall, 'mimeType': 'image/png'},
+             'automaticCalibration': calibration,
+             'capturePlan': {'version': PLAN_VERSION, 'jobId': manifest['jobId'],
+                             'calibrationRevision': manifest.get('calibrationRevision'),
+                             'metersPerPixel': plan.meters_per_pixel, 'wallHeight': plan.wall_height,
+                             'ceilingObserved': plan.ceiling_observed, 'scale': plan.scale, 'scaleSpread': round(plan.scale_spread, 3),
+                             'meshToPlan': plan.mesh_to_plan.tolist(),
+                             'openings': plan.openings, 'objects': plan.objects, 'segments': plan.segments,
+                             'warnings': ['Floor plan drawn from the captured room: only surfaces the camera saw are known. ' +
+                                          ('Doors, windows and furniture are placed where the views show them; check them against the room.'
+                                           if labelled else
+                                           'Doors, windows and furniture were not labelled; add them with the editor tools.'),
+                                          *plan.warnings[1 if plan.scale_method != 'calibrated' else 0:],
+                                          *manifest.get('warnings', [])]}}
+    return drawn, calibration
 
 
-def mesh_positions(path):
-    data = path.read_bytes()
-    size = struct.unpack_from('<I', data, 12)[0]
-    doc = json.loads(data[20:20+size])
-    primitive = doc['meshes'][0]['primitives'][0]
-    accessor = doc['accessors'][primitive['attributes']['POSITION']]
-    view = doc['bufferViews'][accessor['bufferView']]
-    return np.frombuffer(data, dtype='<f4', count=accessor['count']*3,
-                         offset=28+size+view.get('byteOffset', 0)+accessor.get('byteOffset', 0)).reshape(-1, 3)
+def plan_scene(storage, project, manifest, mesh_path, contracts_dir):
+    """Draw the mesh as a floor plan, store it as the project's blueprint and parse it into a Scene.
 
-
-def layout_entities(layout, matrix):
-    """Retain semantic geometry only when calibration leaves the floor horizontal at y=0."""
-    scale = float(np.linalg.norm(matrix[:3, 0]))
-    if not np.allclose(matrix[1], [0, scale, 0, 0], atol=1e-6):
-        return None
-    yaw = math.atan2(matrix[0, 2], matrix[0, 0])
-    def point(p):
-        return (matrix @ np.array([*p, 1]))[:3].tolist()
-    def floor(p):
-        q = point([p[0], 0, p[1]])
-        return [q[0], q[2]]
-    entities = {key: deepcopy(layout.get(key, [])) for key in ('rooms', 'walls', 'openings')}
-    for room in entities['rooms']:
-        room['polygon'] = [floor(p) for p in room['polygon']]
-        room['height'] *= scale
-    for wall in entities['walls']:
-        wall['start'], wall['end'] = floor(wall['start']), floor(wall['end'])
-        wall['height'] *= scale
-        wall['thickness'] *= scale
-    for opening in entities['openings']:
-        for key in ('offset', 'width', 'height', 'bottom'):
-            opening[key] *= scale
-    for group in entities.values():
-        for entity in group:
-            entity['provenance'] = provenance(True)
-    objects = []
-    def box(name, low, high, component=None):
-        size = [(high[i]-low[i])*scale for i in range(3)]
-        objects.append({'id': f'fixture-{len(objects)+1}', 'name': name, 'category': 'other',
-                        'componentId': component, 'position': point([(low[0]+high[0])/2, low[1], (low[2]+high[2])/2]),
-                        'rotationY': yaw, 'dimensions': size, 'provenance': provenance(True)})
-    for i, fixture in enumerate(layout.get('fixtures', [])):
-        box(f"{fixture['kind'].title()} {i+1}", fixture['low'], fixture['high'])
-    for rows in layout.get('deskRows', []):
-        for row in range(rows['count']):
-            for col in range(rows['columns']):
-                x = rows['start'][0]+col*(rows['deskWidth']+rows['aisle'])
-                z = rows['start'][1]+row*rows['rowSpacing']
-                w, d = rows['deskWidth'], rows.get('deskDepth', .48)
-                box(f'Desk {row+1}.{col+1}', [x, 0, z], [x+w, rows.get('topY', .78), z+d], 'table.basic')
-                box(f'Bench {row+1}.{col+1}', [x, 0, z+d+.16], [x+w, .45, z+d+.46])
-    return {**entities, 'objects': objects}
+    Returns (scene, None), or (None, reason) when the capture has no usable room structure.
+    """
+    cameras = [c['cameraToWorld'] for c in manifest['cameras'] if c.get('registered', True)]
+    labels = None
+    labels_path = (storage.project_dir(project['id'])/project['meshManifestPath']).with_name('labels.npz')
+    if labels_path.is_file():
+        # Labelled points live in the raw reconstruction frame; a mesh calibration moves them with the mesh.
+        with np.load(labels_path) as stored:
+            matrix = np.asarray(manifest.get('reconstructionToWorld', np.eye(4)), dtype=float)
+            labels = (stored['points'].astype(float) @ matrix[:3, :3].T + matrix[:3, 3], stored['classes'], stored['views'],
+                      *([stored['instances']] if 'instances' in stored.files else []))
+    try:
+        plan = build_plan(*read_mesh(mesh_path), cameras, manifest['units'] == 'meters',
+                          manifest.get('estimatedMetersPerUnit'), labels)
+    except PlanError as error:
+        return None, str(error)
+    ok, png = cv2.imencode('.png', plan.image)
+    if not ok:
+        return None, 'The floor plan image could not be written.'
+    drawn, calibration = plan_project(project, manifest, plan, labels is not None)
+    try:
+        scene = blueprint_scene(drawn, plan.image, calibration, plan.wall_height, None)
+    except ParseError as error:
+        return None, str(error)
+    if not scene['rooms'] or validate_scene(scene, contracts_dir/'scene.schema.json'):
+        return None, 'The captured walls do not enclose a room.'
+    storage.save_blueprint(project['id'], png.tobytes(), 'image/png')
+    project.update(drawn)
+    return scene, None
 
 
 def open_editor_scene(storage, project_id, contracts_dir):
@@ -100,30 +102,28 @@ def open_editor_scene(storage, project_id, contracts_dir):
         revision = manifest.get('calibrationRevision')
         mesh_path = (root/'calibrations'/revision/'mesh.glb' if revision else
                      (root/project['meshManifestPath']).with_name('mesh.glb'))
-        positions = mesh_positions(mesh_path)
+        scene, plan_failure = plan_scene(storage, project, manifest, mesh_path, contracts_dir)
+        if scene:
+            storage.save_reconstruction(project_id, scene)
+            project['hasScene'] = True
+            storage.save_project(project)
+            return scene
+        positions = read_mesh(mesh_path)[0]
         low, high = positions.min(axis=0), positions.max(axis=0)
-        matrix = np.asarray(manifest.get('reconstructionToWorld', np.eye(4)), dtype=float)
-        processing = manifest.get('processing', {})
-        layout_name = LEGACY_LAYOUT_NAMES.get(processing.get('layout'), processing.get('layout'))
-        layout = (read_json(contracts_dir/'fixtures'/layout_name)
-                  if processing.get('pipeline') == 'precomputed-architectural-demo' and layout_name in DEMO_LAYOUTS else None)
-        entities = layout_entities(layout, matrix) if layout else None
-        representation = 'layout' if entities else 'mesh'
-        unaligned = False
+        # No room structure was found: open the scan as one surface object instead.
+        unaligned = not (manifest.get('calibration') or {}).get('floor')
         token = uuid.uuid4().hex
         assets = root/'editor-assets'
         base_url = f'/api/projects/{project_id}/editor-assets'
-        if entities is None:
-            unaligned = not (manifest.get('calibration') or {}).get('floor') and not layout
-            filename = f'{token}.glb'
-            atomic_write_bytes(assets/filename, mesh_path.read_bytes())
-            entities = {'rooms': [], 'walls': [], 'openings': [], 'objects': [{
-                'id': 'capture-mesh', 'name': 'Captured room mesh', 'category': 'scan',
-                'componentId': None, 'assetUrl': f'{base_url}/{filename}',
-                'position': [float((low[0]+high[0])/2), float(low[1]), float((low[2]+high[2])/2)],
-                'rotationY': 0, 'dimensions': np.maximum(high-low, 1e-6).tolist(),
-                'provenance': provenance(bool(layout)),
-            }]}
+        filename = f'{token}.glb'
+        atomic_write_bytes(assets/filename, mesh_path.read_bytes())
+        entities = {'rooms': [], 'walls': [], 'openings': [], 'objects': [{
+            'id': 'capture-mesh', 'name': 'Captured room mesh', 'category': 'scan',
+            'componentId': None, 'assetUrl': f'{base_url}/{filename}',
+            'position': [float((low[0]+high[0])/2), float(low[1]), float((low[2]+high[2])/2)],
+            'rotationY': 0, 'dimensions': np.maximum(high-low, 1e-6).tolist(),
+            'provenance': provenance(),
+        }]}
         # A real top-down projection for the Scene source image, not a fabricated blueprint.
         span = max(float(high[0]-low[0]), float(high[2]-low[2]), .01)
         meters_per_pixel = span/960
@@ -138,9 +138,9 @@ def open_editor_scene(storage, project_id, contracts_dir):
         scene = {'schemaVersion': '0.1.0', 'id': project_id, 'name': project['name'], 'revision': 0,
                  'units': 'meters', 'upAxis': 'Y',
                  'source': {'imageUrl': f'{base_url}/{token}.png', 'imageWidth': 1024, 'imageHeight': 1024,
-                            'mimeType': 'image/png', 'synthetic': bool(layout),
+                            'mimeType': 'image/png', 'synthetic': False,
                             'capture': {'kind': project['source']['kind'], 'jobId': manifest['jobId'],
-                                        'calibrationRevision': revision, 'representation': representation},
+                                        'calibrationRevision': revision, 'representation': 'mesh'},
                             'calibration': {'pointA': [32, 32], 'pointB': [992, 32], 'distanceMeters': span,
                                             'metersPerPixel': meters_per_pixel,
                                             'notes': ['Generated top-down capture projection; not an uploaded blueprint.']}},
@@ -150,8 +150,8 @@ def open_editor_scene(storage, project_id, contracts_dir):
                                     'warnings': [*manifest.get('warnings', []),
                                         *(['Uncalibrated scan: 1 reconstruction unit is shown as 1 m. Set a known distance in Photos & video for real dimensions.'] if uncalibrated else []),
                                         *(['Floor not aligned: the scan may appear tilted. Align the floor in Photos & video.'] if unaligned else []),
+                                        *([f'No editable walls were created: {plan_failure}'] if plan_failure else []),
                                         'Editor snapshot is independent of later capture reconstruction and calibration.',
-                                        'Template walls and fixtures are editable.' if entities['walls'] else
                                         'The scan is one surface object. Add walls and furniture to build a semantic layout; scanned objects are not segmented.']},
                  **entities}
         problems = validate_scene(scene, contracts_dir/'scene.schema.json')

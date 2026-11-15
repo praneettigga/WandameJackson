@@ -15,7 +15,7 @@ import numpy as np
 
 from .errors import ApiError
 from .images import inspect_image
-from .mesh_worker import demo_preset as matching_demo_preset
+from .config import reconstruction_engine
 from .storage import atomic_write_json
 
 CONFIG = {"version": "1.0.1", "maxSide": 1280, "sampleFps": 2,
@@ -68,8 +68,10 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
     candidates.mkdir()
     source = project["source"]
     originals = source["originals"]
-    demo_preset = matching_demo_preset(project)  # exact-file match against offline-baked demo meshes
-    demo_warnings = []
+    leniency_warnings = []
+    # Feature texture and pairwise overlap are photogrammetry requirements. Learned depth engines
+    # reconstruct blank walls and pure rotation, so for them these checks only produce warnings.
+    strict = reconstruction_engine() == "meshroom"
     records = []
     try:
         progress(.05, "decoding")
@@ -143,7 +145,7 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
             analysed.append({**record, "sharpness": round(sharpness, 3), "features": features})
             if sharpness < CONFIG["minSharpness"]:
                 reason = "blurred_or_textureless"
-            elif len(features[0]) < 40:
+            elif strict and len(features[0]) < 40:
                 reason = "insufficient_texture"
             elif any(float(np.abs(thumb - t).mean()) < CONFIG["duplicateMeanDifference"] for t in thumbs):
                 reason = "near_duplicate"
@@ -154,10 +156,10 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
                 thumbs.append(thumb)
                 usable.append({**record, "sharpness": round(sharpness, 3), "features": features})
         if len(usable) < CONFIG["minViews"]:
-            if not demo_preset or not analysed:
+            if strict or len(analysed) < CONFIG["minViews"]:
                 raise ApiError(422, "INSUFFICIENT_VIEWS", "Fewer than 12 sharp, distinct, textured views remain. Move slowly with good lighting; include furniture and corners, not just blank walls.", {"usableViews": len(usable), "rejected": rejected})
             usable = analysed
-            demo_warnings.append('Precomputed demo preset: normal image-quality thresholds were bypassed for this exact source video.')
+            leniency_warnings.append('Few sharp, distinct views were found, so every sampled frame is used. Results may be less accurate.')
         # Stratify in capture order, select the sharpest member of each bin. This prevents
         # a sharpness-only ranking from concentrating every view in one part of the room.
         bins = np.array_split(np.arange(len(usable)), min(len(usable), CONFIG["maxViews"]))
@@ -182,10 +184,10 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
                     reached.update((edge["from"], edge["to"]))
             if before == len(reached):
                 break
-        if len(reached) != len(selected) and not demo_preset:
+        if len(reached) != len(selected) and strict:
             raise ApiError(422, "LOW_OVERLAP", "Views are disconnected or have too little shared texture. Capture in walking order with roughly 70% overlap; avoid abrupt turns and blank walls.", {"connectedViews": len(reached), "selectedViews": len(selected)})
         if len(reached) != len(selected):
-            demo_warnings.append('Precomputed demo preset: normal view-overlap threshold was bypassed for this exact source video.')
+            leniency_warnings.append('Some views share little visible texture; their placement relies on the depth model alone.')
         frames = []
         (output / "frames").mkdir()
         for i, record in enumerate(selected):
@@ -203,7 +205,7 @@ def prepare_capture(root: Path, project: dict, job_id: str, progress) -> dict:
                     "processing": {**CONFIG, "elapsedSeconds": time.monotonic() - started, "opencvVersion": cv2.__version__, "orientation": "display-oriented",
                                    "order": "upload order", "timestampBasis": "selected presentation time relative to first video frame; sourceTimestampSeconds includes stream start time",
                                    "ffmpegVersion": media_command(["ffmpeg", "-version"]).decode().splitlines()[0] if source["kind"] == "video" else None},
-                    "warnings": ["Quality checks are heuristics; acceptance does not establish full room coverage or reconstruction accuracy.", *demo_warnings]}
+                    "warnings": ["Quality checks are heuristics; acceptance does not establish full room coverage or reconstruction accuracy.", *leniency_warnings]}
         progress(.95, "saving_input")
         atomic_write_json(output / "manifest.json", manifest)
         return manifest

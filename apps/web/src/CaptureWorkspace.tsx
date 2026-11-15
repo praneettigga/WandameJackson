@@ -130,11 +130,15 @@ export function CaptureWorkspace({
             Start with one static room. Capture guidance stays here while you work.
           </p>
           <ul className="capture-guidance">
-            <li>Walk slowly around the room in good, even light. Keep people and objects still.</li>
             <li>
-              Keep roughly 70% overlap between views. Include corners, furniture, floor and ceiling.
+              Stand inside the room and turn slowly until you have faced every wall, in good, even
+              light.
             </li>
-            <li>Avoid mirrors, blank walls, motion blur, abrupt turns and digital zoom.</li>
+            <li>
+              Keep some floor and ceiling in frame, and let doors, windows and furniture come fully
+              into view.
+            </li>
+            <li>Avoid mirrors, motion blur, abrupt turns and digital zoom.</li>
           </ul>
           <label className="field">
             Capture type
@@ -250,10 +254,17 @@ export function CaptureWorkspace({
                 setProject(result);
                 setCaptures(await api.listCaptures());
                 await follow(result.job);
+                // One step from upload to an editable room when the worker is set up.
+                if (mounted.current && capabilities?.ready)
+                  await follow((await api.reconstructMesh(result.project.id, viewBudget)).job);
               })
             }
           >
-            {busy ? 'Working…' : 'Upload & prepare views'}
+            {busy
+              ? 'Working…'
+              : capabilities?.ready
+                ? 'Upload & build room'
+                : 'Upload & prepare views'}
           </button>
           {api.mock && (
             <p className="hint">
@@ -322,8 +333,8 @@ export function CaptureWorkspace({
             </button>
             <p className="hint">
               {mesh.units !== 'meters' && !project?.project.hasScene
-                ? 'Uncalibrated: the editor will show approximate dimensions. Set a known distance and align the floor below first for real metres.'
-                : 'Use the shared editor for furniture, transforms, measurements, undo, save and export. Demo layouts include editable walls and openings; scans remain a surface mesh.'}
+                ? 'The room opens as editable walls with an estimated scale. Set a known distance on the plan in Reconstruct for real dimensions.'
+                : 'Use the shared editor for walls, openings, furniture, measurements, undo, save and export.'}
             </p>
           </section>
         )}
@@ -343,7 +354,7 @@ export function CaptureWorkspace({
           <div className={mesh ? 'complete' : input ? 'current' : ''}>
             <b>03</b>
             <span>
-              Reconstruct<small>Colored surface mesh</small>
+              Reconstruct<small>Mesh and editable room</small>
             </span>
           </div>
         </div>

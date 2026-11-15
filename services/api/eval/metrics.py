@@ -97,12 +97,12 @@ def _match_points(pred, gt, tol) -> int:
     return tp
 
 
-def corner_metrics(pred_walls, gt_walls) -> dict:
+def corner_metrics(pred_walls, gt_walls, tol: float = CORNER_TOL) -> dict:
     p, g = junctions(pred_walls), junctions(gt_walls)
-    return {f"corner_{k}": v for k, v in _prf(_match_points(p, g, CORNER_TOL), len(p), len(g)).items()}
+    return {f"corner_{k}": v for k, v in _prf(_match_points(p, g, tol), len(p), len(g)).items()}
 
 
-def opening_metrics(pred: list[dict], gt: list[dict]) -> dict:
+def opening_metrics(pred: list[dict], gt: list[dict], tol: float = OPENING_TOL) -> dict:
     out = {}
     width_err = []
     for kind in ("door", "window"):
@@ -111,7 +111,7 @@ def opening_metrics(pred: list[dict], gt: list[dict]) -> dict:
         pairs = sorted((math.dist(a["centre"], b["centre"]), i, j) for i, a in enumerate(P) for j, b in enumerate(G))
         used_p, used_g, tp = set(), set(), 0
         for d, i, j in pairs:
-            if d > OPENING_TOL:
+            if d > tol:
                 break
             if i in used_p or j in used_g:
                 continue
@@ -140,11 +140,11 @@ def scene_openings(scene: dict) -> list[dict]:
     return out
 
 
-def evaluate(pred_scene: dict, gt: dict) -> dict:
+def evaluate(pred_scene: dict, gt: dict, corner_tol: float = CORNER_TOL, opening_tol: float = OPENING_TOL) -> dict:
     """pred_scene: parser/baseline output {walls, openings, rooms}; gt: {walls, openings(centre), rooms}."""
     return {
         "wall_iou": wall_iou(pred_scene["walls"], gt["walls"]),
         **room_metrics([r["polygon"] for r in pred_scene["rooms"]], gt["rooms"]),
-        **corner_metrics(pred_scene["walls"], gt["walls"]),
-        **opening_metrics(scene_openings(pred_scene), gt["openings"]),
+        **corner_metrics(pred_scene["walls"], gt["walls"], corner_tol),
+        **opening_metrics(scene_openings(pred_scene), gt["openings"], opening_tol),
     }

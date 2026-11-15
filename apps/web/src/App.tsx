@@ -83,7 +83,17 @@ export default function App() {
   const renderBlueprint = state.workspace === 'Reconstruct' && project && showBlueprint;
   const openCaptureInEditor = async (id: string) => {
     if (!discard()) return;
-    await guarded(async () => loadCaptureScene(await api.openCaptureScene(id)));
+    await guarded(async () => {
+      const scene = await api.openCaptureScene(id);
+      // A capture drawn as a floor plan is a blueprint project from here on: same scale and wall tools.
+      if (scene.source.capture?.representation === 'layout' && (await api.getCapture(id)).image) {
+        await loadProject(id);
+        setInputMode('blueprint');
+        setNotice(
+          'Room layout built from your capture. Walls are editable; check the scale in Reconstruct and add doors and windows.',
+        );
+      } else loadCaptureScene(scene);
+    });
   };
   const selectWorkspace = (name: WorkspaceName) => {
     if (document.pointerLockElement) document.exitPointerLock();
@@ -157,7 +167,7 @@ export default function App() {
           {state.assembly && (
             <AssemblyControls onReconstruct={(ids) => void reconstructGroup(ids)} />
           )}
-          {state.workspace === 'Reconstruct' && state.scene?.source.capture ? (
+          {state.workspace === 'Reconstruct' && state.scene?.source.capture && !project ? (
             <section className="project-section">
               <h4>CAPTURE PROJECT</h4>
               <p>

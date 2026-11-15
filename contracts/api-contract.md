@@ -188,11 +188,50 @@ Save-all uses separate revision checks for layout and child scenes; failed saves
 
 `POST /api/projects/{id}/editor-scene` creates a persistent metric Scene from a
 capture's published mesh, or returns its existing edited Scene without replacing
-anything. Uncalibrated or floor-unaligned captures still open; the Scene's
-`reconstruction.warnings` say so (1 reconstruction unit is shown as 1 m until a
-reference distance is set). Blueprint projects return `INVALID_SOURCE`. The two supported architectural demo layouts produce separate
-semantic walls/rooms/openings and editable procedural furniture. Other meshes
-produce one surface object, with no invented semantic structure.
+anything. Blueprint projects return `INVALID_SOURCE`.
+
+The mesh is levelled, squared to its walls and drawn as a black-on-white floor plan,
+which is stored as the project's blueprint and read by the blueprint parser. The
+result is the same Scene a blueprint upload produces (`rooms`, `walls`, `openings`),
+with `source.capture.representation: "layout"` and `source.imageUrl` pointing at the
+generated plan. From then on the project envelope has an `image`, and `/blueprint`,
+`/scale` and `/reconstruct` work on it: a manual reference on the plan rescales the room.
+
+Without a metric mesh calibration the scale combines up to three estimates, each weighted by
+how reliable it is: the height of the doors seen whole (taken as 2.05 m), the worker's metric
+depth model, and a camera held 1.5 m above the floor. `calibration.method` names the weightiest
+one used (`"door-height"`, `"depth-model"` or `"camera-height"`), `capturePlan.scaleSpread` is
+how far off the result may be, and an estimate that disagrees with the others by more than
+about 30% is left out. All of them are estimates.
+
+Rooms may be L-, T- or U-shaped, and walls at least 25° off the main axes and 2 m long keep
+their angle. When the worker labelled the views, closed doors and windows are placed on the
+walls with the sill and head heights seen (`provenance.source: "capture-segmentation"`), and
+furniture is added to `objects` as boxes of its approximate size (`table.basic`, `chair.basic`
+and `sofa.basic` where they apply), turned the way it stands (`rotationY`). Lamps, sinks,
+toilets, bathtubs, stoves, plants and washers are boxed as category `other` and named. Open
+doorways become doors either way, as does a break in a wall with a door leaf standing open
+beside it. Openings on angled walls are added to the scene directly; the generated plan image
+only draws those on the two main axes. A later rescale keeps openings and furniture.
+
+Labels are settled by majority across views, a curtain beside visible glass extends the window
+by up to 0.8 m, and tall furniture (a wardrobe, a fridge) is not read as a wall. When the
+worker numbered the objects in each view (`labels.npz` `instances`), pieces that touch stay
+separate; without it a run of one kind is cut by the longest that kind is built.
+
+Only surfaces the camera saw are known. The rest is filled by rule and marked:
+
+- A wall that was not captured is drawn where the visible floor area ends. Each wall's
+  `provenance.confidenceFactors` starts with `Seen in capture` (the share of its length seen),
+  `provenance.confidence` is capped by it, and `reconstruction.warnings` names the walls to face
+  in a new capture. `capturePlan.segments[].observed` holds the same share.
+- A wall that stops with open floor past its end turns a corner there, so an L-shaped room
+  seen from one arm keeps its shape.
+- Furniture whose depth was hidden gets a typical depth for its kind and is set against a wall
+  within 0.25 m behind it; `provenance.fieldOrigins.dimensions` is `inferred` and a note says so.
+
+When no room structure is found the mesh opens as one surface object
+(`representation: "mesh"`) and a warning gives the reason.
 
 Scene 0.1.0 gains optional `source.capture` metadata (`kind`, `jobId`,
 `calibrationRevision`, `representation: "layout" | "mesh"`) and optional object

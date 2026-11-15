@@ -78,10 +78,10 @@ def ocr_timeout() -> float:
 
 
 def reconstruction_engine() -> str:
-    """ROOMSHIFT_RECONSTRUCTION_ENGINE: `meshroom` (default) or the optional `vggt` worker."""
-    engine = os.environ.get("ROOMSHIFT_RECONSTRUCTION_ENGINE", "meshroom").strip().lower() or "meshroom"
-    if engine not in {"meshroom", "vggt"}:
-        raise ConfigError(f"ROOMSHIFT_RECONSTRUCTION_ENGINE must be meshroom or vggt, got {engine!r}.")
+    """ROOMSHIFT_RECONSTRUCTION_ENGINE: `da3` (default, any machine), or the optional `vggt`/`meshroom` workers."""
+    engine = os.environ.get("ROOMSHIFT_RECONSTRUCTION_ENGINE", "da3").strip().lower() or "da3"
+    if engine not in {"da3", "meshroom", "vggt"}:
+        raise ConfigError(f"ROOMSHIFT_RECONSTRUCTION_ENGINE must be da3, meshroom or vggt, got {engine!r}.")
     return engine
 
 
@@ -89,7 +89,3 @@ def reconstruction_timeout() -> float:
     """ROOMSHIFT_RECONSTRUCTION_TIMEOUT: seconds for one mesh job, including capture preparation."""
     return _number("ROOMSHIFT_RECONSTRUCTION_TIMEOUT", 3600, minimum=1)
 
-
-def demo_presets_enabled() -> bool:
-    """ROOMSHIFT_DEMO_PRESETS=1 replays offline-baked meshes for known demo videos."""
-    return os.environ.get("ROOMSHIFT_DEMO_PRESETS") == "1"

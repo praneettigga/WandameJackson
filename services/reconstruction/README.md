@@ -1,12 +1,61 @@
 # Local room reconstruction worker
 
-Mode 2 now uses **[Meshroom](https://github.com/alicevision/Meshroom) / AliceVision**
-photogrammetry (`meshroom_worker.py`): Structure-from-Motion, depth maps, meshing and
-texturing. The texture is baked into vertex colors and exported in the same GLB/manifest
-contract as before, so calibration, viewer and export are unchanged. Meshroom is MPL-2.0;
-there is no model checkpoint or licence step.
+Mode 2 turns a walkthrough video or photo set into an editable room. The default engine is
+**[Depth Anything 3](https://github.com/ByteDance-Seed/Depth-Anything-3)** (`da3_worker.py`): it
+estimates camera poses and dense depth for every view, including blank walls and turning on the
+spot, and runs on a plain CPU. The API then draws a floor plan from the fused mesh and reads it with
+the blueprint parser, so the capture opens with the same walls, rooms and tools as a blueprint.
 
-## Meshroom setup (default engine)
+## Depth Anything 3 setup (default engine)
+
+Works on Linux, macOS and Windows without a GPU. From the repository root, with `uv` installed:
+
+```bash
+uv venv --python 3.12 services/reconstruction/.venv
+# Linux only: CPU PyTorch, to avoid downloading the CUDA build
+uv pip install --python services/reconstruction/.venv/bin/python torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cpu
+uv pip install --python services/reconstruction/.venv/bin/python -r services/reconstruction/requirements-da3.txt
+uv pip install --python services/reconstruction/.venv/bin/python --no-deps \
+  "depth-anything-3 @ git+https://github.com/ByteDance-Seed/Depth-Anything-3.git@3d835ec1a5802d64a8b8b15f817a1ab54809bfe4"
+services/reconstruction/.venv/bin/python services/reconstruction/da3_worker.py --check
+```
+
+On Windows use `services/reconstruction/.venv/Scripts/python.exe` instead of `.venv/bin/python`.
+
+The first reconstruction downloads three models from Hugging Face into the user's cache (about
+2 GB); after that it works offline:
+
+| Model | Licence | Job | Switch off |
+|---|---|---|---|
+| `depth-anything/DA3-BASE` | Apache-2.0 | camera poses and depth for every view | — |
+| `depth-anything/DA3METRIC-LARGE` | Apache-2.0 | approximate real-world scale, from six views | `ROOMSHIFT_DA3_METRIC=0` (the plan then assumes the camera was 1.5 m above the floor) |
+| `shi-labs/oneformer_ade20k_swin_tiny` | MIT | labels wall, floor, door, window and furniture pixels (`semantics.py`) | `ROOMSHIFT_DA3_SEMANTICS=0` (walls and open doorways only) |
+
+A second, panoptic pass of the same segmentation model numbers the separate objects in each view
+(about 1.3 s per view on CPU; `ROOMSHIFT_DA3_INSTANCES=0` switches it off), so two desks pushed
+together stay two. The labelled depth points are saved as `labels.npz` beside the mesh (`points`,
+`classes`, `views`, and `instances` since worker 1.1.0; older files still open). The API uses them to place
+doors and windows on the walls, with the sill and head heights it saw, and to box furniture.
+
+Measured on a 16-thread laptop CPU: 65–80 seconds for 12–16 views and 2–4 minutes for 40, with
+about 4 GB of RAM.
+
+`ROOMSHIFT_DA3_DEVICE` selects `auto` (default: Apple GPU when present, otherwise CPU), `cpu`, `mps`
+or `cuda`. CUDA is opt-in: on the development laptop (RTX 4060, NVIDIA open driver 615) running this
+model on the GPU hard-rebooted the machine three times, while CPU runs were stable.
+
+Set `ROOMSHIFT_RECONSTRUCTION_ENGINE=meshroom` or `vggt` for the optional engines below.
+
+---
+
+# Optional Meshroom engine (`ROOMSHIFT_RECONSTRUCTION_ENGINE=meshroom`)
+
+[Meshroom](https://github.com/alicevision/Meshroom) / AliceVision photogrammetry
+(`meshroom_worker.py`) needs a separate download and an NVIDIA GPU, and textured, overlapping
+footage with sideways camera movement. Its texture is baked into vertex colors and exported in the
+same GLB/manifest contract.
+
+## Meshroom setup
 
 1. Download a Meshroom release for your OS (2023.3 or newer) from
    <https://github.com/alicevision/Meshroom/releases> and unzip it to
@@ -31,34 +80,12 @@ there is no model checkpoint or licence step.
 If the API process dies, the worker stops Meshroom too (POSIX). A failed or cancelled job keeps only
 its `worker.log`; frames and Meshroom caches are deleted.
 
-Set `ROOMSHIFT_RECONSTRUCTION_ENGINE=vggt` to use the optional VGGT worker (below).
-
-## Demo presets (pre-baked videos)
-
-For demos, bake known videos offline with high-quality settings (denser frames,
-full-resolution depth maps, 8k texture), then serve them instantly when that exact file is
-uploaded:
-
-```bash
-python services/reconstruction/bake_demo.py demo1.mp4 living_room --frames 80
-# Optional: open the app on the uncalibrated result, pick points, then bake the calibration in:
-python services/reconstruction/bake_demo.py demo1.mp4 living_room --skip-meshroom \
-  --reference 0.1,0,0.2,1.9,0,0.2,3.5 --floor 0,0,0,1,0,0,0,0,1
-```
-
-Outputs go to `services/reconstruction/demo/<name>/` (git-ignored; copy them to the demo
-machine), and the video's SHA-256 is recorded in `demo/presets.json`. Start the API with
-`ROOMSHIFT_DEMO_PRESETS=1`. Uploading a matching video prepares frames as usual, then
-**Reconstruct mesh** replays the Meshroom stages over `ROOMSHIFT_DEMO_DELAY` seconds
-(default 30) and publishes the baked mesh, already calibrated. Any other upload runs
-Meshroom live. The manifest records `provenance.precomputed: true`.
-
 ---
 
 # Optional VGGT worker (`ROOMSHIFT_RECONSTRUCTION_ENGINE=vggt`)
 
 This engine is optional and kept for comparison. It needs Linux with CUDA (its lock file pins
-Linux-only NVIDIA wheels) and a separately licensed checkpoint; the default Meshroom engine needs neither.
+Linux-only NVIDIA wheels) and a separately licensed checkpoint; the default engine needs neither.
 
 Milestone 2 adds a separate VGGT/CUDA process, depth consistency filtering,
 Open3D TSDF fusion, colored triangle GLB/PLY export, a mesh viewer, and failure-safe

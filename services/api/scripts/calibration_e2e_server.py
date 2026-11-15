@@ -3,7 +3,6 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 import tempfile
-import json
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT/'services/api'), str(ROOT/'services/reconstruction')]
@@ -40,18 +39,13 @@ if __name__ == '__main__':
             'hasScene': False, 'source': {'kind': 'photo-set'}, 'hasMesh': True,
             'meshManifestPath': 'reconstructions/j_mesh/manifest.json', 'meshManifestUrl': '/api/projects/p_calibration/mesh'})
         # Independent fixtures for the unified editor's real persistence/asset tests.
-        from bake_architectural_demo import build
         from meshroom_worker import vertex_normals
-        for pid in ('p_editor_scan', 'p_editor_classroom'):
+        for pid in ('p_editor_scan',):
             output = storage.project_dir(pid)/'reconstructions/j_editor'
             output.mkdir(parents=True)
-            if pid == 'p_editor_classroom':
-                v, t, colors = build(json.loads((ROOT/'contracts/fixtures/whatsapp-classroom.layout.json').read_text()))
-                processing = {'pipeline': 'precomputed-architectural-demo', 'layout': 'whatsapp-classroom.layout.json'}
-            else:
-                v, t = vertices[:, [0, 2, 1]], triangles
-                colors = np.tile([.7, .8, .4], (len(v), 1))
-                processing = {}
+            v, t = vertices[:, [0, 2, 1]], triangles
+            colors = np.tile([.7, .8, .4], (len(v), 1))
+            processing = {}
             write_glb(output/'mesh.glb', v, t, colors, vertex_normals(v, t))
             atomic_write_json(output/'manifest.json', {
                 'schemaVersion': '1.0.0', 'kind': 'room-mesh', 'projectId': pid, 'jobId': 'j_editor',

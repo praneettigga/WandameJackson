@@ -13,14 +13,14 @@ import threading
 import uuid
 from pathlib import Path
 
-from .mesh_worker import WORKER_DIR, demo_preset, run_worker
+from .mesh_worker import run_worker
 from .captures import prepare_capture
 from .auto_scale import estimate_scale
-from .config import SCHEMA_VERSION
 from .errors import ApiError
 from .images import load_gray
-from .parser import PARSER_NAME, PARSER_VERSION, ParseError, parse_blueprint
-from .mesh_calibration import discard_calibrations, save_calibration
+from .parser import ParseError
+from .scene_builder import blueprint_scene
+from .mesh_calibration import discard_calibrations
 from .storage import Storage, contained, now_iso, read_json
 from .validation import validate_scene
 
@@ -154,9 +154,6 @@ class JobRunner:
         capture_input["frames"] = [frames[i] for i in indices]
         capture_input["reconstructionSelection"] = {"maxViews": job["maxViews"], "availableViews": len(frames),
                                                     "selectedIndices": indices, "strategy": "uniform in capture order, including endpoints"}
-        preset = demo_preset(self.storage.get_project(job["projectId"]))
-        if preset:
-            capture_input["demoPreset"] = preset
         def cancelled():
             return job["id"] in self._cancel or self._stopping.is_set()
         def progress(value, stage):
@@ -182,25 +179,7 @@ class JobRunner:
                 previous = manifest_path.parent if manifest_path else None
                 if previous and previous.parent == (root / "reconstructions").resolve() and previous.name != job["id"]:
                     shutil.rmtree(previous, ignore_errors=True)
-        # The mesh is published; baking the demo calibration (a large GLB) must not hold the job lock,
-        # and a failure there must not report the published mesh as failed.
-        warnings = []
-        if preset:
-            try:
-                self._apply_demo_calibration(job, preset)
-            except Exception:
-                log.exception("demo calibration for job %s failed", job["id"])
-                warnings.append("The recorded demo calibration could not be applied; calibrate the mesh manually.")
-        self._update(job, status="succeeded", stage="ready", progress=1., meshManifestUrl=project["meshManifestUrl"],
-                     **({"warnings": warnings} if warnings else {}))
-
-    def _apply_demo_calibration(self, job: dict, preset: str):
-        """Open a demo mesh already scaled/floor-aligned with the calibration recorded at bake time."""
-        spec = read_json(WORKER_DIR / "demo" / preset / "calibration.json")
-        if spec:
-            save_calibration(self.storage, job["projectId"], {"jobId": job["id"], "expectedRevision": None,
-                                                              "reference": spec.get("reference"), "floor": spec.get("floor"),
-                                                              "rotationDegrees": spec.get("rotationDegrees", [0, 0, 0])})
+        self._update(job, status="succeeded", stage="ready", progress=1., meshManifestUrl=project["meshManifestUrl"])
 
     def _prepare(self, job: dict) -> None:
         project = self.storage.get_project(job["projectId"])
@@ -321,42 +300,10 @@ class JobRunner:
                 raise Cancelled()
             self._update(job, progress=round(0.05 + 0.85 * p, 3))
 
-        result = parse_blueprint(gray, cal["metersPerPixel"], req["wallHeight"], req["wallThickness"], progress)
-        result["warnings"] = cal.get("notes", []) + result["warnings"]
-        if cal.get("method") in {"wall-thickness", "image-extent"}:
-            for group, fields in (("walls", ("start", "end", "thickness")), ("rooms", ("polygon",)), ("openings", ("offset", "width"))):
-                for entity in result[group]:
-                    entity["provenance"]["notes"].append("Metric dimensions depend on an estimated scale; no physical reference was verified.")
-                    for field in fields:
-                        if field == "thickness" and req["wallThickness"] is not None:
-                            continue
-                        entity["provenance"]["fieldOrigins"][field] = "inferred"
-        scene = {
-            "schemaVersion": SCHEMA_VERSION,
-            "id": project["id"],
-            "name": project["name"],
-            "revision": 0,
-            "units": "meters",
-            "upAxis": "Y",
-            "source": {
-                "imageUrl": project["image"]["url"],
-                "imageWidth": project["image"]["width"],
-                "imageHeight": project["image"]["height"],
-                "mimeType": project["image"]["mimeType"],
-                "synthetic": False,
-                "calibration": cal,
-            },
-            "reconstruction": {
-                "parser": {"name": PARSER_NAME, "version": PARSER_VERSION, "checkpoint": None, "license": None},
-                "createdAt": now_iso(),
-                "defaults": result["defaults"],
-                "warnings": result["warnings"],
-            },
-            "rooms": result["rooms"],
-            "walls": result["walls"],
-            "openings": result["openings"],
-            "objects": result["objects"],
-        }
+        # A plan drawn from a capture keeps the ceiling height that was seen unless the user overrides it.
+        plan = project.get("capturePlan") or {}
+        seen_height = plan["wallHeight"] * cal["metersPerPixel"] / plan["metersPerPixel"] if plan else None
+        scene = blueprint_scene(project, gray, cal, req["wallHeight"] or seen_height, req["wallThickness"], progress)
         if job["id"] in self._cancel:
             raise Cancelled()
         problems = validate_scene(scene, self.schema_path)

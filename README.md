@@ -12,19 +12,20 @@ flowchart LR
   Web <--> API[Local API\nFastAPI]
   API --> Blueprint[Blueprint parser\nOpenCV + local OCR]
   API --> Capture[Capture preparation\nFFmpeg + OpenCV]
-  Capture --> Mesh[Photogrammetry worker\nMeshroom / AliceVision]
+  Capture --> Mesh[Depth worker\nDepth Anything 3 on CPU]
   Blueprint --> Storage[(Local project storage)]
+  Mesh --> Plan[Floor plan from mesh] --> Blueprint
   Mesh --> Storage
   Storage --> Web
 ```
 
-The web app provides the editor, 3D viewport, project controls, and exports. The local API owns uploads, reconstruction jobs, validation, and project persistence. Blueprint reconstruction produces editable rooms, walls, doors, and windows; capture reconstruction produces a calibrated mesh that can be opened in the same editor.
+The web app provides the editor, 3D viewport, project controls, and exports. The local API owns uploads, reconstruction jobs, validation, and project persistence. Blueprint reconstruction produces editable rooms, walls, doors, and windows; capture reconstruction produces a mesh, draws a floor plan from it and reads that plan with the same blueprint parser, so a capture opens with editable walls and rooms too.
 
 ## Features
 
 - Upload PNG or JPEG blueprints and reconstruct editable metric rooms.
 - Use printed dimensions, an estimated scale, or a manual reference measurement.
-- Upload a 10–60 second walkthrough or 20–40 overlapping photos to reconstruct a colored room mesh.
+- Upload a 10–60 second walkthrough or 20–40 overlapping photos to get an editable room with its doors, windows and furniture, on any laptop with no GPU required.
 - Calibrate mesh scale and floor alignment from picked points.
 - Draw and edit walls, doors, and windows with snapping, undo/redo, and completeness checks.
 - Add, transform, resize, and snap furniture; import local GLB, glTF, OBJ, PLY, or STL components.
@@ -87,7 +88,7 @@ Run the API as a single process (no `--workers` greater than 1): jobs and locks 
 `--reload` is handy while developing the API, but it interrupts running reconstructions. The API is
 local-only; see [its settings](services/api/README.md#run) to change ports, origins or limits.
 
-Photo/video reconstruction also needs the local Meshroom worker. Follow [the reconstruction worker setup](services/reconstruction/README.md#meshroom-setup-default-engine). Project data is stored locally under `services/api/data/`.
+Photo/video reconstruction also needs the local depth worker, which runs on CPU with no GPU or separate download. Follow [the reconstruction worker setup](services/reconstruction/README.md#depth-anything-3-setup-default-engine). Project data is stored locally under `services/api/data/`.
 
 ## Verify
 

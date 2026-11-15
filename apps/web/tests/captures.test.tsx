@@ -194,3 +194,49 @@ it('shows an explanatory capture guide and disables reconstruction while GPU is 
   await screen.findByText('Restore the NVIDIA driver.');
   expect(screen.getByRole('button', { name: 'Reconstruct mesh →' })).toBeDisabled();
 });
+
+it('builds the room in one step once the worker is ready, then opens the editor', async () => {
+  vi.spyOn(api, 'listCaptures').mockResolvedValue([envelope]);
+  vi.spyOn(api, 'getCapture').mockResolvedValue(envelope);
+  vi.spyOn(api, 'createCapture').mockResolvedValue({ ...envelope, job });
+  vi.spyOn(api, 'getCaptureInput').mockResolvedValue({
+    schemaVersion: '1.0.0',
+    projectId: 'p_capture',
+    originals: [{ id: 'source_0000', filename: 'room.mp4' }],
+    rejected: [],
+    warnings: [],
+    frames: [
+      {
+        id: 'frame_0000',
+        sourceId: 'source_0000',
+        url: '/frame.png',
+        timestampSeconds: 1.5,
+        width: 640,
+        height: 480,
+      },
+    ],
+  });
+  const reconstruct = vi.spyOn(api, 'reconstructMesh').mockResolvedValue({
+    job: { ...job, id: 'j_2', kind: 'mesh-reconstruction', meshManifestUrl: '/mesh' },
+  });
+  vi.spyOn(api, 'getMesh').mockResolvedValue({
+    schemaVersion: '1.0.0',
+    jobId: 'j_2',
+    inputJobId: 'j_1',
+    projectId: 'p_capture',
+    meshUrl: '/mesh.glb',
+    diagnosticUrl: '/diagnostic.ply',
+    units: 'uncalibrated',
+    cameras: [],
+    statistics: { vertices: 3, triangles: 1, executionSeconds: 1, endToEndSeconds: 2 },
+    warnings: [],
+  });
+  const opened = vi.fn().mockResolvedValue(undefined);
+  render(<CaptureWorkspace onOpenEditor={opened} />);
+  fireEvent.change(screen.getByLabelText('Choose capture files'), {
+    target: { files: [new File(['video'], 'room.mp4')] },
+  });
+  fireEvent.click(await screen.findByRole('button', { name: 'Upload & build room' }));
+  await waitFor(() => expect(opened).toHaveBeenCalledWith('p_capture'));
+  expect(reconstruct).toHaveBeenCalledWith('p_capture', 40);
+});

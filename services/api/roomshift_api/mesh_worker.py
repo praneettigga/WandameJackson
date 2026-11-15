@@ -9,7 +9,7 @@ import time
 
 import numpy as np
 
-from .config import REPO_ROOT, demo_presets_enabled, reconstruction_engine, reconstruction_timeout
+from .config import REPO_ROOT, reconstruction_engine, reconstruction_timeout
 from .errors import ApiError
 from .storage import atomic_write_json, read_json
 
@@ -17,21 +17,8 @@ WORKER_DIR = REPO_ROOT / 'services/reconstruction'
 
 
 def worker_script():
-    # Meshroom is the default engine; ROOMSHIFT_RECONSTRUCTION_ENGINE=vggt selects the optional VGGT worker.
-    return WORKER_DIR / ('worker.py' if reconstruction_engine() == 'vggt' else 'meshroom_worker.py')
-
-
-def demo_preset(project):
-    """Name of an offline-baked demo mesh whose source video matches this capture, if enabled."""
-    if not demo_presets_enabled():
-        return None
-    try:
-        presets = read_json(WORKER_DIR / 'demo/presets.json') or []
-    except ValueError:
-        return None
-    hashes = {o.get('sha256') for o in project.get('source', {}).get('originals', [])}
-    return next((p['name'] for p in presets if p.get('sha256') in hashes and p.get('name')
-                 and (WORKER_DIR / 'demo' / p['name'] / 'mesh.glb').is_file()), None)
+    # Depth Anything 3 is the default engine; ROOMSHIFT_RECONSTRUCTION_ENGINE selects the optional ones.
+    return WORKER_DIR / {'da3': 'da3_worker.py', 'vggt': 'worker.py', 'meshroom': 'meshroom_worker.py'}[reconstruction_engine()]
 
 
 def worker_python():

@@ -23,7 +23,8 @@ export type AssemblySubmission = AssemblyEnvelope & {
 export type CaptureKind = 'video' | 'photo-set';
 export type CaptureEnvelope = {
   project: ProjectEnvelope['project'];
-  image: null;
+  /** The floor plan drawn from the capture, once it has been opened as an editable layout. */
+  image: ProjectEnvelope['image'] | null;
   source: { kind: CaptureKind };
   captureJobId: string | null;
   meshJobId?: string | null;
@@ -285,7 +286,9 @@ export class HttpApi implements RoomshiftApi {
     const result = await this.request<{ projects: (ProjectEnvelope | CaptureEnvelope)[] }>(
       '/api/projects',
     );
-    return result.projects.filter((p): p is CaptureEnvelope => p.image === null);
+    return result.projects.filter(
+      (p): p is CaptureEnvelope => 'source' in p && (p.source.kind as string) !== 'blueprint',
+    );
   }
   getCapture(id: string) {
     return this.request<CaptureEnvelope>(`/api/projects/${encodeURIComponent(id)}`);

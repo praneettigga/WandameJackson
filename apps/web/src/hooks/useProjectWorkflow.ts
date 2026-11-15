@@ -187,9 +187,7 @@ export function useProjectWorkflow() {
       selectedId: scene.objects.find((o) => o.assetUrl)?.id ?? null,
     });
     setNotice(
-      scene.source.capture?.representation === 'layout'
-        ? 'Editable demo layout loaded. Select walls, doors, windows or furniture to edit them.'
-        : 'Capture loaded in the editor. Transform the scan, measure surfaces, and add furniture or walls. The scan is not segmented into individual objects.',
+      'Capture loaded in the editor as a scan: no room outline could be found. Transform the scan, measure surfaces, and add walls or furniture.',
     );
   }
   useEffect(() => {

@@ -168,3 +168,51 @@ It also adds evidence-gated fusion, which keeps learned proposals honest.
 - **The baseline was run with its released post-processing and two documented adapter steps.** A stronger baseline
   configuration (test-time rotation averaging as in the authors' notebook, or Raster2Seq) would make the
   comparison stricter.
+
+## 5. Capture stage (Mode 2): mesh and labels to editable room
+
+`python -m eval.capture_run` (from `services/api`) replays the plan stage on synthetic captures with exact
+ground truth (`eval/capture_generate.py`): each mesh holds only what a camera at 1.35 m could see, in a tilted,
+unscaled frame, with a scale hint that is 4-12% out. Corners match within 0.25 m, openings within 0.30 m,
+furniture of the same kind within 0.50 m. Shape is scored at the true scale; scale error is reported apart.
+
+| mean | cases | layout IoU | corner F1 | scale error | door F1 | window F1 | furniture F1 | footprint IoU |
+|---|---|---|---|---|---|---|---|---|
+| before (`capture-synthetic-baseline.md`) | 10 | 0.945 | 0.821 | 8.3% | 1.000 | 0.900 | 0.840 | 0.827 |
+| after, same 10 cases | 10 | 0.991 | 0.971 | 4.2% | 1.000 | 1.000 | 1.000 | 0.950 |
+| after, all cases (`capture-synthetic.md`) | 14 | 0.991 | 0.980 | 3.5% | 1.000 | 1.000 | 0.986 | 0.904 |
+
+What changed the numbers:
+
+- **A bug:** the wall that closes an unseen side was placed from the other axis's extent, clipping rooms that are
+  not square (`unseen_wall` 0.81 to 0.98).
+- **Rules for unseen parts:** a seen wall that ends with open floor past it turns a corner (`l_one_arm` 0.75 to
+  0.98); tall furniture is not a wall (`corner_cupboard` 0.94 to 1.00); furniture depth that was hidden is a
+  typical one, set against the wall behind.
+- **Scale:** door height, depth model and camera height are combined by reliability.
+- **Openings:** windows on angled walls reach the scene; labels are voted across views.
+- **Furniture:** per-object numbers keep touching pieces apart; boxes are turned; a 2 m bed is no longer cut in two.
+
+Limits:
+
+- **These are synthetic numbers.** Labels are perfect, depth noise is 4 mm and unstructured, and the scale
+  weights (door 5%, depth model 10%, camera height 15% typical error) are assumptions. No tape-measured room has
+  been scored yet; `docs/eval/ANNOTATING.md` describes how to add them, and those numbers should replace these.
+- Without per-object numbers (labels from worker 1.0.0) three desks in a row are still read as two.
+- Corner F1 is below 1 only on `angled_window` (0.71): the ends of the angled wall land off the true junctions,
+  the same diagonal-wall limit as the blueprint parser.
+- One real capture was run end to end on CPU as a smoke test (a classroom, 16 views, 93 s in the worker): it opened
+  as one room with four windows and 22 desks and chairs, and named the two walls the camera never faced. It has no
+  measurements, so it says the pipeline runs on real depth and labels, not how accurate it is. Real depth noise
+  did turn several desks that stand square to the walls, which is why a piece is now only turned when the turned
+  rectangle is at most 0.6 of the square-on one.
+- A curtained window is found, but its width is off by about 0.2 m: the curtain's extent stands in for the glass.
+
+### Learned layout model (SpatialLM): not adopted
+
+Checked against its README and model cards, not run. It needs a CUDA 12.4 toolchain (torchsparse, flash-attn) and
+documents no CPU path, while this project runs on CPU and CUDA has crashed the development laptop. Every released
+checkpoint carries a non-commercial term through its point-cloud encoder, unlike the Apache-2.0 and MIT models
+used here. Its own zero-shot numbers on reconstructed video (wall F1 68-69, door 47-49, window 47-51 at 0.25 IoU)
+do not suggest it would beat the rules above. `python -m eval.capture_run --export-ply <case> --to room.ply`
+writes the metric, z-up point cloud it expects, should a GPU trial be wanted later.

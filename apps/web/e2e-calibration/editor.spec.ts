@@ -58,31 +58,3 @@ test('capture mesh uses shared edit, undo, save, reload, and export tools', asyn
   expect(gltf.nodes.some((n: { name?: string }) => n.name === 'capture-mesh')).toBe(true);
   expect(errors).toEqual([]);
 });
-
-test('classroom preset opens with individually editable walls and furniture', async ({
-  page,
-  request,
-}) => {
-  await page.goto('/');
-  await page.getByRole('button', { name: /Mode 2/ }).click();
-  await page.getByLabel('Saved captures').selectOption('p_editor_classroom');
-  await page.getByRole('button', { name: 'Edit in 3D workspace', exact: true }).click();
-  await expect(page.locator('.viewport canvas')).toBeVisible();
-  await page.getByRole('button', { name: 'Select Desk 1.1', exact: true }).click();
-  await page.getByLabel('Position X', { exact: true }).fill('2.5');
-  await page.getByLabel('Position X', { exact: true }).press('Tab');
-  await page.getByRole('button', { name: 'Select front', exact: true }).click();
-  await page.getByLabel('Wall height', { exact: true }).fill('3.5');
-  await page.getByLabel('Wall height', { exact: true }).press('Tab');
-  await page.getByRole('button', { name: 'Save scene', exact: true }).click();
-  const endpoint = 'http://127.0.0.1:8012/api/projects/p_editor_classroom/scene';
-  await expect.poll(async () => (await (await request.get(endpoint)).json()).revision).toBe(1);
-  const saved = await (await request.get(endpoint)).json();
-  expect(saved.walls).toHaveLength(4);
-  expect(saved.openings).toHaveLength(7);
-  expect(saved.walls.find((w: { id: string }) => w.id === 'front').height).toBe(3.5);
-  expect(saved.objects.find((o: { name: string }) => o.name === 'Desk 1.1').position[0]).toBe(2.5);
-  await page.getByRole('button', { name: 'Reload', exact: true }).click();
-  await page.getByRole('button', { name: 'Select front', exact: true }).click();
-  await expect(page.getByLabel('Wall height', { exact: true })).toHaveValue('3.5');
-});

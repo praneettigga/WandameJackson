@@ -1,0 +1,26 @@
+# Python 3.12 environment for the default Depth Anything 3 worker (da3_worker.py). Runs on CPU.
+# On Linux install CPU-only PyTorch first to avoid the multi-GB CUDA wheels:
+#   uv pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cpu
+-r requirements-geometry.txt
+torch==2.8.0
+torchvision==0.23.0
+huggingface-hub==0.34.4
+safetensors==0.6.2
+einops==0.8.1
+opencv-python==4.11.0.86
+# Room labels (semantics.py): doors, windows and furniture.
+transformers==4.56.2
+Pillow==11.3.0
+# Imported by the depth_anything_3 package at load time (its export helpers); not used by the worker.
+omegaconf==2.4.0
+addict==2.4.0
+requests==2.34.2
+imageio==2.38.1
+moviepy==1.0.3
+plyfile==1.1.5
+pycolmap==4.2.1
+trimesh==5.2.1
+evo==1.38.1
+# Install the model code last and without its own dependency list (it pulls in xformers, gradio-era
+# extras and an unpinned numpy):
+#   uv pip install --no-deps "depth-anything-3 @ git+https://github.com/ByteDance-Seed/Depth-Anything-3.git@3d835ec1a5802d64a8b8b15f817a1ab54809bfe4"

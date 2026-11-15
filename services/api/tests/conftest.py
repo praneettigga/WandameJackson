@@ -23,6 +23,12 @@ def make_settings(tmp_path: Path, **over) -> Settings:
     return Settings(**base)
 
 
+@pytest.fixture(autouse=True)
+def photogrammetry_engine(monkeypatch):
+    """Capture tests exercise the strict photogrammetry checks and a stand-in Meshroom worker script."""
+    monkeypatch.setenv("ROOMSHIFT_RECONSTRUCTION_ENGINE", "meshroom")
+
+
 @pytest.fixture
 def client(tmp_path):
     with TestClient(create_app(make_settings(tmp_path))) as c:

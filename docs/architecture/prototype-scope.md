@@ -28,13 +28,15 @@ Turn a blueprint into a simple, editable 3D room. A user can give one known meas
 
 - Grouped projects: several blueprints arranged as buildings and floors, reconstructed in one batch.
 - Photo/video capture (Mode 2): a 10–60 s walkthrough or 20–40 photos are prepared into views and
-  reconstructed into a coloured room mesh with local photogrammetry (Meshroom), then scaled and
-  floor-aligned from picked points and opened in the same editor as one unsegmented surface.
+  reconstructed on CPU with a learned depth model (Depth Anything 3), drawn as a floor plan and read
+  by the blueprint parser, so they open in the same editor with walls, rooms, doors, windows and
+  furniture boxes. Scale is estimated and can be corrected with a reference distance on the plan.
 
 ## Explicitly out of scope
 
-- Segmenting captured meshes into walls and furniture (scans stay one surface object).
-- Gaussian splats, NeRFs, or diffusion-based completion.
+- Gaussian splats, NeRFs, or diffusion-based completion. Parts of a captured room the camera did not see
+  are filled by stated rules and marked as assumed, never generated.
+- Cloud models: captures stay on the machine.
 - Natural-language editing.
 - Physics, gameplay, or a polished game-like experience.
 - Claims that inferred geometry was directly observed.

@@ -47,7 +47,9 @@ def cubicasa_cases(split: str, n: int, start: int = 0):
     """Hand-annotated CubiCasa5K plans (eval/cubicasa_data.py); `start` skips into the split."""
     from .cubicasa_data import load, samples
     for folder in samples(split)[start:start + n]:
-        yield folder.name, f"cubicasa-{split}", load(folder)
+        plan = load(folder)
+        plan.meta["split"] = split
+        yield folder.name, f"cubicasa-{split}", plan
 
 
 def real_cases(folder: Path):
@@ -69,6 +71,16 @@ def real_cases(folder: Path):
 def predictor(kind: str, options: ParserOptions | None = None):
     if kind == "ours":
         return lambda plan: parse_blueprint(plan.image, plan.mpp, options=options)
+    if kind in ("learned", "auto"):
+        # Ours with the learned plan model's maps as a prior (cached by eval/cubicasa_priors.py).
+        from .cubicasa_priors import load_prior
+
+        def predict(plan):
+            prior = load_prior(plan.meta.get("split", ""), plan.meta.get("source", ""))
+            if prior is None:
+                raise SystemExit(f"No cached prior for {plan.meta.get('source')}; run eval.cubicasa_priors first.")
+            return parse_blueprint(plan.image, plan.mpp, options=options, prior=prior, wall_finder=kind)
+        return predict
     if kind == "baseline":
         from .baseline.cubicasa import CubiCasaBaseline
         model = CubiCasaBaseline()
@@ -129,7 +141,8 @@ def main(argv=None):
     ap.add_argument("--n", type=int, default=20, help="number of synthetic layouts")
     ap.add_argument("--aug", default=",".join([*AUGMENTATIONS, *STYLES]), help="comma-separated augmentations/styles")
     ap.add_argument("--real-dir", type=Path, default=Path("data/gt"))
-    ap.add_argument("--parser", choices=["ours", "baseline", "both"], default="ours")
+    ap.add_argument("--parser", choices=["ours", "baseline", "both", "learned", "auto", "prior"], default="ours",
+                    help="prior = ours, learned and auto side by side (CubiCasa5K, needs cached priors)")
     ap.add_argument("--ablation", action="store_true", help="run every ParserOptions ablation of our parser")
     ap.add_argument("--out", type=Path, default=Path(__file__).parent / "results")
     ap.add_argument("--fail-under", default="", help="CI gate, e.g. layout_iou=0.9,room_f1=0.85 (means over all cases)")
@@ -146,7 +159,8 @@ def main(argv=None):
     if args.ablation:
         configs = {name: predictor("ours", opts) for name, opts in ParserOptions.ablations().items()}
     else:
-        kinds = ["ours", "baseline"] if args.parser == "both" else [args.parser]
+        kinds = (["ours", "baseline"] if args.parser == "both" else ["ours", "learned", "auto"] if args.parser == "prior"
+                 else [args.parser])
         configs = {k: predictor(k) for k in kinds}
         if args.parser == "both":
             from .fusion import fuse_walls

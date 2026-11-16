@@ -190,7 +190,7 @@ def _pier_split(band_ink: np.ndarray, band_thick: np.ndarray, start: float, T: f
 
 def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warnings: list[str],
                  detect_openings: bool = True, thick_mask: np.ndarray | None = None,
-                 door_styles: bool = False) -> list[WallLine]:
+                 door_styles: bool = False, icons: np.ndarray | None = None) -> list[WallLine]:
     lines: list[WallLine] = []
     bands = sorted(bands, key=lambda b: b.pos)
     clusters: list[list[Band]] = []
@@ -202,6 +202,7 @@ def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warni
     ink_t = ink if bands and bands[0].orient == "h" else ink.T
     thick_t = None if thick_mask is None else (thick_mask if bands and bands[0].orient == "h" else thick_mask.T)
     thin_t = (ink_t > 0) & ~(thick_t > 0) if door_styles and thick_t is not None else None
+    icons_t = None if icons is None else (icons if bands and bands[0].orient == "h" else icons.T)
     for cl in clusters:
         cl.sort(key=lambda b: b.a0)
         pos = float(np.average([b.pos for b in cl], weights=[b.a1 - b.a0 for b in cl]))
@@ -229,6 +230,21 @@ def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warni
                 """What a gap is, from its drawn symbol first and how filled it is second."""
                 span = (g1 - g0) * mpp
                 kind = _classify_gap(span, fill)
+                if icons_t is not None and kind != "tiny" and span >= MIN_WINDOW_M:
+                    # The learned model's door and window marks settle gaps the drawn lines leave unclear.
+                    band = icons_t[max(0, r0 - int(T)):r1 + int(T), int(g0):int(g1)]
+                    votes = np.bincount(band.ravel(), minlength=3)[1:3] / max(1, band.size)
+                    # A door mark covers the swing beside the wall: look a door's width either side for it.
+                    swing = icons_t[max(0, r0 - int(0.9 / mpp)):r1 + int(0.9 / mpp), int(g0):int(g1)]
+                    votes[1] = max(votes[1], 2.5 * float((swing == 2).mean()) if swing.size else 0.0)
+                    if votes.max() >= 0.25:
+                        if votes[1] >= votes[0] and DOOR_RANGE_M[0] <= span <= SYMBOL_DOOR_M[1]:
+                            symbol = (plan_symbols.door_symbol(thin_t, pos, g0, g1, T, single=span <= SINGLE_LEAF_MAX_M)
+                                      if thin_t is not None else None)
+                            line.meta[(g0, g1)] = symbol or {"style": "hinged" if span <= SINGLE_LEAF_MAX_M else "double"}
+                            return "door"
+                        if votes[0] > votes[1]:
+                            return "window"
                 if thin_t is None or kind == "tiny" or not flanked:
                     return kind
                 symbol = (plan_symbols.door_symbol(thin_t, pos, g0, g1, T, single=span <= SINGLE_LEAF_MAX_M)
@@ -764,11 +780,145 @@ def door_swing(ln: WallLine, g0: float, g1: float, ink: np.ndarray, thick_mask: 
     return f"Swing: hinge at the {hinge}, opens to the {'left' if left else 'right'} side of the wall."
 
 
+LEARNED_MODEL = "CubiCasa5K multi-task network (model_best_val_loss_var)"
+LEARNED_LICENSE = "CC-BY-NC-4.0"
+# Learned model classes (services/reconstruction/plan_model_worker.py: ROOMS, ICONS).
+LEARNED_WALL = 2
+LEARNED_ROOM_TYPES = {1: "outdoor", 3: "kitchen", 4: "living", 5: "bedroom", 6: "bath", 7: "hall", 9: "storage", 10: "garage"}
+LEARNED_FIXTURES = {3: "cabinet", 5: "toilet", 6: "sink", 9: "bathtub"}
+
+
+def _learned_walls(ink: np.ndarray, prior: dict, mpp: float) -> np.ndarray | None:
+    """Wall regions the learned model sees, kept only where the drawing has lines: a solid mask to trace."""
+    walls = (prior["rooms"] == LEARNED_WALL).astype(np.uint8) * 255
+    if not walls.any():
+        return None
+    reach = max(3, int(round(0.1 / mpp))) | 1
+    walls = cv2.bitwise_and(walls, cv2.dilate(ink, np.ones((reach, reach), np.uint8)))
+    walls = cv2.morphologyEx(walls, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    return walls if (walls > 0).sum() > 0.002 * walls.size else None
+
+
+def _learned_rooms(classes: np.ndarray, lines: list, shape, T: float, mpp: float, extra) -> list:
+    """Room footprints from the learned room classes, split by the traced walls, offset to wall centrelines
+    like `_rooms`. Each room-class region (not wall, outdoor, railing or background) is one room."""
+    h, w = shape
+    walls = np.zeros((h, w), np.uint8)
+    for ln in lines:
+        lo, hi = ln.pos - T / 2, ln.pos + T / 2
+        a0, a1 = min(ln.a0, ln.a1) - T / 2, max(ln.a0, ln.a1) + T / 2
+        x0, x1, y0, y1 = (a0, a1, lo, hi) if ln.orient == "h" else (lo, hi, a0, a1)
+        cv2.rectangle(walls, (int(round(x0)), int(round(y0))), (int(math.ceil(x1)) - 1, int(math.ceil(y1)) - 1), 255, -1)
+    for p0, p1 in extra:
+        cv2.line(walls, tuple(int(round(v)) for v in p0), tuple(int(round(v)) for v in p1), 255, max(1, int(math.ceil(T))) + 1)
+    inside = np.isin(classes, list(LEARNED_ROOM_TYPES) + [11]) & (classes != 1)
+    free = (inside & (walls == 0) & (classes != LEARNED_WALL)).astype(np.uint8)
+    free = cv2.morphologyEx(free, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(free, connectivity=4)
+    polys = []
+    for i in range(1, count):
+        if stats[i, cv2.CC_STAT_AREA] * mpp * mpp < MIN_ROOM_M2:
+            continue
+        contours, _ = cv2.findContours((labels == i).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        c = max(contours, key=cv2.contourArea)
+        c = cv2.approxPolyDP(c, max(1.0, T / 2), True).reshape(-1, 2).astype(float) + 0.5
+        if len(c) < 3:
+            continue
+        poly = Polygon(c).buffer(T / 2 + 0.5, join_style=2, mitre_limit=10).simplify(max(0.5, T / 4))
+        if poly.geom_type != "Polygon" or not poly.is_valid or poly.area <= 0:
+            continue
+        coords = list(poly.exterior.coords)[:-1]
+        polys.append(([[round(px * mpp, 4), round(py * mpp, 4)] for px, py in coords], coords))
+    return polys
+
+
+def _learned_openings(lines: list, icons: np.ndarray, T: float, mpp: float) -> None:
+    """Windows and doors the learned model marks along a wall where no gap was drawn as one (its wall mask runs
+    straight through glazing), added as openings of that wall line."""
+    for line in lines:
+        view = icons if line.orient == "h" else icons.T
+        rows = slice(max(0, int(line.pos - T)), int(line.pos + T) + 1)
+        a0, a1 = int(max(0, line.a0)), int(min(view.shape[1], line.a1))
+        if a1 - a0 < 3:
+            continue
+        band = view[rows, a0:a1]
+        for code, kind, shortest in ((1, "window", MIN_WINDOW_M), (2, "door", DOOR_RANGE_M[0])):
+            marked = (band == code).mean(axis=0) >= 0.3
+            edges = np.flatnonzero(np.diff(np.concatenate([[0], marked.astype(int), [0]])))
+            for g0, g1 in zip(edges[::2] + a0, edges[1::2] + a0):
+                width = (g1 - g0) * mpp
+                if width < shortest or (kind == "door" and width > SYMBOL_DOOR_M[1]) or width > 4.0:
+                    continue
+                if any(o[1] < g1 + T and g0 - T < o[2] for o in line.openings):
+                    continue  # a gap already read here
+                if g0 - line.a0 < T or line.a1 - g1 < T:
+                    continue  # an opening needs wall either side
+                line.openings.append((kind, float(g0), float(g1), 1.0 if kind == "window" else 0.0))
+                line.meta[(float(g0), float(g1))] = {"style": "hinged"} if kind == "door" else {}
+        line.openings.sort(key=lambda o: o[1])
+    # Door marks cover the leaf's swing beside the wall, not the wall itself: give each one to the nearest wall
+    # line it touches and take the stretch of that line it spans as the opening.
+    count, labels, stats, _ = cv2.connectedComponentsWithStats((icons == 2).astype(np.uint8))
+    for i in range(1, count):
+        x, y, bw, bh, area = stats[i]
+        if area * mpp * mpp < 0.1:
+            continue
+        best = None
+        for line in lines:
+            if line.orient == "h":
+                near, span = min(abs(line.pos - y), abs(line.pos - (y + bh))), (x, x + bw)
+                inside = y - T <= line.pos <= y + bh + T
+            else:
+                near, span = min(abs(line.pos - x), abs(line.pos - (x + bw))), (y, y + bh)
+                inside = x - T <= line.pos <= x + bw + T
+            if inside and line.a0 - T <= (span[0] + span[1]) / 2 <= line.a1 + T and (best is None or near < best[0]):
+                best = (near, line, span)
+        if best is None:
+            continue
+        _, line, (g0, g1) = best
+        g0, g1 = float(max(g0, line.a0 + T / 2)), float(min(g1, line.a1 - T / 2))
+        width = (g1 - g0) * mpp
+        if not DOOR_RANGE_M[0] <= width <= SYMBOL_DOOR_M[1] or any(o[1] < g1 and g0 < o[2] for o in line.openings):
+            continue
+        line.openings.append(("door", g0, g1, 0.0))
+        line.meta[(g0, g1)] = {"style": "hinged" if width <= SINGLE_LEAF_MAX_M else "double"}
+        line.openings.sort(key=lambda o: o[1])
+
+
+def _learned_room_types(rooms: list[dict], classes: np.ndarray, mpp: float) -> None:
+    """Rooms without a type take the learned model's majority room class inside them."""
+    for room in rooms:
+        if room.get("type") not in (None, "other"):
+            continue
+        mask = np.zeros(classes.shape, np.uint8)
+        cv2.fillPoly(mask, [np.round(np.asarray(room["polygon"]) / mpp).astype(np.int32)], 1)
+        votes = np.bincount(classes[mask > 0], minlength=12)
+        votes[[0, LEARNED_WALL, 8, 11]] = 0  # background, wall, railing, undefined say nothing about use
+        if votes.sum() and votes.max() >= 0.4 * max(1, int((mask > 0).sum())) and int(votes.argmax()) in LEARNED_ROOM_TYPES:
+            room["type"] = LEARNED_ROOM_TYPES[int(votes.argmax())]
+            room["provenance"]["notes"].append(f"Room use read by the learned plan model ({room['type']}).")
+
+
+def _learned_fixtures(icons: np.ndarray, mpp: float) -> list[dict]:
+    """Closets, toilets, sinks and baths the learned model marks, as fixture candidates."""
+    found = []
+    for code, kind in LEARNED_FIXTURES.items():
+        count, labels, stats, _ = cv2.connectedComponentsWithStats((icons == code).astype(np.uint8))
+        for i in range(1, count):
+            if stats[i, cv2.CC_STAT_AREA] * mpp * mpp < 0.04:
+                continue
+            ys, xs = np.nonzero(labels == i)
+            box = cv2.boxPoints(cv2.minAreaRect(np.column_stack([xs, ys]).astype(np.float32)))
+            found.append({"kind": kind, "corners": box, "evidence": "the learned plan model marks it as one"})
+    return found
+
+
 # What a room's fixtures say it is used for, when its name does not.
 FIXTURE_ROOMS = {"toilet": "bath", "bathtub": "bath", "shower": "bath", "stove": "kitchen", "bed": "bedroom", "sofa": "living"}
 
 
-def _fixture_objects(line_ink: np.ndarray, mpp: float, rooms: list[dict], walls: list[dict], taken: list[dict], prov) -> list[dict]:
+def _fixture_objects(line_ink: np.ndarray, mpp: float, rooms: list[dict], walls: list[dict], taken: list[dict], prov,
+                     found: list[dict] | None = None) -> list[dict]:
     """Furniture and fixture symbols as Scene objects, each turned with its back to the nearest wall."""
     from shapely.geometry import LineString
     from shapely.geometry import Point as ShapelyPoint
@@ -777,8 +927,12 @@ def _fixture_objects(line_ink: np.ndarray, mpp: float, rooms: list[dict], walls:
     building = unary_union([shape for _, shape in shapes]).buffer(0.3)
     lines = [LineString([w["start"], w["end"]]) for w in walls]
     blocked = [Polygon(_corners(o)) for o in taken]
-    out, counts = [], {}
-    for fixture in plan_symbols.find_fixtures(line_ink, mpp):
+    out = []
+    # Number on from objects already found (a second pass adds the learned model's fixtures).
+    counts: dict[str, int] = {}
+    for o in taken:
+        counts[o["name"].split()[0]] = counts.get(o["name"].split()[0], 0) + 1
+    for fixture in plan_symbols.find_fixtures(line_ink, mpp) if found is None else found:
         corners = fixture["corners"] * mpp
         centre = corners.mean(axis=0)
         point = ShapelyPoint(*centre)
@@ -973,32 +1127,94 @@ def parse_blueprint(
     wall_thickness: float | None = None,
     progress: Callable[[float], None] = lambda p: None,
     options: ParserOptions | None = None,
+    prior: dict | None = None,
+    wall_finder: str = "auto",
 ) -> dict:
-    """Return {rooms, walls, openings, objects, warnings, defaults}. Raises ParseError."""
+    """Return {rooms, walls, openings, objects, warnings, defaults}. Raises ParseError.
+
+    `prior`: maps from the learned plan model ({"rooms", "icons", "wall"}, same size as `gray`), if it ran.
+    `wall_finder`: "rules" ignores the prior, "learned" always uses it for walls, "auto" keeps the drawing-rules
+    result unless its rooms cover too little of the building, as happens on cluttered scans (the model helps
+    there and hurts clean, rotated or blurred drawings)."""
     opts = options or ParserOptions()
     notes: list[str] = []
+    if prior is not None and (wall_finder == "rules" or prior["rooms"].shape != gray.shape):
+        prior = None
     if opts.normalize:
         gray, notes = normalize_drawing(gray)
+    if prior is not None:
+        # The model read the drawing as it is; straightening would move it off its maps.
+        try:
+            learned = _parse(gray, meters_per_pixel, wall_height, wall_thickness, progress, opts, prior, "learned")
+        except ParseError:
+            learned = None
+        if wall_finder == "auto":
+            try:
+                rules = _parse_rules(gray, meters_per_pixel, wall_height, wall_thickness, progress, opts, notes, names=False)
+            except ParseError:
+                rules = None
+            if learned is None and rules is None:
+                raise ParseError("No straight walls were found, with or without the learned plan model.")
+            if rules is not None and (learned is None or _room_cover(rules) >= AUTO_COVER):
+                rules["warnings"].append("The learned plan model ran, but the drawing's own walls gave the better rooms.")
+                read_room_names(gray, rules, meters_per_pixel)  # (read only for the result that is kept)
+                result = rules
+            else:
+                result = learned
+        elif learned is None:
+            raise ParseError("The learned plan model found no walls to trace. Try the drawing rules wall finder.")
+        else:
+            result = learned
+        if result is learned:
+            read_room_names(gray, result, meters_per_pixel)
+            result["warnings"][:0] = notes
+        return result
+    return _parse_rules(gray, meters_per_pixel, wall_height, wall_thickness, progress, opts, notes)
+
+
+AUTO_COVER = 0.6  # share of the building the drawing-rules rooms must cover to be kept
+
+
+def _room_cover(result: dict) -> float:
+    """Share of the building (the hull of its walls) that a result's rooms cover. The drawing rules cover
+    nearly all of a clean plan; on a cluttered scan stray strokes leave rooms open and the share drops."""
+    from shapely.geometry import MultiPoint
+    from shapely.ops import unary_union
+    points = [p for w in result["walls"] for p in (w["start"], w["end"])]
+    if len(points) < 3 or not result["rooms"]:
+        return 0.0
+    building = MultiPoint(points).convex_hull
+    rooms = unary_union([Polygon(r["polygon"]).buffer(0) for r in result["rooms"]])
+    return float(rooms.intersection(building).area / building.area) if building.area else 0.0
+
+
+def _parse_rules(gray: np.ndarray, meters_per_pixel: float, wall_height, wall_thickness, progress, opts: ParserOptions,
+                 notes: list[str] | None = None, names: bool = True) -> dict:
+    """The drawing-rules path: straighten a slightly rotated drawing, parse, map back, read room names."""
+    notes = notes or []
     if opts.deskew:
         angle = skew_angle(gray)
         if angle is not None:
             rotated, Minv = _rotate(gray, angle)
             result = _parse(rotated, meters_per_pixel, wall_height, wall_thickness, progress, opts)
             _map_result(result, Minv, meters_per_pixel)
-            read_room_names(gray, result, meters_per_pixel)
+            if names:
+                read_room_names(gray, result, meters_per_pixel)
             result["warnings"][:0] = notes
             result["warnings"].append(
                 f"The drawing is rotated by about {angle:.1f}°. It was straightened before parsing and the walls "
                 "were mapped back to the original image.")
             return result
     result = _parse(gray, meters_per_pixel, wall_height, wall_thickness, progress, opts)
-    read_room_names(gray, result, meters_per_pixel)
+    if names:
+        read_room_names(gray, result, meters_per_pixel)
     result["warnings"][:0] = notes
     return result
 
 
 def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None, wall_thickness: float | None,
-           progress: Callable[[float], None], opts: ParserOptions) -> dict:
+           progress: Callable[[float], None], opts: ParserOptions, prior: dict | None = None,
+           wall_finder: str = "auto") -> dict:
     mpp = meters_per_pixel
     h_img, w_img = gray.shape
     warnings: list[str] = [
@@ -1025,7 +1241,15 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     T = estimate_thickness_px(ink)
     wall_ink = ink
     hatched = None
-    if opts.hatch_walls and noise_sigma(gray) < NOISY_SIGMA:
+    learned = None
+    if prior is not None and wall_finder == "learned":
+        learned = _learned_walls(ink, prior, mpp)
+        if learned is not None:
+            wall_ink = learned
+            T = estimate_thickness_px(wall_ink)
+            warnings.append(f"Walls were located with the learned plan model ({LEARNED_MODEL}, {LEARNED_LICENSE}, "
+                            "non-commercial use only) and traced from the drawn lines inside them.")
+    if learned is None and opts.hatch_walls and noise_sigma(gray) < NOISY_SIGMA:
         hatched = _hatch_fill(gray, ink, mpp)
         if hatched is not None and estimate_thickness_px(hatched) > T:
             wall_ink = hatched
@@ -1033,7 +1257,7 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
             warnings.append("Walls are drawn with hatching; the hatched bands were filled to find wall centerlines.")
         else:
             hatched = None
-    if (hatched is None and opts.outline_walls and math.isfinite(0.35 / mpp)
+    if (learned is None and hatched is None and opts.outline_walls and math.isfinite(0.35 / mpp)
             and 0.35 / mpp < max(h_img, w_img) / 4):
         # Accept the fill only when it clearly changes the drawing: much more ink and much thicker strokes.
         # Solid-wall plans gain little (only window glazing bands), so they are left untouched.
@@ -1045,7 +1269,7 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
             warnings.append("Walls appear to be drawn as double outlines; the space between parallel strokes was "
                             "filled to find wall centerlines.")
     dense = None
-    if (wall_ink is ink and opts.dense_walls and math.isfinite(0.1 / mpp) and T * mpp < 0.06
+    if (wall_ink is ink and learned is None and opts.dense_walls and math.isfinite(0.1 / mpp) and T * mpp < 0.06
             and 0.1 / mpp < max(h_img, w_img) / 8):
         # No solid wall strokes and no plain double lines: the walls may be outlines filled with ticks.
         dense = _dense_walls(ink, mpp, T)
@@ -1058,7 +1282,10 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
             dense = None
     if T < 2:
         raise ParseError("Could not find solid wall strokes (lines are at most 1 px thick). Use a drawing where walls are drawn as thick solid lines.")
-    k = (max(3, int(round(T * 0.6))) | 1) if opts.thin_line_removal else 1  # odd kernels avoid a 1 px anchor shift
+    k = (max(3, int(round(T * 0.6))) | 1) if opts.thin_line_removal else 1
+    if learned is not None:
+        # The learned mask holds walls only, thin partitions included: keep anything wall-thick (from 5 cm).
+        k = max(3, int(round(0.05 / mpp))) | 1  # odd kernels avoid a 1 px anchor shift
     # An elliptical kernel removes thin linework at any angle, so diagonal wall strokes survive.
     thick = cv2.morphologyEx(wall_ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
     solid = thick  # the heavy strokes alone, before thin partitions are added (symbols keep their thin edges)
@@ -1069,7 +1296,7 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     horiz = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((1, L), np.uint8))
     vert = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((L, 1), np.uint8))
     min_band = k
-    if opts.thin_walls and opts.thin_line_removal and dense is None:
+    if opts.thin_walls and opts.thin_line_removal and dense is None and learned is None:
         # (Where walls are patterned bands, single thin strokes are furniture, dimensions and symbols.)
         # Partitions are often much thinner than outer walls, and the opening above (sized from the dominant
         # stroke) erases them. A second pass with a kernel just above line weight (no wall is thinner than
@@ -1089,8 +1316,9 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     progress(0.4)
 
     pier = thick if opts.pier_split else None
-    h_lines = _merge_lines(_bands(horiz, "h", min_band), soft_ink, T, mpp, warnings, opts.opening_detection, pier, opts.door_styles)
-    v_lines = _merge_lines(_bands(vert, "v", min_band), soft_ink, T, mpp, warnings, opts.opening_detection, pier, opts.door_styles)
+    icon_map = prior["icons"] if learned is not None else None
+    h_lines = _merge_lines(_bands(horiz, "h", min_band), soft_ink, T, mpp, warnings, opts.opening_detection, pier, opts.door_styles, icon_map)
+    v_lines = _merge_lines(_bands(vert, "v", min_band), soft_ink, T, mpp, warnings, opts.opening_detection, pier, opts.door_styles, icon_map)
     if opts.door_styles:
         h_lines, v_lines = _split_crossings(h_lines, v_lines, T), _split_crossings(v_lines, h_lines, T)
         line_weight = (soft_ink > 0) & ~(thick > 0)
@@ -1100,6 +1328,8 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
         _snap(h_lines, v_lines, T)
         _snap(v_lines, h_lines, T)
     lines = [ln for ln in h_lines + v_lines if (ln.a1 - ln.a0) * mpp >= MIN_WALL_M]
+    if learned is not None:
+        _learned_openings(lines, prior["icons"], T, mpp)
     arcs = curved_walls.find_arcs(thick, cv2.bitwise_or(horiz, vert), T, mpp) if opts.curved_walls else []
     if arcs:
         lines = [ln for ln in lines if not curved_walls.lies_on(arcs, ln, T)]
@@ -1256,7 +1486,12 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
 
     rooms = []
     extra = [(dg["p0"], dg["p1"]) for dg in diagonals] + [chord for arc in arcs for chord in arc.chords()]
-    for j, (poly, outline_px) in enumerate(_rooms(lines, (h_img, w_img), T, mpp, extra), 1):
+    found_rooms = _rooms(lines, (h_img, w_img), T, mpp, extra)
+    if learned is not None:
+        # Rooms the model segments, closed by its walls and the walls traced here alike: door gaps and
+        # broken wall strokes no longer merge a room with its neighbour.
+        found_rooms = _learned_rooms(prior["rooms"], lines, (h_img, w_img), T, mpp, extra) or found_rooms
+    for j, (poly, outline_px) in enumerate(found_rooms, 1):
         rooms.append({
             "id": f"room-{j}", "name": f"Room {j}", "polygon": poly, "height": height,
             "provenance": prov("inferred", {"height": height_origin, "name": "inferred"},
@@ -1301,6 +1536,8 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
                 owner["type"] = "stair" if owner.get("type") != "hall" else "hall"
                 if owner["name"].startswith("Room "):
                     owner["type"] = "stair"
+    if learned is not None:
+        _learned_room_types(rooms, prior["rooms"], mpp)
     if opts.fixtures and line_ink is not None:
         # Symbols stand against walls, so their back edge runs right along the wall face: keep everything
         # but the solid wall strokes themselves.
@@ -1308,6 +1545,8 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
         sharp = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
         symbol_ink = (sharp > 0) & ~(cv2.dilate(solid, np.ones((3, 3), np.uint8)) > 0)
         objects.extend(_fixture_objects(symbol_ink, mpp, rooms, walls, objects, prov))
+        if learned is not None:
+            objects.extend(_fixture_objects(symbol_ink, mpp, rooms, walls, objects, prov, _learned_fixtures(prior["icons"], mpp)))
     if not rooms:
         warnings.append("No enclosed rooms were detected; walls were reconstructed without floors.")
     warnings.extend(completeness_warnings(walls, openings, rooms))
@@ -1317,6 +1556,7 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
 
     return {
         "rooms": rooms, "walls": walls, "openings": openings, "objects": objects,
+        "model": {"checkpoint": LEARNED_MODEL, "license": LEARNED_LICENSE} if learned is not None else None,
         "warnings": warnings,
         "defaults": {"wallHeight": height, "wallThickness": round(wall_thickness if wall_thickness is not None else (measured_m if 0.03 <= measured_m <= 1.0 else DEFAULT_WALL_THICKNESS), 4)},
     }

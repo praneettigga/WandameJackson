@@ -192,7 +192,8 @@ def symbol_metrics(pred_scene: dict, gt_objects: list[dict], gt_room_types: list
     stairs = object_metrics([o for o in found if o["category"] == "stairs"], [o for o in gt_objects if o["category"] == "stairs"], prefix="stairs")
     right = [math.cos(found_stairs["rotationY"]) * -truth["up"][1] + math.sin(found_stairs["rotationY"]) * -truth["up"][0] > 0.7
              for found_stairs, truth in (([o for o in found if o["category"] == "stairs"][i], [o for o in gt_objects if o["category"] == "stairs"][j])
-                                         for i, j in stairs.pop("matches"))]
+                                         for i, j in stairs.pop("matches"))
+             if "up" in truth]  # real annotations may not record which way a stair climbs
     fixtures = object_metrics([o for o in found if o["category"] != "stairs"], [o for o in gt_objects if o["category"] != "stairs"], prefix="fixture")
     fixtures.pop("matches")
     out = {**stairs, "stairs_dir_acc": sum(right) / len(right) if right else float("nan"), **fixtures}

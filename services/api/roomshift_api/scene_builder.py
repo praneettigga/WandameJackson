@@ -11,11 +11,15 @@ from .storage import now_iso
 ESTIMATED_METHODS = {"wall-thickness", "image-extent", "camera-height", "depth-model", "door-height"}
 
 
-def blueprint_scene(project: dict, gray, calibration: dict, wall_height, wall_thickness, progress=None) -> dict:
-    """Parse `gray` at the calibrated scale. Raises ParseError when no usable geometry is found."""
+def blueprint_scene(project: dict, gray, calibration: dict, wall_height, wall_thickness, progress=None,
+                    prior: dict | None = None, wall_finder: str = "auto") -> dict:
+    """Parse `gray` at the calibrated scale. Raises ParseError when no usable geometry is found.
+    `prior`: the learned plan model's maps, when it ran (see parser.parse_blueprint)."""
     plan = project.get("capturePlan")
     # A plan drawn from a capture is square to the page by construction; an angled wall in it is not a skewed scan.
     options = {"options": ParserOptions(deskew=False)} if plan else {}
+    if prior is not None:
+        options.update(prior=prior, wall_finder=wall_finder)
     result = parse_blueprint(gray, calibration["metersPerPixel"], wall_height, wall_thickness, progress or (lambda p: None), **options)
     result["warnings"] = calibration.get("notes", []) + (plan["warnings"] if plan else []) + result["warnings"]
     if calibration.get("method") in ESTIMATED_METHODS:
@@ -46,7 +50,9 @@ def blueprint_scene(project: dict, gray, calibration: dict, wall_height, wall_th
         "upAxis": "Y",
         "source": source,
         "reconstruction": {
-            "parser": {"name": PARSER_NAME, "version": PARSER_VERSION, "checkpoint": None, "license": None},
+            "parser": {"name": PARSER_NAME, "version": PARSER_VERSION,
+                       "checkpoint": (result.get("model") or {}).get("checkpoint"),
+                       "license": (result.get("model") or {}).get("license")},
             "createdAt": now_iso(),
             "defaults": result["defaults"],
             "warnings": result["warnings"],

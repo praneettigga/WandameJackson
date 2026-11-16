@@ -79,7 +79,8 @@ def _annotate_sheet(img, px, ox, oz, W, D, t, axes_x):
 
 def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool = True,
              style: str = "solid", chamfer: bool = False, annotated: bool = False,
-             partition: float | None = None, symbols: bool = False, curved: bool = False) -> Plan:
+             partition: float | None = None, symbols: bool = False, curved: bool = False,
+             furnished: bool = False) -> Plan:
     """style: 'solid' (filled wall strokes), 'outline' (double-line walls) or 'hatched' (architectural
     poché: light diagonal hatching between a heavy line and a light line).
     chamfer: cut the top-left outer corner with a 45° diagonal wall.
@@ -88,7 +89,9 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
     partition: interior walls this thick (m) instead of the outer wall thickness (mixed thickness).
     symbols: doors of every kind the parser reads (hinged over a threshold line, double, sliding, folding, open
     passage) and a staircase with its arrow; `meta["objects"]` holds the stairs' footprint and climb direction.
-    curved: the right outer wall bows outwards as a circular bay; the truth is its chords of at most 10 degrees."""
+    curved: the right outer wall bows outwards as a circular bay; the truth is its chords of at most 10 degrees.
+    furnished: each room gets a use (bath, kitchen, bedroom, living) and the furniture and fixture symbols that
+    go with it, against its walls; `meta["objects"]` holds their footprints and `meta["room_types"]` the uses."""
     rng = random.Random(seed)
     W, D = round(rng.uniform(6, 12), 1), round(rng.uniform(5, 9), 1)
     t = round(rng.uniform(0.15, 0.25), 2)
@@ -273,6 +276,45 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
                 cv2.arrowedLine(img, (px(a[0] + tail), px(spot[1])), (px(a[0] + tip), px(spot[1])), 0, 1, tipLength=0.1)
             objects.append({"category": "stairs", "up": [0, up] if along_z else [up, 0],
                             "polygon": [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]]})
+    room_types = []
+    if furnished:
+        from .furniture_symbols import ROOM_SETS, SIZES, draw
+        uses = ["bath", "kitchen", "bedroom", "living"]
+        rng.shuffle(uses)
+        gap = t / 2 + 0.06
+        doors = [o["centre"] for o in openings if o["type"] == "door"]
+        for n, (x0, z0, x1, z1) in enumerate(leaves):
+            use = uses[n % len(uses)]
+            room_types.append(([[x0, z0], [x1, z0], [x1, z1], [x0, z1]], use))
+            placed: list[list[list[float]]] = []
+            # Walls of the room as (start corner, direction along it, direction into the room), clockwise.
+            sides = [((x0 + gap, z0 + gap), (1, 0), (0, 1)), ((x1 - gap, z0 + gap), (0, 1), (-1, 0)),
+                     ((x1 - gap, z1 - gap), (-1, 0), (0, -1)), ((x0 + gap, z1 - gap), (0, -1), (1, 0))]
+            for kind in ROOM_SETS[use]:
+                w, d = SIZES[kind]
+                for _ in range(12):
+                    start, along, inward = sides[rng.randrange(4)]
+                    span = (x1 - x0 if along[0] else z1 - z0) - 2 * gap
+                    if span < w + 0.2:
+                        continue
+                    offset = rng.uniform(0.1, span - w - 0.1)
+                    origin = (start[0] + along[0] * offset, start[1] + along[1] * offset)
+                    # A table stands 0.6 m out from the wall with chairs on both long sides; the rest against it.
+                    near, far = (0.1, 0.6 + d + 0.6) if kind == "table" else (0.0, d + 0.5)
+                    corners = [(origin[0] + along[0] * x + inward[0] * z, origin[1] + along[1] * x + inward[1] * z)
+                               for x, z in ((-0.1, near), (w + 0.1, near), (w + 0.1, far), (-0.1, far))]
+                    xs, zs = zip(*corners)
+                    box = (min(xs), min(zs), max(xs), max(zs))
+                    clear_doors = all(not (box[0] - 1.0 < cx < box[2] + 1.0 and box[1] - 1.0 < cz < box[3] + 1.0) for cx, cz in doors)
+                    clear = all(box[2] < q[0] or box[0] > q[2] or box[3] < q[1] or box[1] > q[3] for q in placed)
+                    inside = box[0] > x0 and box[2] < x1 and box[1] > z0 and box[3] < z1
+                    if clear and clear_doors and inside:
+                        if kind == "table":  # a table stands free of the wall, with chairs on both long sides
+                            origin = (origin[0] + inward[0] * 0.6, origin[1] + inward[1] * 0.6)
+                        footprint = draw(img, kind, origin, along, inward, px)
+                        objects.append({"category": kind, "polygon": footprint})
+                        placed.append(box)
+                        break
     if clutter:
         for i, (x0, z0, x1, z1) in enumerate(leaves):
             cv2.putText(img, f"ROOM {i + 1}", (px((x0 + x1) / 2) - 30, px((z0 + z1) / 2)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, 0, 1)
@@ -299,7 +341,9 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
                if o["type"] == "door" and "swing_side" in o else {})}
            for o in openings]
     return Plan(img, mpp, walls, ops, rooms, {"seed": seed, "size": [W, D], "thickness": t,
-                                              "style": style, "chamfer": c, **({"objects": objects} if symbols else {})})
+                                              "style": style, "chamfer": c,
+                                              **({"objects": objects} if symbols or furnished else {}),
+                                              **({"room_types": room_types} if furnished else {})})
 
 
 # ---- augmentations (GT stays exact) ---------------------------------------------------------
@@ -444,4 +488,6 @@ STYLES = {
     "symbols": {"symbols": True},
     # A curved bay window wall.
     "curved": {"curved": True},
+    # Rooms with uses and the furniture and fixture symbols that go with them.
+    "furnished": {"furnished": True},
 }

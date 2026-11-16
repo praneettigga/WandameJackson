@@ -3,6 +3,7 @@ import math
 from collections import Counter
 
 import cv2
+from shapely.geometry import LineString, Point
 import pytest
 
 from eval.generate import generate
@@ -164,3 +165,50 @@ def test_straight_plans_get_no_arcs():
             assert not any('curved wall' in w['provenance']['notes'][0] for w in result['walls'])
     for name, mpp in (('floor-1.png', 0.01), ('services-apartment.png', 0.02), ('complex-01-house-with-stairs.png', 0.02)):
         assert not any('curved wall' in w['provenance']['notes'][0] for w in parsed(name, mpp)['walls'])
+
+
+def test_furniture_and_fixture_symbols_become_objects_facing_away_from_their_wall():
+    from collections import Counter
+    found = drawn = wrong = 0
+    kinds = Counter()
+    typed = rooms = 0
+    for seed in range(12):
+        plan = generate(seed, furnished=True)
+        result = parse_blueprint(plan.image, plan.mpp)
+        metrics = symbol_metrics(result, plan.meta['objects'], plan.meta['room_types'])
+        truth = [o for o in plan.meta['objects'] if o['category'] != 'stairs']
+        objects = [o for o in result['objects'] if o['category'] != 'stairs']
+        drawn += len(truth)
+        found += round(metrics['fixture_recall'] * len(truth)) if truth else 0
+        wrong += len(objects) - (round(metrics['fixture_precision'] * len(objects)) if objects else 0)
+        kinds.update(o['name'].split()[0].lower() for o in objects)
+        typed += metrics['room_type_acc'] * len(plan.meta['room_types'])
+        rooms += len(plan.meta['room_types'])
+        for o in objects:
+            assert o['provenance']['fieldOrigins'] == {'dimensions': 'inferred'} and 'Plan symbol read as' in o['provenance']['notes'][0]
+    assert found >= 0.85 * drawn and wrong == 0
+    assert set(kinds) == {'bed', 'sofa', 'table', 'cabinet', 'toilet', 'sink', 'bathtub', 'shower', 'stove'}
+    assert typed >= 0.6 * rooms  # rooms take a use from a toilet, bath, shower, cooktop, bed or sofa
+
+
+def test_wall_backed_symbol_turns_its_back_to_the_wall():
+    import math
+    plan = generate(1, furnished=True)
+    result = parse_blueprint(plan.image, plan.mpp)
+    for o in result['objects']:
+        if o['componentId'] not in ('bed.basic', 'sofa.basic', 'cabinet.basic'):
+            continue
+        # The back (local -z) points at the nearest wall: a point 0.1 m behind the object is beside a wall.
+        back = (o['position'][0] - math.sin(o['rotationY']) * (o['dimensions'][2] / 2 + 0.1),
+                o['position'][2] - math.cos(o['rotationY']) * (o['dimensions'][2] / 2 + 0.1))
+        near = min(Point(back).distance(LineString([w['start'], w['end']])) for w in result['walls'])
+        assert near < 0.25, o['name']
+
+
+def test_plans_without_symbols_get_no_furniture():
+    for seed in range(6):
+        for options in ({}, {'symbols': True}, {'curved': True}):
+            plan = generate(seed, **options)
+            assert not [o for o in parse_blueprint(plan.image, plan.mpp)['objects'] if o['category'] != 'stairs']
+    for name, mpp in (('floor-1.png', 0.01), ('services-apartment.png', 0.02), ('apartment_blueprint.png', 0.01)):
+        assert not [o for o in parsed(name, mpp)['objects'] if o['category'] != 'stairs']

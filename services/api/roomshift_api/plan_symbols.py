@@ -295,3 +295,117 @@ def find_stairs(thin: np.ndarray, mpp: float) -> list[dict]:
         if all(math.hypot(stair["x"] - o["x"], stair["z"] - o["z"]) > 0.5 * max(stair["run"], o["run"]) for o in kept):
             kept.append(stair)
     return kept
+
+
+# --- furniture and fixtures ------------------------------------------------------------------------
+
+# kind -> (Scene category, componentId or None, height in metres)
+FIXTURE_KINDS = {
+    "bed": ("bed", "bed.basic", 0.55), "sofa": ("sofa", "sofa.basic", 0.85), "table": ("table", "table.basic", 0.75),
+    "cabinet": ("cabinet", "cabinet.basic", 2.0), "toilet": ("other", None, 0.75), "sink": ("other", None, 0.85),
+    "bathtub": ("other", None, 0.55), "shower": ("other", None, 0.1), "stove": ("other", None, 0.9),
+}
+
+
+def _shape(contour: np.ndarray) -> tuple[float, float, float]:
+    """(long side, short side, how much of its tightest rectangle the shape fills), in pixels."""
+    (_, _), (w, h), _ = cv2.minAreaRect(contour)
+    long, short = max(w, h), min(w, h)
+    return long, short, float(cv2.contourArea(contour)) / max(1.0, long * short)
+
+
+def _round(contour: np.ndarray) -> bool:
+    """Whether a closed shape is a circle or an ellipse: smooth (no corners) and convex."""
+    if len(contour) < 8:
+        return False
+    perimeter = cv2.arcLength(contour, True)
+    corners = len(cv2.approxPolyDP(contour, 0.03 * perimeter, True))
+    area = float(cv2.contourArea(contour))
+    return corners >= 6 and area / max(1.0, float(cv2.contourArea(cv2.convexHull(contour)))) > 0.93
+
+
+def _diagonals(mask: np.ndarray, box: np.ndarray) -> float:
+    """Share of both diagonals of a box (4 corners) that is inked: 1 for a drawn cross."""
+    shares = []
+    for p, q in ((box[0], box[2]), (box[1], box[3])):
+        t = np.linspace(0.12, 0.88, 30)[:, None]
+        points = np.round(p + (q - p) * t).astype(int)
+        inside = (points[:, 0] >= 0) & (points[:, 0] < mask.shape[1]) & (points[:, 1] >= 0) & (points[:, 1] < mask.shape[0])
+        shares.append(float(mask[points[inside, 1], points[inside, 0]].mean()) if inside.any() else 0.0)
+    return min(shares)
+
+
+def find_fixtures(thin: np.ndarray, mpp: float) -> list[dict]:
+    """Furniture and fixture symbols in line-weight ink (walls removed): [{"kind", "corners" (4 x 2 px),
+    "evidence"}]. Only shapes that match a symbol clearly are returned; the rest are left alone.
+
+    Read from the drawing's own structure: a cross in a long box is a wardrobe, in a square a shower; rings
+    in a box are a cooktop; one ring in a small box a basin; a cistern and a bowl a toilet; a tub inside a
+    long box a bath; pillows at one end a bed; back and arms a sofa; chairs round an empty box a table.
+    """
+    m = 1 / mpp
+    ink = cv2.morphologyEx(thin.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    contours, hierarchy = cv2.findContours(ink, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    if hierarchy is None:
+        return []
+    hierarchy = hierarchy[0]
+    holes: dict[int, list[np.ndarray]] = {}
+    for i, (_, _, _, parent) in enumerate(hierarchy):
+        if parent >= 0:
+            holes.setdefault(parent, []).append(contours[i])
+    outer = [i for i, h in enumerate(hierarchy) if h[3] < 0 and len(contours[i]) >= 4]
+    shapes = {i: _shape(contours[i]) for i in outer}
+    centres = {i: contours[i].reshape(-1, 2).mean(axis=0) for i in outer}
+    boxes = {i: cv2.boxPoints(cv2.minAreaRect(contours[i])) for i in outer}
+
+    def inside(j, box):
+        return cv2.pointPolygonTest(box.astype(np.float32), tuple(map(float, centres[j])), False) > 0
+
+    small = [i for i in outer if 0.25 * m <= shapes[i][0] <= 0.65 * m and shapes[i][1] >= 0.2 * m and shapes[i][2] > 0.8]
+    found = []
+    for i in outer:
+        long, short, fill = shapes[i]
+        L, S = long * mpp, short * mpp
+        if not (0.3 <= L <= 2.6 and 0.25 <= S <= 2.1):
+            continue
+        box, area = boxes[i], long * short
+        # What is drawn within: holes of this stroke other than its own empty interior, and separate strokes inside it.
+        own = [h for h in holes.get(i, []) if cv2.contourArea(h) > (0.05 * m) ** 2]
+        empty = len(own) == 1 and cv2.contourArea(own[0]) > 0.85 * area
+        parts = ([] if empty else own) + [contours[j] for j in outer if j != i and shapes[j][0] < long and inside(j, box)]
+        rings = [h for h in parts if _round(h)]
+        kind = evidence = None
+        cross = _diagonals(ink > 0, box) if fill > 0.85 else 0.0
+        if cross >= 0.8:
+            if S >= 0.7 and L / S < 1.25:
+                kind, evidence = "shower", "a square crossed corner to corner"
+            elif 0.45 <= S <= 0.75 and L >= 0.8:
+                kind, evidence = "cabinet", "a long box crossed corner to corner (a wardrobe)"
+        elif fill > 0.85 and 0.45 <= S and L <= 1.0 and len([h for h in rings if 0.12 <= _shape(h)[0] * mpp <= 0.3]) >= 3:
+            kind, evidence = "stove", "rings in a box (a cooktop)"
+        elif fill > 0.85 and 0.4 <= L <= 0.8 and 0.3 <= S <= 0.65 and len(rings) == 1 \
+                and 0.2 <= cv2.contourArea(rings[0]) / area <= 0.75 and len(parts) <= 2:
+            kind, evidence = "sink", "a basin drawn in a small box"
+        elif fill > 0.85 and 1.3 <= L <= 2.0 and 0.6 <= S <= 0.95 and any(
+                0.45 <= cv2.contourArea(h) / area <= 0.9 and not _round(h) for h in parts):
+            kind, evidence = "bathtub", "a tub drawn inside a long box"
+        elif 0.5 <= L <= 0.85 and 0.3 <= S <= 0.55 and 0.6 <= fill <= 0.92 and len(own) == 2:
+            bowl, cistern = max(own, key=cv2.contourArea), min(own, key=cv2.contourArea)
+            if _round(bowl) and cv2.contourArea(bowl) >= 0.3 * area and _shape(cistern)[0] >= 1.6 * _shape(cistern)[1]:
+                kind, evidence = "toilet", "a cistern and a bowl"
+        elif fill > 0.85 and 1.8 <= L <= 2.3 and 0.8 <= S <= 2.0 and 1 <= len(pillows := [j for j in small if j != i and inside(j, box)]) <= 2:
+            kind, evidence = "bed", f"{len(pillows)} pillow(s) at one end of a bed-sized box"
+        elif fill > 0.85 and 1.2 <= L <= 3.2 and 0.7 <= S <= 1.1 and len(own) >= 3 and any(
+                _shape(h)[0] >= 4 * max(1.0, _shape(h)[1]) for h in own):
+            kind, evidence = "sofa", "a seat with a back and arms"
+        elif fill > 0.85 and empty and 0.6 <= L <= 2.4 and 0.5 <= S <= 1.4:
+            reach = long / 2 + 0.6 * m
+            chairs = [j for j in small if j != i and np.linalg.norm(centres[j] - box.mean(axis=0)) < reach and not inside(j, box)]
+            if len(chairs) >= 2:
+                kind, evidence = "table", f"a table with {len(chairs)} chairs drawn round it"
+        if kind:
+            found.append({"kind": kind, "corners": box, "evidence": evidence})
+    # Pillows, chairs, rings and drains are parts of a bigger symbol, not symbols of their own.
+    return [f for f in found if not any(g is not f and cv2.contourArea(g["corners"]) > cv2.contourArea(f["corners"])
+            and cv2.pointPolygonTest(g["corners"].astype(np.float32), tuple(map(float, f["corners"].mean(axis=0))), False) > 0
+            for g in found)]

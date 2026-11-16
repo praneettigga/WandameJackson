@@ -88,7 +88,9 @@ def assign_room_names(rooms: list[dict], labels: list[Label], meters_per_pixel: 
             continue
         exact, _, _, name, printed = max(names)
         room['name'] = name
-        room['type'] = room_type(name)
+        # A name that says what the room is wins; a bare "Room 3" keeps a use read from its fixtures.
+        if room_type(name) != 'other' or not room.get('type'):
+            room['type'] = room_type(name)
         room['provenance']['fieldOrigins']['name'] = 'evidence'
         room['provenance']['notes'].append(
             f'Room name read from blueprint text: {name}.' if exact else

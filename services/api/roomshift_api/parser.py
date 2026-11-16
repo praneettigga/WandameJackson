@@ -67,6 +67,7 @@ class ParserOptions:
     door_styles: bool = True  # read door symbols: swing arcs (also over a threshold line), double, sliding, folding, open passages
     stairs: bool = True  # staircases drawn as evenly spaced tread lines become stair objects
     curved_walls: bool = True  # thick strokes bending along a circular arc become runs of short straight walls
+    fixtures: bool = True  # furniture and fixture symbols (beds, sofas, tables, wardrobes, toilets, basins, baths, showers, cooktops)
     dense_walls: bool = False  # (off: helps walls, hurts rooms on CubiCasa5K) walls drawn as outlines filled with ticks or patterns: bands of dense ink
 
     @classmethod
@@ -763,6 +764,67 @@ def door_swing(ln: WallLine, g0: float, g1: float, ink: np.ndarray, thick_mask: 
     return f"Swing: hinge at the {hinge}, opens to the {'left' if left else 'right'} side of the wall."
 
 
+# What a room's fixtures say it is used for, when its name does not.
+FIXTURE_ROOMS = {"toilet": "bath", "bathtub": "bath", "shower": "bath", "stove": "kitchen", "bed": "bedroom", "sofa": "living"}
+
+
+def _fixture_objects(line_ink: np.ndarray, mpp: float, rooms: list[dict], walls: list[dict], taken: list[dict], prov) -> list[dict]:
+    """Furniture and fixture symbols as Scene objects, each turned with its back to the nearest wall."""
+    from shapely.geometry import LineString
+    from shapely.geometry import Point as ShapelyPoint
+    from shapely.ops import unary_union
+    shapes = [(room, Polygon(room["polygon"])) for room in rooms]
+    building = unary_union([shape for _, shape in shapes]).buffer(0.3)
+    lines = [LineString([w["start"], w["end"]]) for w in walls]
+    blocked = [Polygon(_corners(o)) for o in taken]
+    out, counts = [], {}
+    for fixture in plan_symbols.find_fixtures(line_ink, mpp):
+        corners = fixture["corners"] * mpp
+        centre = corners.mean(axis=0)
+        point = ShapelyPoint(*centre)
+        if not building.contains(point) or any(b.contains(point) for b in blocked):
+            continue  # outside the building (a legend or key), or part of a staircase
+        kind = fixture["kind"]
+        category, component, height = plan_symbols.FIXTURE_KINDS[kind]
+        if kind == "table":
+            # Free-standing: its long side runs along its own x axis.
+            k = max(range(4), key=lambda k: np.linalg.norm(corners[(k + 1) % 4] - corners[k]))
+        else:
+            # The side nearest a wall is its back (the headboard, the sofa back, the cistern, the wardrobe's back).
+            k = min(range(4), key=lambda k: min((ln.distance(ShapelyPoint(*((corners[k] + corners[(k + 1) % 4]) / 2)))
+                                                  for ln in lines), default=1e9))
+        a, b = corners[k], corners[(k + 1) % 4]
+        u = (a + b) / 2 - centre
+        u = u / (np.linalg.norm(u) or 1.0)
+        width = float(np.linalg.norm(b - a))
+        depth = float(np.linalg.norm(corners[(k + 2) % 4] - b))
+        name = kind.title()
+        counts[name] = counts.get(name, 0) + 1
+        owner = next((room for room, shape in shapes if shape.contains(point)), None)
+        if owner is not None and FIXTURE_ROOMS.get(kind) and owner.get("type") in (None, "other"):
+            owner["type"] = FIXTURE_ROOMS[kind]
+            owner["provenance"]["notes"].append(f"Room use taken from its {kind} symbol.")
+        out.append({
+            "id": f"{kind}-{counts[name]}", "name": f"{name} {counts[name]}", "category": category, "componentId": component,
+            "position": [round(float(centre[0]), 4), 0.0, round(float(centre[1]), 4)],
+            # Local -z (the back) points towards the wall: three.js maps local -z to (-sin, -cos) in (x, z).
+            "rotationY": round(float(math.atan2(-u[0], -u[1])), 6),
+            "dimensions": [round(width, 4), height, round(depth, 4)],
+            "provenance": prov("evidence", {"dimensions": "inferred"},
+                               [f"Plan symbol read as a {kind}: {fixture['evidence']}.",
+                                f"Footprint measured from the symbol; height assumed ({height} m)."],
+                               [_factor("Symbol match", 0.8, f"The drawing shows {fixture['evidence']}.")]),
+        })
+    return out
+
+
+def _corners(o: dict) -> list[list[float]]:
+    w, _, d = o["dimensions"]
+    c, s = math.cos(o["rotationY"]), math.sin(o["rotationY"])
+    return [[o["position"][0] + x * c + z * s, o["position"][2] - x * s + z * c]
+            for x, z in ((-w / 2, -d / 2), (w / 2, -d / 2), (w / 2, d / 2), (-w / 2, d / 2))]
+
+
 def completeness_warnings(walls: list[dict], openings: list[dict], rooms: list[dict]) -> list[str]:
     """Structural checks on the result (metres): wall ends that meet nothing and rooms with no door."""
     def seg_dist(p, a, b):
@@ -999,6 +1061,7 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     k = (max(3, int(round(T * 0.6))) | 1) if opts.thin_line_removal else 1  # odd kernels avoid a 1 px anchor shift
     # An elliptical kernel removes thin linework at any angle, so diagonal wall strokes survive.
     thick = cv2.morphologyEx(wall_ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    solid = thick  # the heavy strokes alone, before thin partitions are added (symbols keep their thin edges)
     min_wall_px = MIN_WALL_M / mpp
     if not math.isfinite(min_wall_px) or min_wall_px > max(h_img, w_img):
         raise ParseError("The calibrated image is smaller than the minimum 0.3 m wall length. Check the calibration distance.")
@@ -1202,7 +1265,8 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
                                _room_factors(outline_px, thick, T)),
         })
     objects = []
-    if opts.stairs and rooms:
+    line_ink = None
+    if (opts.stairs or opts.fixtures) and rooms:
         # Line-weight ink away from the walls and their openings (glazing and threshold lines are not treads).
         wall_zone = np.zeros((h_img, w_img), np.uint8)
         for ln in lines:
@@ -1210,6 +1274,7 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
             a0, a1 = int(ln.a0 - T / 2) - 2, int(math.ceil(ln.a1 + T / 2)) + 2
             cv2.rectangle(wall_zone, (a0, lo) if ln.orient == "h" else (lo, a0), (a1, hi) if ln.orient == "h" else (hi, a1), 255, -1)
         line_ink = (soft_ink > 0) & ~(cv2.dilate(thick, np.ones((3, 3), np.uint8)) > 0) & ~(wall_zone > 0)
+    if opts.stairs and line_ink is not None:
         shapes = [(room, Polygon(room["polygon"])) for room in rooms]
         for stair in plan_symbols.find_stairs(line_ink, mpp):
             x, z = stair["x"] * mpp, stair["z"] * mpp
@@ -1236,6 +1301,13 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
                 owner["type"] = "stair" if owner.get("type") != "hall" else "hall"
                 if owner["name"].startswith("Room "):
                     owner["type"] = "stair"
+    if opts.fixtures and line_ink is not None:
+        # Symbols stand against walls, so their back edge runs right along the wall face: keep everything
+        # but the solid wall strokes themselves.
+        # Hairlines fade under the blur used for walls: threshold the drawing itself.
+        sharp = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        symbol_ink = (sharp > 0) & ~(cv2.dilate(solid, np.ones((3, 3), np.uint8)) > 0)
+        objects.extend(_fixture_objects(symbol_ink, mpp, rooms, walls, objects, prov))
     if not rooms:
         warnings.append("No enclosed rooms were detected; walls were reconstructed without floors.")
     warnings.extend(completeness_warnings(walls, openings, rooms))

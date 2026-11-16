@@ -23,7 +23,7 @@ from typing import Callable
 import cv2
 import numpy as np
 from shapely.geometry import Point, Polygon
-from . import plan_symbols
+from . import curved_walls, plan_symbols
 from .room_labels import read_room_names
 
 PARSER_NAME = "opencv-rectilinear-fallback"
@@ -65,6 +65,7 @@ class ParserOptions:
     thin_line_removal: bool = True  # morphological opening that drops text, arcs and glazing lines
     door_styles: bool = True  # read door symbols: swing arcs (also over a threshold line), double, sliding, folding, open passages
     stairs: bool = True  # staircases drawn as evenly spaced tread lines become stair objects
+    curved_walls: bool = True  # thick strokes bending along a circular arc become runs of short straight walls
 
     @classmethod
     def ablations(cls) -> dict[str, "ParserOptions"]:
@@ -987,13 +988,19 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
         _snap(h_lines, v_lines, T)
         _snap(v_lines, h_lines, T)
     lines = [ln for ln in h_lines + v_lines if (ln.a1 - ln.a0) * mpp >= MIN_WALL_M]
-    diagonals = (_diagonal_segments(thick, horiz, vert, lines, T, mpp, 0.8 if opts.clutter_filter else 0.0)
+    arcs = curved_walls.find_arcs(thick, cv2.bitwise_or(horiz, vert), T, mpp) if opts.curved_walls else []
+    if arcs:
+        lines = [ln for ln in lines if not curved_walls.lies_on(arcs, ln, T)]
+    arc_joins = curved_walls.join(arcs, lines, T)
+    arc_ink = curved_walls.draw(arcs, thick.shape, T)
+    diagonals = (_diagonal_segments(thick, cv2.bitwise_or(horiz, arc_ink), vert, lines, T, mpp,
+                                    0.8 if opts.clutter_filter else 0.0)
                  if opts.diagonal_walls else [])
     if opts.clutter_filter:
         lines, diagonals = _prune_clutter(lines, diagonals, T, mpp, (h_img, w_img), warnings)
 
     thick_px = int((thick > 0).sum())
-    explained = cv2.bitwise_or(horiz, vert)
+    explained = cv2.bitwise_or(cv2.bitwise_or(horiz, vert), arc_ink)
     for dg in diagonals:
         cv2.line(explained, tuple(int(round(v)) for v in dg["p0"]), tuple(int(round(v)) for v in dg["p1"]), 255,
                  max(1, int(math.ceil(T))) + 2)
@@ -1001,7 +1008,7 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     if thick_px and float(((thick > 0) & (covered == 0)).sum()) / thick_px > 0.15:
         warnings.append("A significant part of the thick linework does not form straight walls (curved walls or "
                         "symbols) and was ignored.")
-    if not lines and not diagonals:
+    if not lines and not diagonals and not arcs:
         raise ParseError("No straight horizontal/vertical walls were found. Use a clean, high-contrast, mainly rectilinear floor plan with walls drawn as solid thick lines, and check the calibration distance.")
     progress(0.6)
 
@@ -1109,10 +1116,34 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
                                         f"{dg['coverage']:.0%} of the fitted centerline lies on a solid wall stroke."),
                                 _factor("Junctions", joined[0], joined[1])]),
         })
+    for arc, met in zip(arcs, arc_joins):
+        t_m = wall_thickness if wall_thickness is not None else (T * mpp if 0.03 <= T * mpp <= 1.0 else DEFAULT_WALL_THICKNESS)
+        chords = arc.chords()
+        joined = {0: (0.4, "Neither end meets another wall."), 1: (0.7, "One end meets an adjoining wall."),
+                  2: (1.0, "Both ends meet adjoining walls.")}[met]
+        for n, (p0, p1) in enumerate(chords, 1):
+            walls.append({
+                "id": f"wall-{len(walls) + 1}",
+                "start": [round(p0[0] * mpp, 4), round(p0[1] * mpp, 4)],
+                "end": [round(p1[0] * mpp, 4), round(p1[1] * mpp, 4)],
+                "height": height,
+                "thickness": round(t_m, 4),
+                "provenance": prov("evidence",
+                                   {"height": height_origin, "thickness": "user" if wall_thickness is not None else "inferred"},
+                                   [f"Piece {n} of {len(chords)} of a curved wall: a circular arc of radius {arc.r * mpp:.2f} m "
+                                    f"through {math.degrees(arc.sweep):.0f}°, drawn as straight pieces of at most "
+                                    f"{curved_walls.MAX_CHORD_DEGREES}°.",
+                                    "Openings are not detected on curved walls.",
+                                    f"Height {'supplied by the user' if wall_height is not None else 'assumed from the default'}: {height} m."],
+                                   [_factor("Arc fit", arc.fit, f"{arc.fit:.0%} of the stroke lies on the fitted circle."),
+                                    _factor("Junctions", joined[0], joined[1])]),
+            })
+    if arcs:
+        warnings.append(f"{len(arcs)} curved wall(s) were fitted as circular arcs and drawn as short straight pieces.")
     progress(0.8)
 
     rooms = []
-    extra = [(dg["p0"], dg["p1"]) for dg in diagonals]
+    extra = [(dg["p0"], dg["p1"]) for dg in diagonals] + [chord for arc in arcs for chord in arc.chords()]
     for j, (poly, outline_px) in enumerate(_rooms(lines, (h_img, w_img), T, mpp, extra), 1):
         rooms.append({
             "id": f"room-{j}", "name": f"Room {j}", "polygon": poly, "height": height,

@@ -127,3 +127,36 @@ def test_generated_stairs_are_found_with_their_direction_and_nothing_else_is_a_s
     assert not any(stairs(parse_blueprint(generate(seed).image, 0.02)) for seed in range(10))
     for name, mpp in (('apartment_blueprint.png', 0.01), ('services-apartment.png', 0.02), ('synthetic-06-four-rooms.png', 0.0073)):
         assert not stairs(parsed(name, mpp))
+
+
+def test_curved_bay_wall_is_fitted_as_an_arc_and_closes_its_rooms():
+    from shapely.geometry import Point, Polygon
+    layout = rooms_found = 0.0
+    for seed in range(8):
+        plan = generate(seed, curved=True)
+        result = parse_blueprint(plan.image, plan.mpp)
+        metrics = evaluate(result, {'walls': plan.walls, 'openings': plan.openings, 'rooms': plan.rooms})
+        layout += metrics['layout_iou']
+        rooms_found += metrics['room_f1']
+        pieces = [w for w in result['walls'] if 'curved wall' in w['provenance']['notes'][0]]
+        assert len(pieces) >= 4 and any('curved wall(s)' in w for w in result['warnings'])
+        # The pieces follow the drawn bay: every piece's middle is within a wall thickness of the true arc.
+        truth = Polygon([p for room in plan.rooms for p in room]).convex_hull.exterior
+        for w in pieces:
+            middle = ((w['start'][0] + w['end'][0]) / 2, (w['start'][1] + w['end'][1]) / 2)
+            assert truth.distance(Point(middle)) < 0.25
+    assert layout / 8 > 0.95 and rooms_found / 8 > 0.95
+    # Without arc fitting the bay leaves rooms open.
+    plan = generate(6, curved=True)
+    off = parse_blueprint(plan.image, plan.mpp, options=ParserOptions(curved_walls=False))
+    assert evaluate(off, {'walls': plan.walls, 'openings': plan.openings, 'rooms': plan.rooms})['layout_iou'] < 0.5
+
+
+def test_straight_plans_get_no_arcs():
+    for seed in range(6):
+        for options in ({}, {'chamfer': True}, {'symbols': True}):
+            plan = generate(seed, **options)
+            result = parse_blueprint(plan.image, plan.mpp)
+            assert not any('curved wall' in w['provenance']['notes'][0] for w in result['walls'])
+    for name, mpp in (('floor-1.png', 0.01), ('services-apartment.png', 0.02), ('complex-01-house-with-stairs.png', 0.02)):
+        assert not any('curved wall' in w['provenance']['notes'][0] for w in parsed(name, mpp)['walls'])

@@ -79,7 +79,7 @@ def _annotate_sheet(img, px, ox, oz, W, D, t, axes_x):
 
 def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool = True,
              style: str = "solid", chamfer: bool = False, annotated: bool = False,
-             partition: float | None = None, symbols: bool = False) -> Plan:
+             partition: float | None = None, symbols: bool = False, curved: bool = False) -> Plan:
     """style: 'solid' (filled wall strokes), 'outline' (double-line walls) or 'hatched' (architectural
     poché: light diagonal hatching between a heavy line and a light line).
     chamfer: cut the top-left outer corner with a 45° diagonal wall.
@@ -87,7 +87,8 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
     two rows of dimension lines and a border frame.
     partition: interior walls this thick (m) instead of the outer wall thickness (mixed thickness).
     symbols: doors of every kind the parser reads (hinged over a threshold line, double, sliding, folding, open
-    passage) and a staircase with its arrow; `meta["objects"]` holds the stairs' footprint and climb direction."""
+    passage) and a staircase with its arrow; `meta["objects"]` holds the stairs' footprint and climb direction.
+    curved: the right outer wall bows outwards as a circular bay; the truth is its chords of at most 10 degrees."""
     rng = random.Random(seed)
     W, D = round(rng.uniform(6, 12), 1), round(rng.uniform(5, 9), 1)
     t = round(rng.uniform(0.15, 0.25), 2)
@@ -100,7 +101,25 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
     outer = [((ox + c, oz), (ox + W, oz)), ((ox + W, oz), (ox + W, oz + D)),
              ((ox + W, oz + D), (ox, oz + D)), ((ox, oz + D), (ox, oz + c))]
     diagonal = [((ox, oz + c), (ox + c, oz))] if chamfer else []
-    segments = outer + diagonal + parts
+    arc: list[tuple[float, float]] = []
+    if curved:
+        # A bay bulging out of the right wall by `bulge`, through both of its corners.
+        bulge, half = round(min(1.5, D / 3), 2), D / 2
+        radius = (half ** 2 + bulge ** 2) / (2 * bulge)
+        centre = (ox + W + bulge - radius, oz + half)
+        sweep = math.asin(half / radius)
+        steps = max(2, math.ceil(math.degrees(2 * sweep) / 10))
+        arc = [(centre[0] + radius * math.cos(a), centre[1] + radius * math.sin(a))
+               for a in np.linspace(-sweep, sweep, steps + 1)]
+        arc[0], arc[-1] = (ox + W, oz), (ox + W, oz + D)
+
+        def bay_x(z):
+            return centre[0] + math.sqrt(max(0.0, radius ** 2 - (z - centre[1]) ** 2))
+        # Partitions running to the right wall now run on to the bay.
+        parts = [((a[0], a[1]), (bay_x(b[1]), b[1])) if b[0] == ox + W and a[1] == b[1] else
+                 ((bay_x(a[1]), a[1]), (b[0], b[1])) if a[0] == ox + W and a[1] == b[1] else (a, b) for a, b in parts]
+        outer = [seg for seg in outer if seg != ((ox + W, oz), (ox + W, oz + D))]
+    segments = outer + diagonal + parts + list(zip(arc[:-1], arc[1:]))
 
     # Openings: one door per partition, an entrance door and 1-3 windows on the outer walls.
     openings: list[dict] = []
@@ -134,7 +153,7 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
         place(rng.choice(outer), "window", round(rng.uniform(1.0, 1.8), 1))
 
     px = lambda m: int(round(m / mpp))  # noqa: E731
-    img = np.full((px(D + 2 * margin_m), px(W + 2 * margin_m)), 255, np.uint8)
+    img = np.full((px(D + 2 * margin_m), px(W + 2 * margin_m + (1.6 if curved else 0))), 255, np.uint8)
     tp = max(2, px(t))
     thick_of = lambda seg: tp_ if seg in parts else t  # noqa: E731
     # Walls are drawn into a mask first so outline style can trace their boundary.
@@ -149,6 +168,9 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
             cv2.rectangle(mask, (px(min(ax, bx) - th / 2), px(az - th / 2)), (px(max(ax, bx) + th / 2) - 1, px(az + th / 2) - 1), 255, -1)
     for (ax, az), (bx, bz) in diagonal:
         cv2.line(mask, (px(ax), px(az)), (px(bx), px(bz)), 255, tp)
+    if arc:
+        cv2.polylines(mask, [np.array([[px(centre[0] + radius * math.cos(a)), px(centre[1] + radius * math.sin(a))]
+                                       for a in np.linspace(-sweep, sweep, 90)], np.int32)], False, 255, tp)
     for o in openings:
         (ax, az), (bx, bz) = o["seg"]
         cx, cz = o["centre"]
@@ -265,6 +287,12 @@ def generate(seed: int, mpp: float = 0.02, margin_m: float = 1.0, clutter: bool 
     walls = [{"start": list(a), "end": list(b), "thickness": thick_of((a, b))} for a, b in segments]
     rooms = [([[x0 + c, z0], [x1, z0], [x1, z1], [x0, z1], [x0, z0 + c]] if c and (x0, z0) == (ox, oz)
               else [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]) for x0, z0, x1, z1 in leaves]
+    if arc:
+        # Rooms against the bay take in the part of it between their walls.
+        for room, (x0, z0, x1, z1) in zip(rooms, leaves):
+            if x1 == ox + W:
+                inner = [[x, z] for x, z in arc if z0 + 1e-6 < z < z1 - 1e-6]
+                room[1:3] = [[bay_x(z0), z0], *inner, [bay_x(z1), z1]]
     ops = [{"type": o["type"], "centre": o["centre"], "width": o["width"],
             **({"style": o["style"]} if symbols and o["type"] == "door" else {}),
             **({"swing_side": o["swing_side"], "horizontal": o["seg"][0][1] == o["seg"][1][1]}
@@ -414,4 +442,6 @@ STYLES = {
     "sheet": {"style": "hatched", "partition": 0.1, "annotated": True},
     # Every kind of door symbol the parser reads.
     "symbols": {"symbols": True},
+    # A curved bay window wall.
+    "curved": {"curved": True},
 }

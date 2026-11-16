@@ -72,14 +72,15 @@ def capabilities():
 
 
 def metric_scale(torch, device, paths, depth, intrinsics, progress):
-    """Meters per reconstruction unit from the metric depth model, or None if it cannot be loaded."""
+    """(meters per reconstruction unit, relative spread between the views) from the metric depth model,
+    or (None, None) if it cannot be loaded or too few views agree on a reading."""
     import numpy as np
     from depth_anything_3.api import DepthAnything3
     try:
         model = DepthAnything3.from_pretrained(METRIC_MODEL).to(device).eval()
     except Exception:  # offline, or the download failed: the plan falls back to a camera-height estimate
         traceback.print_exc(file=sys.stderr)
-        return None
+        return None, None
     chosen = np.unique(np.linspace(0, len(paths) - 1, min(METRIC_VIEWS, len(paths))).round().astype(int))
     ratios = []
     for n, i in enumerate(chosen):
@@ -96,7 +97,11 @@ def metric_scale(torch, device, paths, depth, intrinsics, progress):
             valid &= ~np.asarray(sky[0], bool)
         if valid.sum() > 1000:
             ratios.append(float(np.median(metric[valid] / depth[i][valid])))
-    return float(np.median(ratios)) if len(ratios) >= 3 else None
+    if len(ratios) < 3:
+        return None, None
+    median = float(np.median(ratios))
+    # How far the views disagree (median absolute deviation, as a share): the plan weights this estimate by it.
+    return median, float(np.median(np.abs(np.array(ratios) / median - 1)) * 1.4826)
 
 
 def reconstruct(request, output):
@@ -146,9 +151,9 @@ def reconstruct(request, output):
     rgb = np.asarray(prediction.processed_images, dtype=np.uint8)
     height, width = depth.shape[1:]
     del model, prediction
-    scale = None
+    scale = spread = None
     if os.environ.get('ROOMSHIFT_DA3_METRIC', '1') != '0':
-        scale = metric_scale(torch, device, paths, depth, k, progress)
+        scale, spread = metric_scale(torch, device, paths, depth, k, progress)
     labelled = False
     if os.environ.get('ROOMSHIFT_DA3_SEMANTICS', '1') != '0':
         try:
@@ -183,6 +188,7 @@ def reconstruct(request, output):
               'worldToViewer': WORLD_TO_VIEWER.tolist(), 'calibration': None,
               # Approximate meters per mesh unit from the metric depth model; the mesh itself stays unscaled.
               'estimatedMetersPerUnit': scale,
+              'estimatedScaleSpread': spread,
               'artifacts': {'mesh': 'mesh.glb', 'diagnostic': 'diagnostic.ply'}, 'cameras': cameras,
               'inputFrames': [{'id': f['id'], 'sha256': f['sha256'], 'path': f['path']} for f in frames],
               'provenance': {'origin': 'inferred', 'source': 'imagery', 'completion': 'none',

@@ -44,7 +44,8 @@ EMPTY = {"walls": [], "openings": [], "rooms": [], "objects": []}
 
 def predict(case: Case):
     """(plan, Scene) exactly as opening the capture in the editor builds them."""
-    plan = build_plan(case.positions, case.triangles, case.cameras, case.metric, case.meters_per_unit, case.labels)
+    plan = build_plan(case.positions, case.triangles, case.cameras, case.metric, case.meters_per_unit, case.labels,
+                      scale_spread=case.scale_spread)
     project = {"id": "p_eval", "name": case.name, "source": {"kind": "video"}}
     drawn, calibration = plan_project(project, {"jobId": "j_eval"}, plan, case.labels is not None)
     return plan, blueprint_scene(drawn, plan.image, calibration, plan.wall_height, None)
@@ -165,7 +166,7 @@ def load_case(folder: Path) -> Case:
     positions, triangles = read_mesh(folder / "mesh.glb")
     poses = np.array([c["cameraToWorld"] for c in manifest["cameras"] if c.get("registered", True)])
     return Case(folder.name, positions, triangles, poses, manifest["units"] == "meters",
-                manifest.get("estimatedMetersPerUnit"), labels, truth)
+                manifest.get("estimatedMetersPerUnit"), labels, truth, scale_spread=manifest.get("estimatedScaleSpread"))
 
 
 def collect(reconstruction: Path, target: Path) -> None:
@@ -189,7 +190,8 @@ def export_ply(folder: Path, target: Path) -> None:
     The frame is the plan's (so a model's walls can be scored against the same truth): x and y on the floor, z height.
     """
     case = load_case(folder)
-    plan = build_plan(case.positions, case.triangles, case.cameras, case.metric, case.meters_per_unit, case.labels)
+    plan = build_plan(case.positions, case.triangles, case.cameras, case.metric, case.meters_per_unit, case.labels,
+                      scale_spread=case.scale_spread)
     levelled = np.c_[case.positions, np.ones(len(case.positions))] @ plan.mesh_to_plan.T
     points = np.c_[levelled[:, 0], -levelled[:, 2], levelled[:, 1]].astype("<f4")
     vertices = np.zeros(len(points), dtype=[("xyz", "<f4", 3), ("rgb", "u1", 3)])

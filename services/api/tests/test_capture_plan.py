@@ -229,6 +229,17 @@ def test_other_standing_things_are_boxed_and_named():
     assert named == {'table': 'table', 'plant': 'other'}
 
 
+def test_depth_model_weight_follows_how_much_its_views_agreed():
+    positions, triangles = room_mesh()
+    moved, poses = tilted(positions, cameras())
+    hint = 1.12 / 0.37  # 12% out; the assumed camera height is right here
+    agreed = build_plan(moved, triangles, poses, metric=False, meters_per_unit=hint, scale_spread=0.02)
+    unsure = build_plan(moved, triangles, poses, metric=False, meters_per_unit=hint, scale_spread=0.4)
+    # Views that agreed are trusted more (but never better than 5%); views that disagreed barely count.
+    assert agreed.scale > unsure.scale and unsure.scale == pytest.approx(1 / 0.37, rel=0.03)
+    assert agreed.scale_spread < unsure.scale_spread
+
+
 def test_mesh_without_room_structure_is_rejected():
     grid, faces = patch(np.zeros(3), [2, 0, 0], [0, 2, 0])
     with pytest.raises(PlanError):

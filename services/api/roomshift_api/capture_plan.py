@@ -281,9 +281,11 @@ def _furniture(spots_all, tops_all, classes, views_all, numbers_all, room, eye, 
 
 
 def build_plan(positions: np.ndarray, triangles: np.ndarray, camera_to_world: list, metric: bool,
-               meters_per_unit: float | None = None, labels: tuple | None = None, debug: dict | None = None) -> CapturePlan:
+               meters_per_unit: float | None = None, labels: tuple | None = None, debug: dict | None = None,
+               scale_spread: float | None = None) -> CapturePlan:
     """`camera_to_world`: 4x4 OpenCV-camera poses in mesh coordinates. `metric`: the mesh is in meters.
     `meters_per_unit`: an approximate scale from a metric depth model, used when the mesh is not metric.
+    `scale_spread`: how much that model's per-view readings disagreed (a share); 10% is assumed without it.
     `labels`: (points (n, 3) in mesh coordinates, class ids, view indices[, per-view object numbers]) from the worker, if any.
     `debug`: filled with the intermediate grids and lines, for tuning (eval/capture_run.py --debug)."""
     warnings: list[str] = []
@@ -332,7 +334,8 @@ def build_plan(positions: np.ndarray, triangles: np.ndarray, camera_to_world: li
         # Independent estimates of meters per mesh unit, each with how far off it typically is.
         sources = [("camera-height", ASSUMED_CAMERA_HEIGHT_M / camera_height, 0.15)]
         if meters_per_unit and 0.5 <= camera_height * meters_per_unit <= 2.5:
-            sources.append(("depth-model", float(meters_per_unit), 0.10))
+            # Never trusted better than 5%: agreeing views can share one bias.
+            sources.append(("depth-model", float(meters_per_unit), max(0.05, scale_spread) if scale_spread else 0.10))
         if labels is not None and len(labels[0]):
             doors = np.asarray(labels[1]) == DOOR
             door = _door_top(np.asarray(labels[0], dtype=np.float64)[doors] @ up - floor, np.asarray(labels[2])[doors])

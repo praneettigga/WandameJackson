@@ -247,6 +247,7 @@ class Case:
     labels: tuple | None  # (points, classes, views)
     truth: dict  # rooms, walls, openings (centre, width, type), objects (category, polygon) in truth meters
     truth_to_mesh: np.ndarray | None = None  # known for synthetic cases; real cases are aligned by fit
+    scale_spread: float | None = None  # the depth model's own disagreement between views, when the worker reported it
 
 
 def capture(name, room: Room, poses, scale_error=0.0, seed=0, tilt=0.37, noise=0.004, numbered=True) -> Case:

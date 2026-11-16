@@ -67,7 +67,7 @@ def plan_scene(storage, project, manifest, mesh_path, contracts_dir):
                       *([stored['instances']] if 'instances' in stored.files else []))
     try:
         plan = build_plan(*read_mesh(mesh_path), cameras, manifest['units'] == 'meters',
-                          manifest.get('estimatedMetersPerUnit'), labels)
+                          manifest.get('estimatedMetersPerUnit'), labels, scale_spread=manifest.get('estimatedScaleSpread'))
     except PlanError as error:
         return None, str(error)
     ok, png = cv2.imencode('.png', plan.image)

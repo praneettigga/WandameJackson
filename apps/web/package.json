@@ -13,8 +13,9 @@
     "e2e": "node ./node_modules/@playwright/test/cli.js test",
     "e2e:capture": "node ./node_modules/@playwright/test/cli.js test --config playwright.capture.config.ts",
     "e2e:calibration": "node ./node_modules/@playwright/test/cli.js test --config playwright.calibration.config.ts",
-    "format": "node ./node_modules/prettier/bin/prettier.cjs --write src tests e2e e2e-capture e2e-calibration \"*.config.ts\" eslint.config.js",
-    "format:check": "node ./node_modules/prettier/bin/prettier.cjs --check src tests e2e e2e-capture e2e-calibration \"*.config.ts\" eslint.config.js"
+    "e2e:assembly": "node ./node_modules/@playwright/test/cli.js test --config playwright.assembly.config.ts",
+    "format": "node ./node_modules/prettier/bin/prettier.cjs --write src tests e2e e2e-capture e2e-calibration e2e-assembly \"*.config.ts\" eslint.config.js",
+    "format:check": "node ./node_modules/prettier/bin/prettier.cjs --check src tests e2e e2e-capture e2e-calibration e2e-assembly \"*.config.ts\" eslint.config.js"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.6",

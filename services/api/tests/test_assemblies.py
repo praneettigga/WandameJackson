@@ -108,3 +108,30 @@ def test_floor_manual_reference_is_used_and_job_links_cannot_be_forged(client, m
     assert len(r['submittedJobs']) == 1 and len(r['errors']) == 1
     assert wait_job(client, r['submittedJobs'][0]['id'])['status'] == 'succeeded'
     assert client.get(f'/api/projects/{ids[0]}/scene').json()['source']['calibration']['metersPerPixel'] == .02
+
+
+def test_duplicated_floor_is_an_independent_copy_with_its_edits(client, monkeypatch):
+    monkeypatch.setattr(ocr, 'read_labels', lambda image: [])
+    pid = upload(client)
+    job = client.post(f'/api/projects/{pid}/reconstruct', json={'calibration': {
+        'pointA': [40, 40], 'pointB': [440, 40], 'distanceMeters': 10}})
+    assert wait_job(client, job.json()['job']['id'])['status'] == 'succeeded'
+    scene = client.get(f'/api/projects/{pid}/scene').json()
+    scene['rooms'][0]['name'] = 'Typical flat'
+    scene = client.put(f'/api/projects/{pid}/scene', json=scene).json()
+    copy = client.post(f'/api/projects/{pid}/duplicate', json={'name': 'Floor 2'})
+    assert copy.status_code == 201, copy.text
+    cid = copy.json()['project']['id']
+    assert cid != pid and copy.json()['project']['name'] == 'Floor 2' and copy.json()['project']['hasScene']
+    assert copy.json()['image']['url'] == f'/api/projects/{cid}/blueprint'
+    assert client.get(f'/api/projects/{cid}/blueprint').content == client.get(f'/api/projects/{pid}/blueprint').content
+    duplicate = client.get(f'/api/projects/{cid}/scene').json()
+    assert duplicate['id'] == cid and duplicate['revision'] == 0 and duplicate['rooms'][0]['name'] == 'Typical flat'
+    assert duplicate['source']['imageUrl'] == f'/api/projects/{cid}/blueprint'
+    # Editing the copy leaves the original alone, and the copy can be saved and grouped.
+    duplicate['rooms'][0]['name'] = 'Penthouse'
+    assert client.put(f'/api/projects/{cid}/scene', json=duplicate).status_code == 200
+    assert client.get(f'/api/projects/{pid}/scene').json()['rooms'][0]['name'] == 'Typical flat'
+    group = make_group(client, [pid, cid])
+    assert set(group['scenes']) == {pid, cid}
+    assert client.post('/api/projects/p_missing0000/duplicate', json={}).status_code == 404

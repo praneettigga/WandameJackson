@@ -165,7 +165,9 @@ export default function App() {
       >
         <aside className="left-panel panel">
           {state.assembly && (
-            <AssemblyControls onReconstruct={(ids) => void reconstructGroup(ids)} />
+            <AssemblyControls
+              onReconstruct={(ids, overrides) => void reconstructGroup(ids, overrides)}
+            />
           )}
           {state.workspace === 'Reconstruct' && state.scene?.source.capture && !project ? (
             <section className="project-section">

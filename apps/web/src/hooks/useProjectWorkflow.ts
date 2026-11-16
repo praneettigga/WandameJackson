@@ -11,7 +11,7 @@ import {
   type ProjectEnvelope,
   type ScaleCalibration,
 } from '../api';
-import { floorsOf, type Floor } from '../assembly';
+import { autoAlign, floorsOf, type Floor } from '../assembly';
 import { DEMO_PROJECT_ID, LAST_PROJECT_KEY } from '../constants';
 import { restorableDraft } from '../draft';
 import { loadLibrary } from '../library';
@@ -344,7 +344,31 @@ export function useProjectWorkflow() {
     // Only user changes to calibration fields should update the active floor request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scaleMode, points, distance, height, thickness]);
-  async function reconstructGroup(ids?: string[]) {
+  /** Line up floors still at their default placement with the floor below; manual offsets are kept. */
+  function alignNewFloors() {
+    const s = useEditor.getState();
+    if (!s.assembly || s.busy) return;
+    const fresh = new Set(
+      floorsOf(s.assembly)
+        .filter((f) => f.offset[0] === 0 && f.offset[1] === 0)
+        .map((f) => f.id),
+    );
+    const moves = autoAlign(s.assembly, editorScenes(s)).filter(
+      (r) => fresh.has(r.floorId) && Math.hypot(...r.offset) > 0.05,
+    );
+    if (!moves.length) return;
+    s.updateAssembly((a) => {
+      for (const move of moves)
+        floorsOf(a).find((f) => f.id === move.floorId)!.offset = move.offset;
+    });
+    setNotice(
+      `${moves.length} floor(s) lined up with the floor below by their outlines and stair cores. Check the assembled view, then save.`,
+    );
+  }
+  async function reconstructGroup(
+    ids?: string[],
+    overrides: Record<string, Floor['settings']> = {},
+  ) {
     const current = useEditor.getState();
     if (!current.assembly || current.busy) return;
     const targets =
@@ -366,6 +390,15 @@ export function useProjectWorkflow() {
     const next = structuredClone(current.assembly);
     const active = floorsOf(next).find((f) => f.projectId === current.activeProjectId);
     if (active && (!ids || ids.includes(active.projectId))) updateFloorSettings(active);
+    // Settings chosen from the panel (a scale borrowed from another floor) win over the form.
+    for (const floor of floorsOf(next))
+      if (overrides[floor.projectId]) floor.settings = structuredClone(overrides[floor.projectId]);
+    const forActive = active && overrides[active.projectId]?.calibration;
+    if (forActive) {
+      setScaleMode('manual');
+      setPoints([forActive.pointA, forActive.pointB]);
+      setDistance(String(fromMeters(forActive.distanceMeters, useEditor.getState().lengthUnit)));
+    }
     await guarded(async () => {
       const saved = await api.saveAssembly(next);
       useEditor.setState({ assembly: saved.assembly, assemblyDirty: false });
@@ -393,6 +426,7 @@ export function useProjectWorkflow() {
         result.submittedJobs.map((j) => j.projectId),
       );
     });
+    alignNewFloors();
   }
   let scale: number | null = null;
   try {

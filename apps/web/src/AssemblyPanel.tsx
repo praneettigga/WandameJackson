@@ -3,7 +3,10 @@ import { useEffect, useRef, useState } from 'react';
 import { api, type AssemblyEnvelope, type ProjectEnvelope } from './api';
 import { useEditor, editorScenes } from './store';
 import {
+  autoAlign,
   floorsOf,
+  scaleIssues,
+  stairWarnings,
   newBuilding,
   newFloor,
   minimumStoryHeight,
@@ -369,7 +372,17 @@ function FilePreview({ file }: { file: File }) {
   return <img src={url || undefined} alt={`Preview ${file.name}`} />;
 }
 
-export function AssemblyControls({ onReconstruct }: { onReconstruct: (ids?: string[]) => void }) {
+const scaleMethodLabels: Record<string, string> = {
+  'printed-dimension': 'printed dimension',
+  'wall-thickness': 'estimated from wall thickness',
+  'image-extent': 'estimated from image size',
+};
+export function AssemblyControls({
+  onReconstruct,
+}: {
+  onReconstruct: (ids?: string[], overrides?: Record<string, Floor['settings']>) => void;
+}) {
+  const [alignment, setAlignment] = useState('');
   const s = useEditor(
     useShallow((s) => ({
       activateFloor: s.activateFloor,
@@ -398,6 +411,75 @@ export function AssemblyControls({ onReconstruct }: { onReconstruct: (ids?: stri
     });
   }
   const errors = layoutErrors(s.assembly, scenes);
+  const stairs = stairWarnings(s.assembly, scenes);
+  const scales = scaleIssues(s.assembly, scenes);
+  const unsaved = (f: Floor) =>
+    (f.projectId === s.activeProjectId && s.dirty) || Boolean(s.floorStates[f.projectId]?.dirty);
+  function align() {
+    if (!s.assembly) return;
+    const results = autoAlign(s.assembly, scenes);
+    s.updateAssembly((a) => {
+      for (const r of results) floorsOf(a).find((f) => f.id === r.floorId)!.offset = r.offset;
+    });
+    const named = (id: string) => floors.find((f) => f.id === id)?.name ?? id;
+    setAlignment(
+      results.length
+        ? results
+            .map(
+              (r) =>
+                `${named(r.floorId)}: outlines overlap ${Math.round(r.overlap * 100)}%` +
+                (r.cores
+                  ? `, ${Math.round(r.cores * 100)}% of its stair and lift cores line up`
+                  : '') +
+                '.',
+            )
+            .join(' ')
+        : 'Nothing to align: reconstruct at least two floors of a building first.',
+    );
+  }
+  async function duplicateFloor() {
+    if (!active || !building) return;
+    if (unsaved(active)) {
+      useEditor.setState({ error: 'Save this floor first, so the copy includes your edits.' });
+      return;
+    }
+    useEditor.setState({ busy: true, error: null });
+    try {
+      const copy = await api.duplicateProject(active.projectId, `${active.name} copy`);
+      const next = structuredClone(useEditor.getState().assembly!);
+      const target = next.buildings.find((b) => b.id === building.id)!;
+      target.floors.splice(target.floors.findIndex((f) => f.id === active.id) + 1, 0, {
+        ...newFloor(copy.project.id, `${active.name} copy`),
+        offset: [...active.offset],
+        rotationY: active.rotationY,
+        storyHeight: active.storyHeight,
+        settings: structuredClone(active.settings),
+      });
+      const saved = await api.saveAssembly(next);
+      useEditor.getState().adoptAssembly(saved);
+      useEditor.setState({ assemblyDirty: false });
+      useEditor.getState().activateFloor(copy.project.id);
+    } catch (e) {
+      useEditor.setState({ busy: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  function removeFloor() {
+    if (!active || !building || floors.length < 2) return;
+    if (
+      unsaved(active) &&
+      !window.confirm(
+        `${active.name} has unsaved edits. Remove it from the grouped project anyway?`,
+      )
+    )
+      return;
+    const next =
+      building.floors.find((f) => f.id !== active.id) ?? floors.find((f) => f.id !== active.id)!;
+    s.activateFloor(next.projectId);
+    s.updateAssembly((a) => {
+      for (const b of a.buildings) b.floors = b.floors.filter((f) => f.id !== active.id);
+      a.buildings = a.buildings.filter((b) => b.floors.length);
+    });
+  }
   return (
     <section className="assembly-panel">
       <h4>BUILDINGS & FLOORS</h4>
@@ -531,14 +613,42 @@ export function AssemblyControls({ onReconstruct }: { onReconstruct: (ids?: stri
               .find((p) => p.floor.id === active.id)
               ?.elevation.toFixed(2)}{' '}
             m · inferred 0.20 m slab
+            {scenes[active.projectId] &&
+              ` · scale ${scenes[active.projectId].source.calibration.metersPerPixel.toFixed(4)} m/px, ${
+                scaleMethodLabels[scenes[active.projectId].source.calibration.method ?? ''] ??
+                scenes[active.projectId].source.calibration.method ??
+                'manual reference'
+              }`}
           </small>
+          <div className="button-row">
+            <button
+              disabled={s.busy || !scenes[active.projectId]}
+              onClick={() => void duplicateFloor()}
+            >
+              Duplicate floor
+            </button>
+            <button disabled={s.busy || floors.length < 2} onClick={removeFloor}>
+              Remove floor
+            </button>
+          </div>
+          <p className="hint">
+            Duplicate adds an editable copy above this floor, for repeated floors. Remove takes the
+            floor out of this grouped project; its blueprint project is kept.
+          </p>
           <h4>ALIGNMENT</h4>
           <p className="hint">
-            Centered automatically. Adjust the assembled view to line up walls.
+            Auto-align lines each floor up with the one below by its outline and its stair and lift
+            cores. Adjust the offsets below to fine-tune.
           </p>
-          <button disabled={s.busy} onClick={() => s.setView({ mode: 'all' })}>
-            Show assembled view
-          </button>
+          <div className="button-row">
+            <button disabled={s.busy} onClick={align}>
+              Auto-align floors
+            </button>
+            <button disabled={s.busy} onClick={() => s.setView({ mode: 'all' })}>
+              Show assembled view
+            </button>
+          </div>
+          {alignment && <p className="hint">{alignment}</p>}
           {(['Floor', 'Building'] as const).map((kind) => (
             <div key={kind}>
               <b>{kind} placement</b>
@@ -604,6 +714,36 @@ export function AssemblyControls({ onReconstruct }: { onReconstruct: (ids?: stri
       {errors.map((error) => (
         <p role="alert" key={error}>
           {error}
+        </p>
+      ))}
+      {scales.map((issue) => (
+        <div className="scale-issue" key={issue.floor.id}>
+          <p className="hint">
+            {issue.floor.name}: estimated scale {issue.metersPerPixel.toFixed(4)} m/px differs from{' '}
+            {issue.reference.name}&apos;s measured {issue.referenceMetersPerPixel.toFixed(4)} m/px
+            by{' '}
+            {Math.round(Math.abs(issue.metersPerPixel / issue.referenceMetersPerPixel - 1) * 100)}%,
+            on the same sheet size.
+          </p>
+          <button
+            disabled={s.busy}
+            onClick={() =>
+              onReconstruct([issue.floor.projectId], {
+                [issue.floor.projectId]: {
+                  ...issue.floor.settings,
+                  scaleMode: 'manual',
+                  calibration: issue.calibration,
+                },
+              })
+            }
+          >
+            Use {issue.reference.name}&apos;s scale for {issue.floor.name}
+          </button>
+        </div>
+      ))}
+      {stairs.map((warning) => (
+        <p className="hint" role="status" key={warning}>
+          {warning}
         </p>
       ))}
     </section>

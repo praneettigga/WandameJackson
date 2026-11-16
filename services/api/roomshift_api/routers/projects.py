@@ -1,11 +1,13 @@
 """Blueprint projects: upload, automatic scale, reconstruction and the editable scene."""
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from ..auto_scale import estimate_scale
@@ -16,7 +18,7 @@ from ..errors import ApiError
 from ..images import inspect_image, load_gray
 from ..jobs import public_job
 from ..schemas import ReconstructIn, project_envelope
-from ..storage import Storage, now_iso
+from ..storage import Storage, atomic_write_json, now_iso
 from ..validation import validate_scene
 
 router = APIRouter()
@@ -140,6 +142,37 @@ def _save_scene_checked(storage: Storage, schema_path: Path, project_id: str, sc
         scene["revision"] = current["revision"] + 1
         storage.save_scene(project_id, scene)
     return scene
+
+
+class DuplicateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/api/projects/{project_id}/duplicate", status_code=201)
+def duplicate_project(project_id: str, body: DuplicateIn, storage: StorageDep):
+    """A copy of a blueprint project with its scene and edits, as a new project (a repeated floor of a building)."""
+    with storage.project_lock(project_id):
+        original = need_project(storage, project_id)
+        need_blueprint(original)
+        if original.get("synthetic") or not original.get("image"):
+            raise ApiError(400, "VALIDATION_ERROR", "Upload a blueprint rather than duplicating the seeded demo.")
+        if original.get("source", {}).get("kind", "blueprint") != "blueprint":
+            raise ApiError(400, "INVALID_SOURCE", "Only blueprint projects can be duplicated.")
+        pid = "p_" + uuid.uuid4().hex[:12]
+        old, new = f"/api/projects/{project_id}/", f"/api/projects/{pid}/"
+        name = (body.name or "").strip() or f"{original['name']} (copy)"
+        copy = json.loads(json.dumps({**original, "id": pid, "name": name[:200], "createdAt": now_iso()}).replace(old, new))
+        storage.save_blueprint(pid, storage.blueprint_path(original).read_bytes(), original["image"]["mimeType"])
+        for read, filename in ((storage.get_source_scene, "source-scene.json"), (storage.get_scene, "scene.json")):
+            scene = read(project_id)
+            if scene is not None:
+                scene = json.loads(json.dumps({**scene, "id": pid}).replace(old, new))
+                if filename == "scene.json":
+                    scene["revision"] = 0
+                atomic_write_json(storage.project_dir(project_id).parent / pid / filename, scene)
+        storage.save_project(copy)
+    return project_envelope(copy)
 
 
 @router.get("/api/projects/{project_id}/source-scene")

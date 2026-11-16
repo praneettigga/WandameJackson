@@ -1,7 +1,12 @@
 import * as THREE from 'three';
 import {
+  floorAbove,
+  floorToFloor,
+  insidePolygon,
+  objectCorners,
   placements,
   visiblePlacements,
+  type Placement,
   layoutErrors,
   type Assembly,
   type FloorView,
@@ -664,10 +669,35 @@ export function buildAssemblyGeometry(
   root.name = assembly.name;
   root.userData.units = 'meters';
   const all = placements(assembly, scenes, view.mode === 'exploded' ? view.gap : 0);
+  const stacked = placements(assembly, scenes);
+  const at = (p: Placement) => stacked.find((s) => s.floor.id === p.floor.id)!;
   for (const placement of visiblePlacements(all, view)) {
     if (!placement.scene) continue;
+    // A stair climbs the full storey to the floor above; stairs arriving from below cut this floor's slab.
+    const above = floorAbove(stacked, at(placement));
+    const below = stacked.find((p) => floorAbove(stacked, p)?.floor.id === placement.floor.id);
+    const scene = above
+      ? {
+          ...placement.scene,
+          objects: placement.scene.objects.map((o) =>
+            o.category === 'stairs'
+              ? {
+                  ...o,
+                  dimensions: [
+                    o.dimensions[0],
+                    above.elevation - at(placement).elevation,
+                    o.dimensions[2],
+                  ] as V3,
+                }
+              : o,
+          ),
+        }
+      : placement.scene;
+    const wells = (below?.scene?.objects ?? [])
+      .filter((o) => o.category === 'stairs')
+      .map((o) => objectCorners(o).map((p) => floorToFloor(p, below!, at(placement))));
     const child = buildSceneGeometry(
-      placement.scene,
+      scene,
       {
         ...options,
         selectedId:
@@ -681,6 +711,9 @@ export function buildAssemblyGeometry(
     child.rotation.y = placement.rotationY;
     for (const room of placement.scene.rooms) {
       const shape = new THREE.Shape(room.polygon.map(([x, z]) => new THREE.Vector2(x, z)));
+      for (const well of wells)
+        if (well.every((p) => insidePolygon(p, room.polygon)))
+          shape.holes.push(new THREE.Path(well.map(([x, z]) => new THREE.Vector2(x, z))));
       const mesh = new THREE.Mesh(
         new THREE.ExtrudeGeometry(shape, { depth: 0.2, bevelEnabled: false }),
         material(room, '#7e8986', options),

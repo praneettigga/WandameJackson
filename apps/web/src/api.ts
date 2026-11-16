@@ -143,6 +143,8 @@ export interface RoomshiftApi {
   calibrateMesh(id: string, input: MeshCalibrationRequest): Promise<MeshResult>;
   openCaptureScene(id: string): Promise<Scene>;
   getProject(id: string): Promise<ProjectEnvelope>;
+  /** A copy of a blueprint project, its scene and edits: a repeated floor. */
+  duplicateProject(id: string, name?: string): Promise<ProjectEnvelope>;
   createAssembly(input: AssemblyInput): Promise<AssemblyEnvelope>;
   getAssembly(id: string, signal?: AbortSignal): Promise<AssemblyEnvelope>;
   saveAssembly(assembly: Assembly): Promise<AssemblyEnvelope>;
@@ -265,6 +267,13 @@ export class HttpApi implements RoomshiftApi {
     );
     if (value.image === null) throw new Error('Open this capture in Mode 2: Photos & video.');
     return value as ProjectEnvelope;
+  }
+  async duplicateProject(id: string, name?: string) {
+    return this.request<ProjectEnvelope>(`/api/projects/${encodeURIComponent(id)}/duplicate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(name ? { name } : {}),
+    });
   }
   async listProjects() {
     const result = await this.request<{ projects: (ProjectEnvelope | CaptureEnvelope)[] }>(
@@ -527,6 +536,34 @@ export class MockApi implements RoomshiftApi {
   }
   async openCaptureScene(_id: string): Promise<Scene> {
     throw new Error('Capture editing requires the local API.');
+  }
+  async duplicateProject(id: string, name?: string): Promise<ProjectEnvelope> {
+    const original = await this.getProject(id);
+    const copy = 'p_' + crypto.randomUUID().replaceAll('-', '').slice(0, 12);
+    const envelope: ProjectEnvelope = {
+      ...original,
+      project: {
+        ...original.project,
+        id: copy,
+        name: name?.trim() || `${original.project.name} (copy)`,
+        createdAt: new Date().toISOString(),
+      },
+      image: original.image && { ...original.image, url: `/api/projects/${copy}/blueprint` },
+    };
+    const scene = original.project.hasScene ? await this.getScene(id) : null;
+    this.refreshGrouped();
+    this.grouped.projects[copy] = envelope;
+    if (scene) {
+      this.grouped.scenes[copy] = sceneSchema.parse({
+        ...scene,
+        id: copy,
+        revision: 0,
+        source: { ...scene.source, imageUrl: `/api/projects/${copy}/blueprint` },
+      });
+      this.grouped.sources[copy] = structuredClone(this.grouped.scenes[copy]);
+    }
+    this.persistGrouped();
+    return structuredClone(envelope);
   }
   async getProject(id: string): Promise<ProjectEnvelope> {
     this.project(id);

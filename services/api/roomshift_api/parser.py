@@ -27,7 +27,7 @@ from . import curved_walls, plan_symbols
 from .room_labels import read_room_names
 
 PARSER_NAME = "opencv-rectilinear-fallback"
-PARSER_VERSION = "0.1.0"
+PARSER_VERSION = "0.2.0"
 
 DEFAULT_WALL_HEIGHT = 2.7
 DEFAULT_WALL_THICKNESS = 0.12

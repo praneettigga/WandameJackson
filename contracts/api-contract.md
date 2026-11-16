@@ -147,6 +147,12 @@ The body is a complete `Scene` whose `revision` equals the server's current revi
 - `409 IMMUTABLE_FIELD` if `source` or `reconstruction` differ from what is stored.
 - `400 VALIDATION_ERROR` for schema or geometry violations, such as an opening that doesn't fit its wall, duplicate IDs, or an unknown `wallId`.
 
+### `POST /api/projects/{projectId}/duplicate`
+Body `{ "name"?: string }`. Copies a blueprint project (image, automatic calibration, source scene and the current
+scene with its edits) into a new project, for repeated floors of a building. The copy's scene starts at
+`revision` 0 and its URLs point at the new project. `201` → ProjectEnvelope. `404 PROJECT_NOT_FOUND`;
+`400 INVALID_SOURCE` for photo/video captures; `400 VALIDATION_ERROR` for the seeded demo.
+
 ### `GET /api/projects/{projectId}/source-scene`
 `200` → the latest successful reconstruction, as produced and unmodified (`revision` 0). Saves never change it. A new successful reconstruction replaces both the source scene and the current scene. `404 SCENE_NOT_READY` if none.
 
@@ -162,6 +168,23 @@ JPEG pixel coordinates and reported dimensions use the image's EXIF display orie
   - Rooms: fraction of the outline backed by drawn walls.
 
   The score covers detected geometry only. Fields marked `inferred` in `fieldOrigins` are not scored. The UI shows scores as high (≥ 0.8), medium (≥ 0.5) and low. Scores are fixed at reconstruction time and are not recomputed after user edits.
+- Doors may carry `style`: `hinged` (a swing arc, also when a threshold line is drawn across the gap), `double`
+  (two arcs meeting in the middle), `sliding` (two overlapping leaves in the wall plane), `folding` (a zig-zag of
+  leaves) or `passage` (an opening with no leaf). Without `style` a door is drawn as hinged. A door hung at the very
+  end of a wall closes the gap to the wall it meets; a corridor crossing a wall line splits it into two walls.
+- Rooms may carry `type` (`bedroom`, `living`, `kitchen`, `dining`, `bath`, `hall`, `stair`, `lift`, `utility`,
+  `storage`, `garage`, `outdoor`, `other`): from the printed name (near-miss OCR readings such as `LVING` are
+  corrected and say so in a note), else from the room's fixtures (a toilet, bath or shower makes a bath, a cooktop a
+  kitchen, a bed a bedroom, a sofa a living room), else from a staircase inside it.
+- Staircases are objects with `category: "stairs"` and `componentId` `stairs.straight`, `stairs.u` or
+  `stairs.u-right`; `dimensions` are `[width, rise, run]` and local −z is up the flight. The climb direction comes
+  from the drawn arrow (`fieldOrigins.rotationY` is `inferred` and a note says so when there is none); the rise is the
+  wall height until a grouped project gives it the storey height.
+- Plan furniture and fixtures are objects: beds, sofas, tables and wardrobes use `bed.basic`, `sofa.basic`,
+  `table.basic` and `cabinet.basic`; toilets, basins, baths, showers and cooktops are `category: "other"` boxes named
+  after what they are. Each is turned with its back (local −z) to the nearest wall; footprints are measured from the
+  symbol and heights assumed (`fieldOrigins.dimensions: "inferred"`).
+- Curved walls are runs of straight walls of at most 15°, each with a note giving the fitted arc's radius and sweep.
 - Doors may carry a provenance note starting with `Swing:`, read from the drawn swing arc, e.g. `Swing: hinge at the near edge (wall start side), opens to the left side of the wall.` "Left" is the normal `(−dz, dx)` of the wall direction `start → end`. Without such a note, the swing is unknown and editors draw a default leaf.
 - Reconstruction warnings starting with `Completeness:` report structural issues: wall ends that meet no other wall, and rooms with no detected door.
 - Assumed values such as heights and default thickness are marked in `fieldOrigins` (e.g. `"height": "inferred"`) and explained in `notes`.
@@ -181,6 +204,14 @@ The additive [assembly schema](assembly.schema.json) references unchanged Scene 
 - `POST /api/assemblies/{id}/reconstruct`: `{}` targets missing or previously failed floors; `{projectIds:[...]}` targets explicit members. Uses independent automatic/manual calibration and wall settings. Reuses running jobs. Returns 202 with the envelope plus `submittedJobs` and per-project `errors`. Updates assembly revision. One failed submission does not abort other floors.
 
 Envelope: `{assembly, projects:[ProjectEnvelope], scenes:{[projectId]:Scene}, jobs:{[projectId]:Job}}`. Unavailable scenes/jobs are omitted. Unknown grouped IDs return `ASSEMBLY_NOT_FOUND`. Existing child project, scene, source, and job endpoints remain supported.
+
+Floors of a building are lined up by the web app (auto-align): each floor is placed on the one below where their
+outlines overlap most and their stair and lift cores coincide, trying centred placement, the drawings' own
+coordinates and every pairing of cores. It runs after a batch reconstruction for floors still at offset `[0, 0]` and
+from **Auto-align floors**; offsets are stored in the assembly as usual. In the assembled view a stair rises the full
+storey and cuts a stairwell in the slab above; a stair arriving where the floor above has neither a stair nor a
+stairwell is reported. An estimated floor scale that differs by more than 3% from a measured floor's on the same sheet
+size is flagged, with an action that re-runs that floor with a manual calibration carrying the measured scale.
 
 Save-all uses separate revision checks for layout and child scenes; failed saves retain local changes. JSON bundles the assembly, available scenes, and `omittedFloors`. GLB contains available geometry at physical elevations and reports omitted floors.
 

@@ -169,6 +169,50 @@ It also adds evidence-gated fusion, which keeps learned proposals honest.
   configuration (test-time rotation averaging as in the authors' notebook, or Raster2Seq) would make the
   comparison stricter.
 
+## 4b. Harder blueprints (parser 0.2.0)
+
+### Same synthetic benchmark as section 1 (25 layouts x 11 conditions = 275 plans)
+
+| parser | wall IoU | layout IoU | room F1 | corner F1 | door F1 | window F1 |
+|---|---|---|---|---|---|---|
+| 0.1.0 (`synthetic-ours.md`) | 0.914 | 0.941 | 0.939 | 0.916 | 0.950 | 0.881 |
+| 0.2.0 | 0.920 | 0.973 | 0.975 | 0.939 | 0.983 | 0.906 |
+
+### New drawing features (generated plans with exact truth, `eval/generate.py` styles)
+
+- **Door kinds** (`symbols`): 94 drawn doors over 30 plans; every kind found as that kind except 3 open passages,
+  1 sliding and 1 folding door missed; door-style accuracy 1.00 on matched doors. Threshold-line doors on the
+  repository fixtures were read as windows before (synthetic-05: 0 of 3 doors, now 3 of 3).
+- **Stairs**: every generated staircase found with its climb direction (20 plans); none on plans without one or on
+  the stair-free fixtures. All five stair fixtures read with the right kind and direction.
+- **Curved walls** (`curved`, 14 plans): layout IoU 0.56 -> 0.98, room F1 0.72 -> 0.98; no arcs on 110 straight plans.
+- **Furniture and fixtures** (`furnished`, 20 plans): 133 of 148 symbols found, none false; room uses 46 of 65
+  (the rest hold nothing decisive).
+- **Scale**: the floor fixtures and the held-out apartment were 10x too small (OCR read `12.0 m` as `120m`); the wall
+  thickness check repairs it, and unit-less dimensions such as `10000` now take the unit that fits.
+
+### Real plans: CubiCasa5K (`eval/results/cubicasa-test-ours.md`)
+
+Hand-annotated scanned plans (Kalervo et al. 2019, CC BY-NC-SA 4.0), scored at 0.01 m/px (the annotations' units),
+so this measures layout recognition, not scale. Tuned on 40 validation plans; reported on 100 test plans never used
+for tuning.
+
+| parser, 100 test plans | wall IoU | layout IoU | room F1 | door F1 | window F1 |
+|---|---|---|---|---|---|
+| 0.1.0 | 0.358 | 0.312 | 0.194 | 0.062 | 0.083 |
+| 0.2.0 | 0.354 | 0.324 | 0.202 | 0.123 | 0.072 |
+
+These plans are far harder than the synthetic set: walls drawn as outlines with hatching or ticks, dense dimension
+chains and furniture. The main remaining failure is wall detection itself: the estimated wall thickness is the pen
+width, so hatch ticks, furniture outlines and dimension lines become walls. Two things follow and are not fixed:
+
+- stairs are not found (0 of 50 on the validation plans), because their tread lines are taken as walls first;
+- fixture symbols are not matched (0 found, 0 false), because their outlines are broken or merged into those walls.
+
+The optional `dense_walls` stage (walls as bands of dense ink) raises wall IoU on the validation plans (0.31 -> 0.34)
+and halves false doors, but closes fewer rooms (layout IoU 0.36 -> 0.29), so it is off by default. A learned model
+(the CubiCasa5K network in section 1 is the obvious candidate) is the likely next step for scans like these.
+
 ## 5. Capture stage (Mode 2): mesh and labels to editable room
 
 `python -m eval.capture_run` (from `services/api`) replays the plan stage on synthetic captures with exact

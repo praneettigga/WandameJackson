@@ -16,7 +16,7 @@ Install Tesseract for automatic scale and room names (see below) and FFmpeg for 
 
 macOS installs the native Vision OCR bindings through `requirements.txt`. On Linux, install `tesseract-ocr` and `tesseract-ocr-eng` through your system package manager; on Windows install Tesseract with English trained data and put `tesseract` on PATH. A Tesseract installation also works on macOS. OCR runs locally, with no API key or external image upload. The macOS engine needs normal native system access; restrictive sandboxes may prevent image buffer allocation.
 
-The web app requests `/api/projects/{id}/scale` after upload and selects **Automatic (default)**. It matches readable metric or feet/inches lengths to horizontal/vertical dimension lines with paired extension marks or overall dimension lines aligned with the outside walls, handles rotated text, and checks agreement across measurements. Bare numbers require a drawing note specifying units. The selected reference is highlighted; the saved Scene records the method and notes. OCR scores are only used to reject weak text, not exposed as a calibrated probability.
+The web app requests `/api/projects/{id}/scale` after upload and selects **Automatic (default)**. It matches readable metric or feet/inches lengths to horizontal/vertical dimension lines with paired extension marks or overall dimension lines aligned with the outside walls, handles rotated text, and checks agreement across measurements. A reading must also make the drawn walls a believable thickness (0.05–0.6 m): a decimal point lost in OCR (`12.0 m` read as `120m`) is repaired, and a bare number such as `10000` takes the unit (mm, cm or m) that fits the walls; both are said in the calibration notes. Bare numbers that fit no unit, and drawings without solid walls, still need a unit note. The selected reference is highlighted; the saved Scene records the method and notes. OCR scores are only used to reject weak text, not exposed as a calibrated probability.
 
 If evidence is unavailable or contradictory, the app explicitly estimates scale by assuming 0.20 m solid walls. If it cannot find suitable wall strokes, it assumes a 10 m longest image side. These assumptions are not suitable for exact measurement. Choose **Manual reference**, click two endpoints, and enter their length in metres to override. The manual scale persists when reopening a saved reconstruction.
 
@@ -87,22 +87,37 @@ Invalid values stop the API at startup (or fail the job, for worker settings) wi
 
 ## Parser and its limits
 
-`opencv-rectilinear-fallback` is pure OpenCV + NumPy + Shapely on the CPU; no model, checkpoint or GPU is
+`opencv-rectilinear-fallback` (0.2.0) is pure OpenCV + NumPy + Shapely on the CPU; no model, checkpoint or GPU is
 involved. It thresholds the drawing, estimates the dominant wall-stroke thickness, removes thin linework,
-extracts horizontal and vertical wall bands, merges collinear bands, classifies gaps along each wall (thin
-lines inside a ≥0.3 m gap are a window; an empty 0.6–1.6 m gap is a door), snaps wall endpoints, and finds
-rooms as the enclosed regions of the redrawn walls. Furniture is not extracted.
+extracts horizontal and vertical wall bands, merges collinear bands, classifies gaps along each wall, snaps wall
+endpoints, and finds rooms as the enclosed regions of the redrawn walls. It also reads:
+
+- door kinds from their symbols (hinged, double, sliding, folding, open passage; doors at wall ends) and windows;
+- staircases from evenly spaced tread lines and their arrow (straight and U);
+- curved walls, fitted as circular arcs and drawn as short straight pieces;
+- furniture and fixture symbols (beds, sofas, tables, wardrobes, toilets, basins, baths, showers, cooktops);
+- room names (with near-miss OCR corrected) and room types.
+
+Each stage can be switched off with `ParserOptions` for ablations. `dense_walls` (walls drawn as outlines filled
+with ticks) is off by default: on CubiCasa5K it finds walls better but closes fewer rooms.
 
 It works best on clean, high-contrast, top-down, axis-aligned plans with walls drawn as solid thick strokes:
 
 - Rotated, skewed, perspective or non-uniformly scaled drawings are not corrected (the parser warns).
-- Wall thickness is assumed roughly uniform; diagonal and curved walls are ignored.
+- Wall thickness is assumed roughly uniform; openings are not read on diagonal or curved walls.
+- On scanned real plans (CubiCasa5K) furniture outlines, hatching ticks and dimension lines are often taken
+  as thin walls; stairs and fixture symbols are then not found. See `docs/eval/RESULTS.md`.
 - Blank, photographic or very noisy images, and drawings without ≥2 px strokes or ≥0.3 m walls, fail
   with an actionable message and save nothing.
 - PDF, DWG and DXF are not supported.
 
 Every scene states its assumptions (orthographic projection, uniform scale, assumed heights) in
 `reconstruction.warnings`, and each element carries provenance and a heuristic confidence.
+
+## Evaluation on real plans
+
+`python -m eval.run --set cubicasa --split test --n 100` scores the parser on hand-annotated CubiCasa5K plans
+(download and licence in `eval/cubicasa_data.py`; the data stays in the git-ignored `.baseline/`).
 
 ## Grouped projects
 

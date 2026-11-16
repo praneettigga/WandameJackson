@@ -26,7 +26,11 @@ Turn a blueprint into a simple, editable 3D room. A user can give one known meas
 - Prototype 2: wall drawing and editing (move corners and walls, split, delete), door/window placement and sliding, and furniture snapping to walls. Snapping is zoom-adaptive (fixed screen-pixel tolerance, grid step from zoom). Rooms are rebuilt from the walls after each edit.
 - Prototype 2: completeness checks, local draft autosave, and an offline evaluation harness with ablations and a CubiCasa5K baseline.
 
-- Grouped projects: several blueprints arranged as buildings and floors, reconstructed in one batch.
+- Grouped projects: several blueprints arranged as buildings and floors, reconstructed in one batch, lined up
+  automatically by outline and stair cores, with a scale check across floors, stairwells between floors, and
+  floors that can be duplicated, removed and reordered.
+- Harder blueprints: door kinds, staircases, curved walls, furniture and fixture symbols, room types, and printed
+  dimensions repaired against the wall thickness.
 - Photo/video capture (Mode 2): a 10–60 s walkthrough or 20–40 photos are prepared into views and
   reconstructed on CPU with a learned depth model (Depth Anything 3), drawn as a floor plan and read
   by the blueprint parser, so they open in the same editor with walls, rooms, doors, windows and

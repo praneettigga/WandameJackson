@@ -121,7 +121,11 @@ def test_generated_stairs_are_found_with_their_direction_and_nothing_else_is_a_s
         if not math.isnan(metrics['stairs_dir_acc']):
             judged += 1
             right += metrics['stairs_dir_acc']
-        assert metrics['stairs_precision'] == 1 and metrics['stairs_recall'] == 1
+        # A plan without a staircase (too little room for one) has none found: no score either way.
+        if plan.meta['objects']:
+            assert metrics['stairs_precision'] == 1 and metrics['stairs_recall'] == 1
+        else:
+            assert not stairs(result) and math.isnan(metrics['stairs_f1'])
     assert wanted >= 8 and found == wanted and right == judged
     # Plans without stairs, with windows, dimension lines and room labels, have none.
     assert not any(stairs(parse_blueprint(generate(seed).image, 0.02)) for seed in range(10))

@@ -27,7 +27,7 @@ from .generate import AUGMENTATIONS, STYLES, Plan, generate
 from .metrics import evaluate, symbol_metrics
 
 HEADLINE = ["wall_iou", "layout_iou", "room_f1", "room_mean_iou", "corner_f1", "door_f1", "window_f1", "door_style_acc",
-            "stairs_f1", "stairs_dir_acc",
+            "stairs_f1", "stairs_dir_acc", "fixture_f1", "room_type_acc",
             "dim_abs_err_m", "dim_rel_err", "failed", "seconds"]
 
 
@@ -41,6 +41,13 @@ def synthetic_cases(n: int, augmentations: list[str]):
                 style, aug = name, "clean"
             plan = generate(seed, **STYLES[style]) if style else base
             yield f"syn{seed:03d}", name, AUGMENTATIONS[aug](plan)
+
+
+def cubicasa_cases(split: str, n: int, start: int = 0):
+    """Hand-annotated CubiCasa5K plans (eval/cubicasa_data.py); `start` skips into the split."""
+    from .cubicasa_data import load, samples
+    for folder in samples(split)[start:start + n]:
+        yield folder.name, f"cubicasa-{split}", load(folder)
 
 
 def real_cases(folder: Path):
@@ -80,7 +87,7 @@ def run(cases, configs: dict[str, callable]) -> list[dict]:
                 pred = predict(plan)
                 metrics = evaluate(pred, gt)
                 if "objects" in plan.meta:
-                    metrics.update(symbol_metrics(pred, plan.meta["objects"]))
+                    metrics.update(symbol_metrics(pred, plan.meta["objects"], plan.meta.get("room_types")))
                 failed = 0
             except ParseError:
                 metrics = evaluate({"walls": [], "openings": [], "rooms": []}, gt)
@@ -115,7 +122,10 @@ def summarise(rows: list[dict]) -> str:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--set", choices=["synthetic", "real"], default="synthetic")
+    ap.add_argument("--set", choices=["synthetic", "real", "cubicasa"], default="synthetic")
+    ap.add_argument("--split", default="test", help="CubiCasa5K split for --set cubicasa (train, val or test)")
+    ap.add_argument("--start", type=int, default=0, help="first CubiCasa5K sample of the split to use")
+    ap.add_argument("--ocr", action="store_true", help="read room names with local OCR (slow); off by default")
     ap.add_argument("--n", type=int, default=20, help="number of synthetic layouts")
     ap.add_argument("--aug", default=",".join([*AUGMENTATIONS, *STYLES]), help="comma-separated augmentations/styles")
     ap.add_argument("--real-dir", type=Path, default=Path("data/gt"))
@@ -125,7 +135,12 @@ def main(argv=None):
     ap.add_argument("--fail-under", default="", help="CI gate, e.g. layout_iou=0.9,room_f1=0.85 (means over all cases)")
     args = ap.parse_args(argv)
 
-    cases = list(synthetic_cases(args.n, args.aug.split(",")) if args.set == "synthetic" else real_cases(args.real_dir))
+    if not args.ocr:
+        # Room names are read by OCR, which takes seconds a plan and is scored apart (room_type_acc needs --ocr).
+        from roomshift_api import ocr
+        ocr.read_labels = lambda image: []
+    cases = list(synthetic_cases(args.n, args.aug.split(",")) if args.set == "synthetic" else
+                 cubicasa_cases(args.split, args.n, args.start) if args.set == "cubicasa" else real_cases(args.real_dir))
     if not cases:
         raise SystemExit("No evaluation cases found.")
     if args.ablation:
@@ -149,7 +164,7 @@ def main(argv=None):
     rows = run(cases, configs)
 
     args.out.mkdir(parents=True, exist_ok=True)
-    tag = f"{args.set}-{'ablation' if args.ablation else args.parser}"
+    tag = f"{args.set}{'-' + args.split if args.set == 'cubicasa' else ''}-{'ablation' if args.ablation else args.parser}"
     with open(args.out / f"{tag}.csv", "w", newline="", encoding="utf8") as f:
         writer = csv.DictWriter(f, fieldnames=list(dict.fromkeys(k for r in rows for k in r)), restval="")
         writer.writeheader()

@@ -179,7 +179,9 @@ def object_metrics(pred: list[dict], gt: list[dict], tol: float = OBJECT_TOL, pr
         a, b = _poly(pred[i]["polygon"]), _poly(gt[j]["polygon"])
         overlaps.append(a.intersection(b).area / (a.union(b).area or 1))
         matches.append((i, j))
-    return {**{f"{prefix}_{k}": v for k, v in _prf(len(overlaps), len(pred), len(gt)).items()},
+    # Nothing drawn and nothing found says nothing about the detector: leave it out of the means.
+    scores = _prf(len(overlaps), len(pred), len(gt)) if pred or gt else dict.fromkeys(("precision", "recall", "f1"), float("nan"))
+    return {**{f"{prefix}_{k}": v for k, v in scores.items()},
             f"{prefix}_iou": sum(overlaps) / len(overlaps) if overlaps else float("nan"), "matches": matches}
 
 

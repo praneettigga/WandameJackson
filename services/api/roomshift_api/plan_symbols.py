@@ -11,6 +11,9 @@ import cv2
 import numpy as np
 
 ARC_HIT = 0.65  # share of a quarter circle that must be inked for a door swing
+LEAF_HIT = 0.6  # share of the leaf line that must be inked
+FULL_ARC = 0.9  # an arc this complete needs no leaf line beside it
+SWING_CLUTTER = 0.2  # most ink allowed in the floor a door swings over, and just outside its arc
 
 
 def _arc_share(mask: np.ndarray, row: float, col: float, along: int, side: int, radius: float) -> float:
@@ -23,6 +26,17 @@ def _arc_share(mask: np.ndarray, row: float, col: float, along: int, side: int, 
     if inside.sum() < len(angles) * 0.8:
         return 0.0
     return float(mask[rows[inside], cols[inside]].mean())
+
+
+def _leaf_share(mask: np.ndarray, row: float, col: float, side: int, length: float) -> float:
+    """Share of the straight leaf line, drawn from a hinge at (row, col) straight out of the wall towards `side`."""
+    steps = np.linspace(0.15, 0.9, 16) * length
+    rows = np.round(row + side * steps).astype(int)
+    inside = (rows >= 0) & (rows < mask.shape[0]) & (0 <= int(round(col)) < mask.shape[1])
+    if inside.sum() < len(steps) * 0.8:
+        return 0.0
+    c = int(round(col))
+    return float(mask[rows[inside], max(0, c - 2):c + 3].any(axis=1).mean())
 
 
 def door_symbol(thin: np.ndarray, pos: float, g0: float, g1: float, T: float, single: bool = True) -> dict | None:
@@ -45,18 +59,45 @@ def door_symbol(thin: np.ndarray, pos: float, g0: float, g1: float, T: float, si
     centre, left, right = pos - r0, g0 - c0, g1 - c0
     masks: dict[int, np.ndarray] = {}
 
+    raw = crop > 0
+
     def share(col, along, side, radius):
         # Arcs are drawn from the wall face or its centreline and a little off round: tolerate 8% of the radius.
         slack = max(3, int(round(0.08 * radius)) | 1)
         if slack not in masks:
             masks[slack] = cv2.dilate(crop, np.ones((slack, slack), np.uint8)) > 0
-        return max(_arc_share(masks[slack], centre + side * offset, col, along, side, radius * scale)
-                   for offset in (0.0, T / 2) for scale in (0.9, 1.0, 1.08))
+        best_share, best_at = 0.0, None
+        for offset in (0.0, T / 2):
+            for scale in (0.9, 1.0, 1.08):
+                value = _arc_share(masks[slack], centre + side * offset, col, along, side, radius * scale)
+                if value > best_share:
+                    best_share, best_at = value, (centre + side * offset, radius * scale)
+        if best_at is None or best_share < ARC_HIT:
+            return best_share
+        # A swing is a thin curve over open floor. Hatching, lettering or a dense symbol inks the arc's path too,
+        # but also the floor inside it and the band just outside it.
+        hinge_row, r = best_at
+        inside = np.mean([_arc_share(raw, hinge_row, col, along, side, r * f) for f in (0.45, 0.6, 0.75)])
+        outside = _arc_share(raw, hinge_row, col, along, side, r * 1.2 + 2)
+        return best_share if inside <= SWING_CLUTTER and outside <= SWING_CLUTTER else 0.0
+
+    leaf_mask = masks.setdefault(3, cv2.dilate(crop, np.ones((3, 3), np.uint8)) > 0)
+
+    def leaf(col, side, length):
+        """The leaf stands at the jamb, from the wall face or its centreline."""
+        return max(_leaf_share(leaf_mask, centre + side * offset, col + inward, side, length)
+                   for offset in (0.0, T / 2) for inward in (-2, 0, 2))
 
     best = None
     for side in (1, -1):
-        score, hinge = max([(share(left, 1, side, width), "start"), (share(right, -1, side, width), "end")]) if single else (0.0, "start")
+        # An arc alone can belong to a neighbouring door or a symbol: a door also shows its open leaf.
+        arcs = [(share(left, 1, side, width), "start", left), (share(right, -1, side, width), "end", right)] if single else []
+        # (Some drawings show the panel closed in the gap instead; then the arc must be near complete.)
+        arcs = [(a, h) for a, h, col in arcs if a >= FULL_ARC or (a >= ARC_HIT and leaf(col, side, width) >= LEAF_HIT)]
+        score, hinge = max(arcs) if arcs else (0.0, "start")
         double = min(share(left, 1, side, width / 2), share(right, -1, side, width / 2))
+        if FULL_ARC > double >= ARC_HIT and min(leaf(left, side, width / 2), leaf(right, side, width / 2)) < LEAF_HIT:
+            double = 0.0
         if double >= ARC_HIT and double > score and (best is None or double > best[0]):
             best = (double, {"style": "double", "side": side})
         elif score >= ARC_HIT and (best is None or score > best[0]):
@@ -111,9 +152,11 @@ TREAD_LENGTH_M = (0.55, 2.4)  # width of a flight
 MIN_TREAD_LINES = 4
 
 
-def _segments(mask: np.ndarray, minimum: int) -> list[tuple[int, int, int]]:
-    """Long thin strokes running along the columns of `mask`: [(first column, last column, row)]."""
-    long_lines = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, np.ones((1, minimum), np.uint8))
+def _segments(mask: np.ndarray, minimum: int, bridge: int = 1) -> list[tuple[int, int, int]]:
+    """Long thin strokes running along the columns of `mask`: [(first column, last column, row)].
+    Breaks of up to `bridge` pixels along a stroke (a scanned or faint line) are closed first."""
+    joined = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((1, bridge), np.uint8)) if bridge > 1 else mask.astype(np.uint8)
+    long_lines = cv2.morphologyEx(joined, cv2.MORPH_OPEN, np.ones((1, minimum), np.uint8))
     count, _, stats, _ = cv2.connectedComponentsWithStats(long_lines, connectivity=8)
     return [(int(x), int(x + w - 1), int(y + (h - 1) / 2)) for x, y, w, h, _ in stats[1:count] if h <= 4]
 
@@ -121,7 +164,7 @@ def _segments(mask: np.ndarray, minimum: int) -> list[tuple[int, int, int]]:
 def _flights(thin: np.ndarray, mpp: float) -> list[dict]:
     """Ladders of evenly spaced, equally long thin lines whose treads run along the columns of `thin`."""
     shortest = max(4, int(TREAD_LENGTH_M[0] / mpp))
-    lines = sorted(_segments(thin, shortest), key=lambda s: s[2])
+    lines = sorted(_segments(thin, shortest, max(1, int(round(0.06 / mpp)))), key=lambda s: s[2])
     lines = [s for s in lines if (s[1] - s[0]) * mpp <= TREAD_LENGTH_M[1]]
     slack = max(3, int(0.08 / mpp))
     used: set[int] = set()

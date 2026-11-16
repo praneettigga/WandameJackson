@@ -106,11 +106,19 @@ def find_arcs(thick: np.ndarray, explained: np.ndarray, T: float, mpp: float) ->
     ink_x, ink_y = ink_x.astype(float) + 0.5, ink_y.astype(float) + 0.5
     arcs: list[Arc] = []
     pieces = []
-    for i in range(1, count):
-        if stats[i, cv2.CC_STAT_AREA] >= 3 * T * T:
-            ys, xs = np.nonzero(labels == i)
-            pieces.append(_centreline(xs.astype(float) + 0.5, ys.astype(float) + 0.5, T))
-    pieces = pieces[:12]
+    for i in np.argsort(-stats[1:, cv2.CC_STAT_AREA]) + 1:
+        if stats[i, cv2.CC_STAT_AREA] < 3 * T * T or len(pieces) >= 8:
+            break
+        ys, xs = np.nonzero(labels == i)
+        mx, my = _centreline(xs.astype(float) + 0.5, ys.astype(float) + 0.5, T)
+        # Only pieces that bow away from a straight line: leftover straight strokes (hatching, lettering,
+        # dimension lines) cannot seed an arc, and pairing them all is what makes the search slow.
+        if len(mx) < 5:
+            continue
+        points = np.column_stack([mx, my])
+        _, _, axes = np.linalg.svd(points - points.mean(axis=0), full_matrices=False)
+        if np.abs((points - points.mean(axis=0)) @ axes[1]).max() >= 0.3 * T:
+            pieces.append((mx, my))
     # Two leftover pieces of one arc (the flanks of a bay) pin its circle down far better than one piece,
     # which can settle on a small circle hugging a corner. Pairs first, then single pieces.
     seeds = [(np.concatenate([a[0], b[0]]), np.concatenate([a[1], b[1]]))

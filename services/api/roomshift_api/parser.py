@@ -37,6 +37,7 @@ WINDOW_HEIGHT = 1.2
 MIN_WALL_M = 0.3
 DOOR_RANGE_M = (0.6, 1.6)
 PASSAGE_MAX_M = 3.5  # a wider break in a wall line is two walls, not an opening in one
+FLANK_M = 0.5  # wall needed either side of a gap before its symbols are read
 SINGLE_LEAF_MAX_M = 1.35
 SYMBOL_DOOR_M = (0.5, 2.6)  # gaps where a swing symbol is looked for (single and double leaves)
 MIN_WINDOW_M = 0.3
@@ -66,6 +67,7 @@ class ParserOptions:
     door_styles: bool = True  # read door symbols: swing arcs (also over a threshold line), double, sliding, folding, open passages
     stairs: bool = True  # staircases drawn as evenly spaced tread lines become stair objects
     curved_walls: bool = True  # thick strokes bending along a circular arc become runs of short straight walls
+    dense_walls: bool = False  # (off: helps walls, hurts rooms on CubiCasa5K) walls drawn as outlines filled with ticks or patterns: bands of dense ink
 
     @classmethod
     def ablations(cls) -> dict[str, "ParserOptions"]:
@@ -218,11 +220,15 @@ def _merge_lines(bands: list[Band], ink: np.ndarray, T: float, mpp: float, warni
                 cur = WallLine(b.orient, pos, b.a0, b.a1, thick)
                 continue
 
+            # Symbols only count between real stretches of wall. Short pieces either side of a gap are
+            # often hatching ticks, furniture edges or dimension lines, and bridging them invents walls.
+            flanked = min(cur.a1 - cur.a0, b.a1 - b.a0) * mpp >= FLANK_M
+
             def decide(g0, g1, fill, line=cur):
                 """What a gap is, from its drawn symbol first and how filled it is second."""
                 span = (g1 - g0) * mpp
                 kind = _classify_gap(span, fill)
-                if thin_t is None or kind == "tiny":
+                if thin_t is None or kind == "tiny" or not flanked:
                     return kind
                 symbol = (plan_symbols.door_symbol(thin_t, pos, g0, g1, T, single=span <= SINGLE_LEAF_MAX_M)
                           if SYMBOL_DOOR_M[0] <= span <= SYMBOL_DOOR_M[1] else None)
@@ -295,9 +301,16 @@ def _end_doors(lines: list[WallLine], perpendicular: list[WallLine], thin: np.nd
     meet (a short stub of wall may stand beyond the door), and a swing arc fills the break. The wall is
     taken to that wall, with the door in it. `thin` and `thick` are oriented so the walls run along columns."""
     for line in lines:
+        length = (line.a1 - line.a0) * mpp
+        if length < 0.8 * FLANK_M:
+            continue  # very short pieces are as often furniture edges or hatching as walls
         for end, sign in (("a1", 1), ("a0", -1)):
             e = getattr(line, end)
-            reach = [p for p in perpendicular if p.a0 - T <= line.pos <= p.a1 + T
+            # A short stub carries a door only when its other end stands on a wall, as a partition stub does.
+            far = line.a0 if end == "a1" else line.a1
+            if length < 2 * FLANK_M and not any(abs(p.pos - far) <= T and p.a0 - T <= line.pos <= p.a1 + T for p in perpendicular):
+                continue
+            reach = [p for p in perpendicular if p.a0 - T <= line.pos <= p.a1 + T and (p.a1 - p.a0) * mpp >= 2 * FLANK_M
                      and 0.5 / mpp <= sign * (p.pos - e) - T / 2 <= 2.0 / mpp]
             if not reach:
                 continue
@@ -387,6 +400,29 @@ def _fill_outline_walls(ink: np.ndarray, mpp: float) -> np.ndarray:
     fill_h = cv2.morphologyEx(cv2.bitwise_and(across_h, cv2.bitwise_not(ink)), cv2.MORPH_OPEN, np.ones((1, long_k), np.uint8))
     fill_v = cv2.morphologyEx(cv2.bitwise_and(across_v, cv2.bitwise_not(ink)), cv2.MORPH_OPEN, np.ones((long_k, 1), np.uint8))
     return cv2.bitwise_or(ink, cv2.bitwise_or(fill_h, fill_v))
+
+
+def _dense_walls(ink: np.ndarray, mpp: float, line: float) -> np.ndarray | None:
+    """Walls drawn as two outlines with ticks, stripes or a pattern between them, as a solid mask.
+
+    Over a window about a thin wall wide, such a band is mostly ink, while lettering, furniture outlines and
+    dimension lines are mostly paper. Only straight runs at least 0.6 m long are kept. `line` is the pen
+    width in pixels; None when nothing wall-like is found.
+    """
+    window = max(3, int(round(0.1 / mpp))) | 1
+    if window <= 2 * line:
+        return None  # the drawing is too coarse for its strokes to be outlines of thicker walls
+    density = cv2.blur((ink > 0).astype(np.float32), (window, window))
+    dense = ((density >= 0.4) * 255).astype(np.uint8)
+    # Close the gaps between ticks and outlines, then keep only long straight runs: walls, not symbols.
+    dense = cv2.morphologyEx(dense, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    run = max(3, int(round(0.6 / mpp)))
+    bands = cv2.bitwise_or(cv2.morphologyEx(dense, cv2.MORPH_OPEN, np.ones((1, run), np.uint8)),
+                           cv2.morphologyEx(dense, cv2.MORPH_OPEN, np.ones((run, 1), np.uint8)))
+    if not bands.any():
+        return None
+    # The density window spreads each band by half its width; trim that back to the inked part.
+    return cv2.bitwise_and(cv2.dilate(bands, np.ones((3, 3), np.uint8)), cv2.dilate(ink, np.ones((window, window), np.uint8)))
 
 
 def _hatch_fill(gray: np.ndarray, ink: np.ndarray, mpp: float) -> np.ndarray | None:
@@ -946,6 +982,18 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
             T = estimate_thickness_px(wall_ink)
             warnings.append("Walls appear to be drawn as double outlines; the space between parallel strokes was "
                             "filled to find wall centerlines.")
+    dense = None
+    if (wall_ink is ink and opts.dense_walls and math.isfinite(0.1 / mpp) and T * mpp < 0.06
+            and 0.1 / mpp < max(h_img, w_img) / 8):
+        # No solid wall strokes and no plain double lines: the walls may be outlines filled with ticks.
+        dense = _dense_walls(ink, mpp, T)
+        if dense is not None and estimate_thickness_px(dense) * mpp >= 0.06 and (dense > 0).sum() >= 0.1 * (ink > 0).sum():
+            wall_ink = dense
+            T = estimate_thickness_px(wall_ink)
+            warnings.append("Walls are drawn as outlines filled with ticks or a pattern; dense bands of linework "
+                            "were taken as walls.")
+        else:
+            dense = None
     if T < 2:
         raise ParseError("Could not find solid wall strokes (lines are at most 1 px thick). Use a drawing where walls are drawn as thick solid lines.")
     k = (max(3, int(round(T * 0.6))) | 1) if opts.thin_line_removal else 1  # odd kernels avoid a 1 px anchor shift
@@ -958,7 +1006,8 @@ def _parse(gray: np.ndarray, meters_per_pixel: float, wall_height: float | None,
     horiz = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((1, L), np.uint8))
     vert = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((L, 1), np.uint8))
     min_band = k
-    if opts.thin_walls and opts.thin_line_removal:
+    if opts.thin_walls and opts.thin_line_removal and dense is None:
+        # (Where walls are patterned bands, single thin strokes are furniture, dimensions and symbols.)
         # Partitions are often much thinner than outer walls, and the opening above (sized from the dominant
         # stroke) erases them. A second pass with a kernel just above line weight (no wall is thinner than
         # ~5 cm) keeps long straight thin strokes that the first pass did not already explain.

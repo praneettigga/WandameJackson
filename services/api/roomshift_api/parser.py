@@ -815,10 +815,20 @@ def _learned_rooms(classes: np.ndarray, lines: list, shape, T: float, mpp: float
     free = (inside & (walls == 0) & (classes != LEARNED_WALL)).astype(np.uint8)
     free = cv2.morphologyEx(free, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
     count, labels, stats, _ = cv2.connectedComponentsWithStats(free, connectivity=4)
+    # Rooms lie within the building: regions the model labels outside the traced walls are terraces or paper.
+    from shapely.geometry import MultiPoint
+    ends = [((ln.a0, ln.pos) if ln.orient == "h" else (ln.pos, ln.a0)) for ln in lines] + \
+           [((ln.a1, ln.pos) if ln.orient == "h" else (ln.pos, ln.a1)) for ln in lines]
+    building = MultiPoint(ends).convex_hull if len(ends) >= 3 else None
     polys = []
     for i in range(1, count):
         if stats[i, cv2.CC_STAT_AREA] * mpp * mpp < MIN_ROOM_M2:
             continue
+        if building is not None and building.area > 0:
+            ys, xs = np.nonzero(labels == i)
+            region = MultiPoint(np.column_stack([xs, ys])[:: max(1, len(xs) // 400)]).convex_hull
+            if region.area > 0 and region.intersection(building).area < 0.6 * region.area:
+                continue
         contours, _ = cv2.findContours((labels == i).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         c = max(contours, key=cv2.contourArea)
         c = cv2.approxPolyDP(c, max(1.0, T / 2), True).reshape(-1, 2).astype(float) + 0.5

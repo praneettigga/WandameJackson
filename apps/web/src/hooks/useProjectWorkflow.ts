@@ -10,6 +10,8 @@ import {
   type Job,
   type ProjectEnvelope,
   type ScaleCalibration,
+  type WallFinder,
+  type WorkerCapabilities,
 } from '../api';
 import { autoAlign, floorsOf, type Floor } from '../assembly';
 import { DEMO_PROJECT_ID, LAST_PROJECT_KEY } from '../constants';
@@ -54,6 +56,16 @@ export function useProjectWorkflow() {
   }
   const [height, setHeight] = useState(''),
     [thickness, setThickness] = useState('');
+  const [wallFinder, setWallFinder] = useState<WallFinder>('auto');
+  const [planModel, setPlanModel] = useState<WorkerCapabilities | null>(null);
+  useEffect(() => {
+    // Readiness of the optional learned wall finder, shown beside its setting.
+    if (!api.mock)
+      void api
+        .planModelCapabilities()
+        .then(setPlanModel)
+        .catch(() => setPlanModel(null));
+  }, []);
   const [job, setJob] = useState<Job | null>(null),
     [working, setWorking] = useState(false);
   const [projectId, setProjectId] = useState(() => localStorage.getItem(LAST_PROJECT_KEY) ?? '');
@@ -219,6 +231,7 @@ export function useProjectWorkflow() {
     setScaleError('');
     setHeight(floor.settings.wallHeight == null ? '' : String(floor.settings.wallHeight));
     setThickness(floor.settings.wallThickness == null ? '' : String(floor.settings.wallThickness));
+    setWallFinder(floor.settings.wallFinder ?? 'auto');
     setShowBlueprint(!scene);
     setJob(state.jobs[id] ?? null);
     // Remember what was loaded so the settings sync below ignores it (it is not a user edit).
@@ -234,6 +247,7 @@ export function useProjectWorkflow() {
       ),
       height: floor.settings.wallHeight == null ? '' : String(floor.settings.wallHeight),
       thickness: floor.settings.wallThickness == null ? '' : String(floor.settings.wallThickness),
+      wallFinder: floor.settings.wallFinder ?? 'auto',
     });
     // Floor controls reset only when the active floor or grouped project changes, never on edits.
   }, [activeProjectId, assemblyId]);
@@ -309,6 +323,7 @@ export function useProjectWorkflow() {
           : null,
       wallHeight: height === '' ? null : Number(height),
       wallThickness: thickness === '' ? null : Number(thickness),
+      wallFinder,
     };
   }
   useEffect(() => {
@@ -317,7 +332,8 @@ export function useProjectWorkflow() {
     const floor = floorsOf(s.assembly).find((f) => f.projectId === s.activeProjectId);
     if (!floor) return;
     if (
-      floorControls.current === JSON.stringify({ scaleMode, points, distance, height, thickness })
+      floorControls.current ===
+      JSON.stringify({ scaleMode, points, distance, height, thickness, wallFinder })
     )
       return;
     floorControls.current = null;
@@ -336,6 +352,7 @@ export function useProjectWorkflow() {
       calibration: floor.settings.calibration ?? null,
       wallHeight: floor.settings.wallHeight ?? null,
       wallThickness: floor.settings.wallThickness ?? null,
+      wallFinder: floor.settings.wallFinder ?? 'auto',
     };
     if (JSON.stringify(current) !== JSON.stringify(updated.settings))
       s.updateAssembly((a) => {
@@ -343,7 +360,7 @@ export function useProjectWorkflow() {
       });
     // Only user changes to calibration fields should update the active floor request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scaleMode, points, distance, height, thickness]);
+  }, [scaleMode, points, distance, height, thickness, wallFinder]);
   /** Line up floors still at their default placement with the floor below; manual offsets are kept. */
   function alignNewFloors() {
     const s = useEditor.getState();
@@ -470,6 +487,7 @@ export function useProjectWorkflow() {
               : {}),
             ...(height === '' ? {} : { wallHeight: Number(height) }),
             wallThickness: thickness === '' ? null : Number(thickness),
+            wallFinder,
           })
         ).job;
       } catch (e) {
@@ -568,6 +586,9 @@ export function useProjectWorkflow() {
     setHeight,
     thickness,
     setThickness,
+    wallFinder,
+    setWallFinder,
+    planModel,
     scale,
     job,
     setJob,

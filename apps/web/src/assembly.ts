@@ -23,6 +23,7 @@ export const floorSchema = z.strictObject({
       .optional(),
     wallHeight: finite.positive().max(20).nullable().optional(),
     wallThickness: finite.positive().max(2).nullable().optional(),
+    wallFinder: z.enum(['auto', 'rules', 'learned']).optional(),
   }),
   lastJobId: id.nullable(),
 });

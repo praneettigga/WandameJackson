@@ -81,10 +81,13 @@ export type MeshResult = {
 };
 export type WorkerCapabilities = { ready: boolean; code: string; message: string; device?: string };
 export type ScaleCalibration = Scene['source']['calibration'];
+export type WallFinder = 'auto' | 'rules' | 'learned';
 export type ReconstructionRequest = {
   calibration?: { pointA: V2; pointB: V2; distanceMeters: number };
   wallHeight?: number;
   wallThickness?: number | null;
+  /** The learned plan model is optional (non-commercial weights); auto uses it only where it helps. */
+  wallFinder?: WallFinder;
 };
 export type ApiErrorBody = { code: string; message: string; details: unknown };
 export type Job = {
@@ -138,6 +141,8 @@ export interface RoomshiftApi {
   getCaptureInput(id: string): Promise<CaptureInput>;
   prepareCapture(id: string): Promise<{ job: Job }>;
   reconstructionCapabilities(): Promise<WorkerCapabilities>;
+  /** Whether the optional learned wall finder can run on this machine. */
+  planModelCapabilities(): Promise<WorkerCapabilities>;
   reconstructMesh(id: string, maxViews?: number): Promise<{ job: Job }>;
   getMesh(id: string): Promise<MeshResult>;
   calibrateMesh(id: string, input: MeshCalibrationRequest): Promise<MeshResult>;
@@ -309,6 +314,9 @@ export class HttpApi implements RoomshiftApi {
     return this.request<{ job: Job }>(`/api/projects/${encodeURIComponent(id)}/prepare`, {
       method: 'POST',
     });
+  }
+  planModelCapabilities() {
+    return this.request<WorkerCapabilities>('/api/plan-model/capabilities');
   }
   reconstructionCapabilities() {
     return this.request<WorkerCapabilities>('/api/reconstruction/capabilities', undefined, 40_000);
@@ -517,6 +525,9 @@ export class MockApi implements RoomshiftApi {
   }
   async prepareCapture(_id: string): Promise<{ job: Job }> {
     throw new Error('No captures in mock mode.');
+  }
+  async planModelCapabilities(): Promise<WorkerCapabilities> {
+    return { ready: false, code: 'MOCK', message: 'The learned wall finder needs the local API.' };
   }
   async reconstructionCapabilities(): Promise<WorkerCapabilities> {
     return {

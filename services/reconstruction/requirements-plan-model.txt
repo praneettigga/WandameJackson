@@ -1,0 +1,5 @@
+# Extra packages for the optional learned wall finder (plan_model_worker.py), installed into the same
+# environment as the depth worker (it already has CPU torch, OpenCV and SciPy). Keep NumPy at the pinned 1.26.4.
+scikit-image==0.25.2
+shapely==2.0.6
+numpy==1.26.4

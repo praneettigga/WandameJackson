@@ -24,6 +24,13 @@ from ..validation import validate_scene
 router = APIRouter()
 
 
+@router.get("/api/plan-model/capabilities")
+async def plan_model_capabilities():
+    """Whether the optional learned wall finder can run here (worker, environment and weights installed)."""
+    from ..plan_model import capability_report
+    return await run_in_threadpool(capability_report)
+
+
 @router.get("/api/health")
 async def health():
     return {"status": "ok", "schemaVersion": SCHEMA_VERSION}
@@ -94,7 +101,7 @@ def reconstruct(project_id: str, body: ReconstructIn, storage: StorageDep, runne
     c = body.calibration
     cal = (compute_calibration(c.pointA, c.pointB, c.distanceMeters, p["image"]["width"], p["image"]["height"])
            if c else p.get("automaticCalibration"))
-    return {"job": public_job(runner.submit(p, cal, body.wallHeight, body.wallThickness))}
+    return {"job": public_job(runner.submit(p, cal, body.wallHeight, body.wallThickness, body.wallFinder))}
 
 
 @router.get("/api/projects/{project_id}/scene")

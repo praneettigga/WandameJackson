@@ -29,6 +29,12 @@ def photogrammetry_engine(monkeypatch):
     monkeypatch.setenv("ROOMSHIFT_RECONSTRUCTION_ENGINE", "meshroom")
 
 
+@pytest.fixture(autouse=True)
+def no_plan_model(monkeypatch):
+    """Blueprint tests use the drawing rules; tests of the learned wall finder switch it back on with a stand-in."""
+    monkeypatch.setenv("ROOMSHIFT_PLAN_MODEL", "off")
+
+
 @pytest.fixture
 def client(tmp_path):
     with TestClient(create_app(make_settings(tmp_path))) as c:

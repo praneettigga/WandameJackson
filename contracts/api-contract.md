@@ -107,8 +107,18 @@ Computes and caches an automatic scale from the uploaded image. Tries OCR dimens
 - The saved Scene calibration includes optional `method` and `notes` for automatic scale; manual calibrations retain the existing four fields. Estimates also mark affected metric geometry fields as inferred.
 - `wallHeight` is optional and defaults to 2.7 m.
 - `wallThickness` is optional. If it is null, the parser measures thickness from the drawing, or falls back to 0.12 m.
+- `wallFinder` is optional: `auto` (default), `rules` or `learned`. With the optional learned plan model installed
+  (CubiCasa5K, CC BY-NC 4.0), `learned` traces walls inside the model's wall regions and takes rooms, openings,
+  room types and fixtures from its labels; `auto` keeps the drawing-rules result unless its rooms cover less than
+  60% of the building. When the model is used, `reconstruction.parser.checkpoint/license` name it and a warning
+  says so; when it is asked for but unavailable, the walls are read with the rules and a warning gives the reason.
+  Assembly floor settings carry the same field.
 
 `202` → `{ "job": Job }`.
+
+### `GET /api/plan-model/capabilities`
+`200` → `{ready, code, message, license?}`: whether the optional learned wall finder can run here (`code` is
+`READY`, `DISABLED` when `ROOMSHIFT_PLAN_MODEL=off`, `WORKER_NOT_CONFIGURED` or `MODEL_NOT_INSTALLED`).
 
 ### `GET /api/jobs/{jobId}`
 `200` → `{ "job": Job }`

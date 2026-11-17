@@ -13,6 +13,9 @@ class ReconstructIn(BaseModel):
     calibration: CalibrationInput | None = None
     wallHeight: float | None = Field(default=None, gt=0, le=20)
     wallThickness: float | None = Field(default=None, gt=0, le=2)
+    # Which walls to trust: the drawing rules, the learned plan model (non-commercial weights, optional
+    # install), or "auto" (the rules unless they leave most of the building without rooms).
+    wallFinder: Literal["auto", "rules", "learned"] = "auto"
 
 
 class MeshReconstructIn(BaseModel):

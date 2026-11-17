@@ -126,7 +126,7 @@ def reconstruct_assembly(assembly_id: str, body: AssemblyReconstruct, storage: S
                     cal = (compute_calibration(c["pointA"], c["pointB"], c["distanceMeters"], p["image"]["width"], p["image"]["height"])
                            if c else p.get("automaticCalibration"))
                     try:
-                        job = runner.submit(p, cal, req.get("wallHeight"), req.get("wallThickness"))
+                        job = runner.submit(p, cal, req.get("wallHeight"), req.get("wallThickness"), req.get("wallFinder", "auto"))
                     except ApiError as exc:
                         if exc.code != "JOB_IN_PROGRESS":
                             raise

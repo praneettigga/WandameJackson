@@ -1,4 +1,6 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Building/floor composition referencing independent 0.1.0 scenes. Floors are ordered bottom to top; offsets use metres and rotations use radians. Slab thickness is inferred as 0.20 m.",
   "$defs": {
     "Building": {
       "additionalProperties": false,
@@ -238,6 +240,16 @@
           ],
           "default": null,
           "title": "Wallthickness"
+        },
+        "wallFinder": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "rules",
+            "learned"
+          ],
+          "title": "Wallfinder",
+          "type": "string"
         }
       },
       "title": "FloorSettings",
@@ -291,7 +303,5 @@
     "createdAt"
   ],
   "title": "Assembly",
-  "type": "object",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Building/floor composition referencing independent 0.1.0 scenes. Floors are ordered bottom to top; offsets use metres and rotations use radians. Slab thickness is inferred as 0.20 m."
+  "type": "object"
 }

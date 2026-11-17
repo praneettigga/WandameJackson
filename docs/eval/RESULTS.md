@@ -202,6 +202,26 @@ for tuning.
 | 0.1.0 | 0.358 | 0.312 | 0.194 | 0.062 | 0.083 |
 | 0.2.0 | 0.354 | 0.324 | 0.202 | 0.123 | 0.072 |
 
+#### With the learned wall finder (CubiCasa5K network as a prior)
+
+Same 100 held-out test plans. The network (CC BY-NC 4.0) was trained on CubiCasa5K's train split, so these
+test plans are in-domain for it; its own complete pipeline is listed for reference.
+
+| 100 test plans | wall IoU | layout IoU | room F1 | door F1 | window F1 | fixture F1 | room type acc. |
+|---|---|---|---|---|---|---|---|
+| drawing rules (0.2.0) | 0.354 | 0.324 | 0.202 | 0.123 | 0.072 | 0.000 | 0.000 |
+| learned (prior + our stages) | 0.607 | 0.845 | 0.686 | 0.534 | 0.536 | 0.279 | 0.446 |
+| auto (default) | 0.600 | 0.839 | 0.669 | 0.510 | 0.508 | 0.267 | 0.414 |
+| network's own pipeline | 0.601 | 0.826 | 0.581 | 0.817 | 0.628 | – | – |
+
+Learned beats the network's own pipeline on walls, layout and rooms (rooms from its segmentation, split by the
+traced walls) and adds room types and fixtures; the network places doors and windows better (it attaches its door
+marks to walls; ours still misses doors on wall pieces its mask leaves short). The model hurts clean drawings
+(on generated plans: blurred, rotated, outline and hatched walls), so **auto** keeps the drawing rules unless their
+rooms cover under 60% of the building. On 8 generated plans per style, auto equals the rules on clean, rotated,
+symbol, furnished and curved plans; lifts the cluttered sheet style from layout IoU 0.12 to 0.90 and outline /
+hatched walls slightly; and costs heavily blurred plans 0.88 -> 0.82. Stairs are still not found on these scans.
+
 These plans are far harder than the synthetic set: walls drawn as outlines with hatching or ticks, dense dimension
 chains and furniture. The main remaining failure is wall detection itself: the estimated wall thickness is the pen
 width, so hatch ticks, furniture outlines and dimension lines become walls. Two things follow and are not fixed:

@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { api } from '../api';
+import { api, type WallFinder } from '../api';
 import { MAX_BLUEPRINT_BYTES, MAX_BLUEPRINTS_PER_BATCH } from '../constants';
 import type { ProjectWorkflow } from '../hooks/useProjectWorkflow';
 import { useEditor } from '../store';
@@ -37,6 +37,9 @@ export function ReconstructionPanel({
     setHeight,
     thickness,
     setThickness,
+    wallFinder,
+    setWallFinder,
+    planModel,
     scale,
     job,
     working,
@@ -269,6 +272,25 @@ export function ReconstructionPanel({
             onChange={(e) => setThickness(e.target.value)}
           />
         </label>
+        <label className="field">
+          Wall finder
+          <select
+            aria-label="Wall finder"
+            value={wallFinder}
+            onChange={(e) => setWallFinder(e.target.value as WallFinder)}
+          >
+            <option value="auto">Automatic</option>
+            <option value="rules">Drawing rules</option>
+            <option value="learned" disabled={!planModel?.ready}>
+              Learned model (non-commercial)
+            </option>
+          </select>
+        </label>
+        <p className="hint">
+          {planModel?.ready
+            ? 'Automatic keeps the drawing rules unless they leave most rooms open, as on cluttered scans; then the learned model (CubiCasa5K, CC BY-NC 4.0) finds the walls.'
+            : `The learned model is not available here: ${planModel?.message ?? 'start the local API to check.'} Walls are read with the drawing rules.`}
+        </p>
         <button
           className="primary wide"
           disabled={!project || (scaleMode === 'manual' && !scale) || disabled}

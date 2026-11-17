@@ -3,7 +3,8 @@ import math
 from collections import Counter
 
 import cv2
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, Polygon
+import numpy as np
 import pytest
 
 from eval.generate import generate
@@ -212,3 +213,55 @@ def test_plans_without_symbols_get_no_furniture():
             assert not [o for o in parse_blueprint(plan.image, plan.mpp)['objects'] if o['category'] != 'stairs']
     for name, mpp in (('floor-1.png', 0.01), ('services-apartment.png', 0.02), ('apartment_blueprint.png', 0.01)):
         assert not [o for o in parsed(name, mpp)['objects'] if o['category'] != 'stairs']
+
+
+def prior_from(plan, extra_room=None):
+    """A perfect stand-in for the learned model: walls where the plan's walls are, rooms inside them."""
+    h, w = plan.image.shape
+    rooms = np.zeros((h, w), np.uint8)
+    for room in plan.rooms:
+        cv2.fillPoly(rooms, [np.round(np.asarray(room) / plan.mpp).astype(np.int32)], 4)
+    for wall in plan.walls:
+        a, b = (tuple(int(round(v / plan.mpp)) for v in wall[k]) for k in ('start', 'end'))
+        cv2.line(rooms, a, b, 2, max(2, int(round(wall['thickness'] / plan.mpp))))
+    if extra_room is not None:
+        cv2.rectangle(rooms, *extra_room, 11, -1)
+    return {'rooms': rooms, 'icons': np.zeros_like(rooms), 'wall': (rooms == 2).astype(np.uint8) * 255}
+
+
+def test_learned_prior_traces_walls_rooms_and_records_the_model():
+    plan = generate(3)
+    result = parse_blueprint(plan.image, plan.mpp, prior=prior_from(plan), wall_finder='learned')
+    metrics = evaluate(result, {'walls': plan.walls, 'openings': plan.openings, 'rooms': plan.rooms})
+    assert result['model']['license'] == 'CC-BY-NC-4.0'
+    assert metrics['layout_iou'] > 0.9 and metrics['room_f1'] >= 0.8
+    assert any('learned plan model' in w for w in result['warnings'])
+
+
+def test_auto_keeps_the_rules_on_a_clean_plan_and_rules_ignores_the_prior():
+    plan = generate(3)
+    prior = prior_from(plan)
+    auto = parse_blueprint(plan.image, plan.mpp, prior=prior, wall_finder='auto')
+    assert auto.get('model') is None and any("drawing's own walls" in w for w in auto['warnings'])
+    assert parse_blueprint(plan.image, plan.mpp, prior=prior, wall_finder='rules').get('model') is None
+    # A prior of the wrong size is ignored rather than misread.
+    small = {k: v[:10, :10] for k, v in prior.items()}
+    assert parse_blueprint(plan.image, plan.mpp, prior=small, wall_finder='learned').get('model') is None
+
+
+def test_room_cover_tells_clean_results_from_open_ones():
+    from roomshift_api.parser import _room_cover
+    plan = generate(3)
+    full = parse_blueprint(plan.image, plan.mpp)
+    assert _room_cover(full) > 0.9
+    assert _room_cover({**full, 'rooms': full['rooms'][:1]}) < _room_cover(full)
+    assert _room_cover({**full, 'rooms': []}) == 0
+
+
+def test_learned_rooms_outside_the_building_are_dropped():
+    plan = generate(3)
+    h, w = plan.image.shape
+    outside = ((w - 30, h - 30), (w - 2, h - 2))  # a labelled patch in the sheet margin
+    result = parse_blueprint(plan.image, plan.mpp, prior=prior_from(plan, outside), wall_finder='learned')
+    corner = Point((w - 16) * plan.mpp, (h - 16) * plan.mpp)
+    assert not any(Polygon(r['polygon']).contains(corner) for r in result['rooms'])

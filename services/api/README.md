@@ -114,10 +114,19 @@ It works best on clean, high-contrast, top-down, axis-aligned plans with walls d
 Every scene states its assumptions (orthographic projection, uniform scale, assumed heights) in
 `reconstruction.warnings`, and each element carries provenance and a heuristic confidence.
 
+## Learned wall finder (optional)
+
+Blueprint jobs can first run the CubiCasa5K network (non-commercial weights; setup in
+`services/reconstruction/README.md`) and give its maps to the parser. Choose **Wall finder** in Reconstruct:
+Automatic (default: the drawing rules, unless they leave most of the building without rooms), Drawing rules, or
+Learned model. Missing or failed, it falls back to the rules. `ROOMSHIFT_PLAN_MODEL=off` disables it (the tests do).
+
 ## Evaluation on real plans
 
 `python -m eval.run --set cubicasa --split test --n 100` scores the parser on hand-annotated CubiCasa5K plans
-(download and licence in `eval/cubicasa_data.py`; the data stays in the git-ignored `.baseline/`).
+(download and licence in `eval/cubicasa_data.py`; the data stays in the git-ignored `.baseline/`). With
+`--parser prior` it scores the rules, learned and auto wall finders side by side, from model outputs cached by
+`../reconstruction/.venv/bin/python -m eval.cubicasa_priors --split test --n 100`.
 
 ## Grouped projects
 

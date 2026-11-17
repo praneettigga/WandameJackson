@@ -48,6 +48,35 @@ Set `ROOMSHIFT_RECONSTRUCTION_ENGINE=meshroom` or `vggt` for the optional engine
 
 ---
 
+# Optional learned wall finder for blueprints (`plan_model_worker.py`)
+
+Scanned blueprints draw walls as outlines with hatching or ticks, next to furniture and dimension lines, and
+the drawing rules mistake those strokes for walls. The CubiCasa5K network (Kalervo et al. 2019) segments a plan
+into walls, room types and symbols; the blueprint parser then traces walls inside its wall regions, takes rooms
+from its room segmentation, and reads doors, windows, room types and fixtures from its labels. On 100 held-out
+CubiCasa5K scans layout IoU goes from 0.32 to 0.84 (see `docs/eval/RESULTS.md`).
+
+**Licence: the code and weights are CC BY-NC 4.0, non-commercial use only. They are not bundled.**
+
+It runs on the CPU in the depth worker's environment, about 4 s per plan. From the repository root:
+
+```bash
+uv pip install --python services/reconstruction/.venv/bin/python -r services/reconstruction/requirements-plan-model.txt
+# The floortrans package and the released weights (about 200 MB), into the git-ignored folder:
+mkdir -p services/api/.baseline/weights
+git clone --depth 1 https://github.com/CubiCasa/CubiCasa5k services/api/.baseline/cubicasa5k   # or fetch only floortrans/ and LICENSE
+curl -L -o services/api/.baseline/weights/model_best_val_loss_var.pkl \
+  "https://drive.usercontent.google.com/download?id=1gRB7ez1e4H7a9Y09lLqRuna0luZO5VRK&export=download&confirm=t"
+services/reconstruction/.venv/bin/python services/reconstruction/plan_model_worker.py --check
+```
+
+`ROOMSHIFT_PLAN_MODEL_REPO` and `ROOMSHIFT_PLAN_MODEL_WEIGHTS` point elsewhere; `ROOMSHIFT_PLAN_MODEL=off` switches it
+off; `ROOMSHIFT_PLAN_MODEL_TIMEOUT` (default 180 s) bounds one plan. When it is missing, fails or runs out of time,
+blueprints are read with the drawing rules alone and the scene says so. The weights are loaded with
+`torch.load(weights_only=True)`, so no code embedded in the file runs.
+
+---
+
 # Optional Meshroom engine (`ROOMSHIFT_RECONSTRUCTION_ENGINE=meshroom`)
 
 [Meshroom](https://github.com/alicevision/Meshroom) / AliceVision photogrammetry

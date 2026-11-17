@@ -85,6 +85,19 @@ def reconstruction_engine() -> str:
     return engine
 
 
+def plan_model_enabled() -> bool:
+    """ROOMSHIFT_PLAN_MODEL: `auto` (default: use the learned wall finder when it is installed) or `off`."""
+    value = os.environ.get("ROOMSHIFT_PLAN_MODEL", "auto").strip().lower() or "auto"
+    if value not in {"auto", "off"}:
+        raise ConfigError(f"ROOMSHIFT_PLAN_MODEL must be auto or off, got {value!r}.")
+    return value == "auto"
+
+
+def plan_model_timeout() -> float:
+    """ROOMSHIFT_PLAN_MODEL_TIMEOUT: seconds the learned wall finder may take per blueprint before it is skipped."""
+    return _number("ROOMSHIFT_PLAN_MODEL_TIMEOUT", 180, minimum=1)
+
+
 def reconstruction_timeout() -> float:
     """ROOMSHIFT_RECONSTRUCTION_TIMEOUT: seconds for one mesh job, including capture preparation."""
     return _number("ROOMSHIFT_RECONSTRUCTION_TIMEOUT", 3600, minimum=1)

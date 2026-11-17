@@ -86,7 +86,8 @@ class JobRunner:
             self._thread = None
 
     # --- API --------------------------------------------------------------
-    def submit(self, project: dict, calibration: dict | None, wall_height: float | None, wall_thickness: float | None) -> dict:
+    def submit(self, project: dict, calibration: dict | None, wall_height: float | None, wall_thickness: float | None,
+               wall_finder: str = "auto") -> dict:
         with self._guard:
             existing = self._active.get(project["id"])
             if existing:
@@ -100,7 +101,8 @@ class JobRunner:
                 "error": None,
                 "createdAt": now_iso(),
                 "updatedAt": now_iso(),
-                "_request": {"calibration": calibration, "wallHeight": wall_height, "wallThickness": wall_thickness},
+                "_request": {"calibration": calibration, "wallHeight": wall_height, "wallThickness": wall_thickness,
+                             "wallFinder": wall_finder},
             }
             self.storage.save_job(job)
             self._active[project["id"]] = job["id"]
@@ -303,7 +305,25 @@ class JobRunner:
         # A plan drawn from a capture keeps the ceiling height that was seen unless the user overrides it.
         plan = project.get("capturePlan") or {}
         seen_height = plan["wallHeight"] * cal["metersPerPixel"] / plan["metersPerPixel"] if plan else None
-        scene = blueprint_scene(project, gray, cal, req["wallHeight"] or seen_height, req["wallThickness"], progress)
+        # The learned wall finder reads the drawing first, unless asked not to; a plan drawn from a capture is
+        # already clean. Any failure leaves the drawing rules to it.
+        finder, prior, skipped = req.get("wallFinder", "auto"), None, None
+        if finder != "rules" and not plan:
+            from .plan_model import PlanModelUnavailable, run_plan_model
+            try:
+                prior, _ = run_plan_model(self.storage.blueprint_path(project),
+                                          self.storage.project_dir(project["id"]) / "plan-model" / job["id"],
+                                          lambda: job["id"] in self._cancel or self._stopping.is_set())
+            except PlanModelUnavailable as reason:
+                if job["id"] in self._cancel or self._stopping.is_set():
+                    raise Cancelled()
+                skipped = str(reason)
+            self._update(job, progress=0.15)
+        scene = blueprint_scene(project, gray, cal, req["wallHeight"] or seen_height, req["wallThickness"], progress,
+                                prior=prior, wall_finder=finder if finder != "rules" else "auto")
+        if skipped and finder == "learned":
+            scene["reconstruction"]["warnings"].insert(0, f"The learned wall finder was asked for but not used: {skipped}. "
+                                                          "The walls were read with the drawing rules.")
         if job["id"] in self._cancel:
             raise Cancelled()
         problems = validate_scene(scene, self.schema_path)

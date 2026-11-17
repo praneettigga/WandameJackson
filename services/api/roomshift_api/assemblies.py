@@ -20,6 +20,7 @@ class FloorSettings(StrictModel):
     calibration: CalibrationInput | None = None
     wallHeight: Annotated[FiniteFloat, Field(gt=0, le=20)] | None = None
     wallThickness: Annotated[FiniteFloat, Field(gt=0, le=2)] | None = None
+    wallFinder: Literal["auto", "rules", "learned"] = "auto"
 
 class Floor(StrictModel):
     id: Id
